@@ -11,10 +11,10 @@ from . import service_runtime as _service_runtime
 # Keep legacy import paths working while all physical source paths remain neutral.
 sys.modules.setdefault(__name__ + ".service_v92", _service_runtime)
 
-from . import service_complete as _service_complete
+from . import service_reviewfix as _service_reviewfix
 
 
-class MessagingService(_service_complete.MessagingService):
+class MessagingService(_service_reviewfix.MessagingService):
     """Current messaging service plus user-facing thread visibility rules."""
 
     def subscribe_presence(self, thread_id: int) -> None:
@@ -70,6 +70,6 @@ class MessagingService(_service_complete.MessagingService):
             return out
 
 
-from .web_complete import install_messaging
+from .web_reviewfix import install_messaging
 
 __all__ = ["MessagingService", "install_messaging"]
