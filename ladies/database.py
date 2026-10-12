@@ -5,10 +5,10 @@ from datetime import datetime, timezone
 import logging
 from pathlib import Path
 import sqlite3
+import threading
 from typing import Iterator
 
 from sqlalchemy import create_engine, event, inspect
-from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import Base
@@ -29,6 +29,8 @@ class Database:
         )
         event.listen(self.engine, "connect", self._configure_sqlite)
         self.Session = sessionmaker(bind=self.engine, expire_on_commit=False, future=True)
+        self._schema_lock = threading.RLock()
+        self._schema_ready = False
         LOGGER.info("Database configured path=%s", self.path.resolve())
 
     @staticmethod
@@ -134,9 +136,6 @@ class Database:
                 index.create(bind=connection, checkfirst=True)
 
     def _migrate_0_to_1(self, connection) -> None:
-        # Legacy releases had no explicit schema marker. Keep the migration
-        # intentionally additive: create newly introduced tables, then add only
-        # columns SQLite can append without rewriting or guessing existing data.
         Base.metadata.create_all(connection)
         self._add_safe_missing_columns(connection)
         self._ensure_declared_indexes(connection)
@@ -174,14 +173,21 @@ class Database:
             raise RuntimeError("Datenbankschema ist unvollständig: " + "; ".join(details))
 
     def create_schema(self) -> None:
-        """Create or upgrade the local SQLite schema before repositories use it.
+        """Create or upgrade the schema once for this application Database.
 
-        SQLite's PRAGMA user_version is the lightweight schema marker. Existing
-        pre-versioned databases are treated as version 0. A consistent backup is
-        made only when an actual migration is necessary. Additive tables are
-        always reconciled so separately loaded feature modules can register new
-        tables without forcing a schema-version bump.
+        All feature models must be registered before the first call. The integrated
+        app imports core, messaging and pricing before constructing repositories,
+        so a shared Database can safely initialize the complete metadata exactly
+        once. The lock also prevents concurrent startup paths from racing schema
+        creation or migrations.
         """
+        with self._schema_lock:
+            if self._schema_ready:
+                return
+            self._create_schema()
+            self._schema_ready = True
+
+    def _create_schema(self) -> None:
         with self.engine.connect() as connection:
             current = int(connection.exec_driver_sql("PRAGMA user_version").scalar_one())
             has_tables = bool(self._application_tables(connection))
@@ -223,8 +229,6 @@ class Database:
             LOGGER.info("Database schema upgrade complete version=%s", current)
             return
 
-        # Even at the same schema version, feature modules may have registered
-        # purely additive tables after an earlier Database instance was created.
         with self.engine.begin() as connection:
             Base.metadata.create_all(connection)
             self._ensure_declared_indexes(connection)
