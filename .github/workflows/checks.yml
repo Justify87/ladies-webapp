@@ -52,6 +52,26 @@ jobs:
               assert client.get('/api/dashboard').status_code == 200
           PY
 
+  bootstrap:
+    name: bootstrap-${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Create pristine virtualenv
+        run: python -m venv .bootstrap-test
+      - name: Let launcher repair the pristine environment
+        shell: bash
+        run: LADIES_BOOTSTRAP_CHECK_ONLY=1 .bootstrap-test/bin/python ladies_explorer.py
+      - name: Verify repaired environment after re-exec
+        shell: bash
+        run: .bootstrap-test/bin/python -c "import ladies_v9.app, nodeenv, flask, ladies_explorer; assert ladies_explorer._project_ready(); print('self-healing bootstrap ok')"
+
   node:
     runs-on: ubuntu-latest
     defaults:
