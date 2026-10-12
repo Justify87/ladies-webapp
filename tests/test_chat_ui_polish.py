@@ -52,7 +52,7 @@ class ChatUiPolishTests(unittest.TestCase):
         return create_app(db_path=root / "app.sqlite3", data_dir=root / "data")
 
     def test_neutral_person_with_outgoing_message_is_always_in_inbox(self):
-        with tempfile.TemporaryDirectory() as td, patch("ladies_v9.messaging.service_runtime.BaileysWorkerManager", QuietWorker):
+        with tempfile.TemporaryDirectory() as td, patch("ladies_v9.messaging.service.WhatsAppGateway", QuietWorker):
             app = self.make_app(td)
             service = app.extensions["ladies_messaging"]
             with service.database.session() as db:
@@ -91,7 +91,7 @@ class ChatUiPolishTests(unittest.TestCase):
             self.assertIsNone(items[0]["preference"])
 
     def test_empty_placeholder_thread_stays_out_of_inbox(self):
-        with tempfile.TemporaryDirectory() as td, patch("ladies_v9.messaging.service_runtime.BaileysWorkerManager", QuietWorker):
+        with tempfile.TemporaryDirectory() as td, patch("ladies_v9.messaging.service.WhatsAppGateway", QuietWorker):
             app = self.make_app(td)
             service = app.extensions["ladies_messaging"]
             with service.database.session() as db:
@@ -103,7 +103,7 @@ class ChatUiPolishTests(unittest.TestCase):
             self.assertEqual(service.threads("ALL"), [])
 
     def test_presence_subscription_is_skipped_while_reconnecting(self):
-        with tempfile.TemporaryDirectory() as td, patch("ladies_v9.messaging.service_runtime.BaileysWorkerManager", QuietWorker):
+        with tempfile.TemporaryDirectory() as td, patch("ladies_v9.messaging.service.WhatsAppGateway", QuietWorker):
             app = self.make_app(td)
             service = app.extensions["ladies_messaging"]
             service.worker.state = "RECONNECTING"
