@@ -45,11 +45,15 @@ class ApplicationContextTests(unittest.TestCase):
             app = create_app(db_path=root / "app.sqlite3", data_dir=root / "data")
 
             database = app.extensions["ladies_database"]
-            repository_store = app.extensions["ladies_repository_store"]
+            repositories = app.extensions["ladies_repositories"]
             messaging = app.extensions["ladies_messaging"]
             pricing = app.extensions["ladies_pricing"]
 
-            self.assertIs(repository_store.database, database)
+            self.assertIs(repositories.search.database, database)
+            self.assertIs(repositories.persons.database, database)
+            self.assertIs(repositories.history.database, database)
+            self.assertIs(repositories.settings.database, database)
+            self.assertIs(repositories.archive.database, database)
             self.assertIs(messaging.database, database)
             self.assertIs(pricing.database, database)
             self.assertEqual(database.schema_version(), 1)
