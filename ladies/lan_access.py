@@ -11,13 +11,16 @@ from pathlib import Path
 from typing import Any
 
 
+MAX_DEVICE_SESSIONS = 32
+
+
 class LanAccessManager:
     """Pair LAN devices without reusing the pairing secret as session cookie.
 
-    Existing V9.5 ``lan_access_token`` cookies remain valid as legacy sessions
-    during the V9.6 migration. New pairings receive independent random device
-    sessions. The pairing token is rotated on every server start, while already
-    paired device sessions survive restarts.
+    Existing V9.5 ``lan_access_token`` cookies remain valid as a migration-only
+    legacy session. The raw legacy token is replaced by its hash and the old file
+    is removed. New pairings receive independent random device sessions. The
+    pairing token rotates on every server start while device sessions survive.
     """
 
     def __init__(self, data_dir: str | Path):
@@ -63,17 +66,47 @@ class LanAccessManager:
         else:
             state.setdefault("version", 1)
             state.setdefault("sessions", {})
-            state.setdefault("legacy_session_hash", self._hash(legacy) if legacy else None)
+            if not state.get("legacy_session_hash") and legacy:
+                state["legacy_session_hash"] = self._hash(legacy)
+            else:
+                state.setdefault("legacy_session_hash", None)
 
-        # Pairing credentials belong to the current server process/session and
-        # are deliberately not stable credentials like device sessions.
+        # Pairing credentials are per application start and are not browser
+        # sessions. A new process always gets a fresh pairing token.
         state["pairing_token"] = secrets.token_urlsafe(32)
+        self._trim_sessions(state)
         self._write(state)
+
+        # Once the legacy value has been persisted as a one-way hash, keeping the
+        # original reusable token on disk only increases credential exposure.
+        if legacy:
+            try:
+                self.legacy_path.unlink()
+            except OSError:
+                pass
         return state
+
+    @staticmethod
+    def _trim_sessions(state: dict[str, Any]) -> None:
+        sessions = state.get("sessions")
+        if not isinstance(sessions, dict):
+            state["sessions"] = {}
+            return
+        if len(sessions) <= MAX_DEVICE_SESSIONS:
+            return
+        ordered = sorted(
+            sessions.items(),
+            key=lambda item: str((item[1] or {}).get("created_at") or ""),
+            reverse=True,
+        )
+        state["sessions"] = dict(ordered[:MAX_DEVICE_SESSIONS])
 
     def _write(self, state: dict[str, Any]) -> None:
         temporary = self.state_path.with_name(f".{self.state_path.name}.{os.getpid()}.tmp")
-        temporary.write_text(json.dumps(state, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        temporary.write_text(
+            json.dumps(state, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
         try:
             os.chmod(temporary, 0o600)
         except OSError:
@@ -95,10 +128,12 @@ class LanAccessManager:
                 return None
             session = secrets.token_urlsafe(48)
             digest = self._hash(session)
+            now = self._now()
             self._state.setdefault("sessions", {})[digest] = {
-                "created_at": self._now(),
-                "last_seen_at": self._now(),
+                "created_at": now,
+                "last_seen_at": now,
             }
+            self._trim_sessions(self._state)
             self._write(self._state)
             return session
 
