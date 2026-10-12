@@ -3,6 +3,7 @@ import makeWASocket, {
   downloadMediaMessage,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
+  proto,
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys'
 import { Boom } from '@hapi/boom'
@@ -32,6 +33,7 @@ const pendingMessageUpdates = []
 const emit = event => process.stdout.write(`${JSON.stringify(event)}\n`)
 const reply = (id, ok, payload = null, message = null) => emit({ type: 'response', id, ok, payload, message })
 const isPhoneJid = jid => typeof jid === 'string' && jid.endsWith('@s.whatsapp.net')
+const isLidJid = jid => typeof jid === 'string' && jid.endsWith('@lid')
 
 function rememberLocalSend(providerId, clientMessageId) {
   if (!providerId) return
@@ -45,6 +47,10 @@ function rememberLocalSend(providerId, clientMessageId) {
 
 function statusCode(error) {
   try { return new Boom(error).output.statusCode } catch { return undefined }
+}
+
+function errorText(error) {
+  return error?.message || String(error || 'unknown error')
 }
 
 function messageText(message) {
@@ -85,7 +91,7 @@ async function messageMediaWithBytes(current, msg) {
       media.data_base64 = buffer.toString('base64')
     }
   } catch (error) {
-    logger.warn({ err: error?.message || String(error) }, 'incoming image download failed')
+    logger.warn({ err: errorText(error) }, 'incoming image download failed')
   }
   return media
 }
@@ -105,8 +111,55 @@ async function resolveTargetJid(current, jid) {
     const lid = mapping?.getLIDForPN ? await mapping.getLIDForPN(jid) : null
     return lid || jid
   } catch (error) {
-    logger.debug({ err: error?.message || String(error) }, 'PN to LID lookup failed')
+    logger.debug({ err: errorText(error) }, 'PN to LID lookup failed')
     return jid
+  }
+}
+
+async function resolvePhoneJid(current, jid) {
+  if (isPhoneJid(jid)) return jid
+  if (!isLidJid(jid)) return null
+  try {
+    const mapping = current.signalRepository?.lidMapping
+    return mapping?.getPNForLID ? await mapping.getPNForLID(jid) : null
+  } catch (error) {
+    logger.debug({ err: errorText(error) }, 'LID to PN lookup failed')
+    return null
+  }
+}
+
+async function inspectContact(current, jid, includePicture = false) {
+  const phoneJid = await resolvePhoneJid(current, jid)
+  if (!phoneJid) {
+    return { exists: null, jid, phone_jid: null, profile_picture_url: null, detail: 'phone_jid_unknown' }
+  }
+
+  let result = null
+  try {
+    const rows = await current.onWhatsApp(phoneJid)
+    result = (rows || []).find(row => row?.jid === phoneJid) || rows?.[0] || null
+  } catch (error) {
+    logger.warn({ err: errorText(error) }, 'WhatsApp availability lookup failed')
+    return { exists: null, jid, phone_jid: phoneJid, profile_picture_url: null, detail: 'availability_lookup_failed' }
+  }
+
+  const exists = Boolean(result?.exists)
+  const registeredJid = result?.jid || phoneJid
+  const target = exists ? await resolveTargetJid(current, registeredJid) : registeredJid
+  let profilePictureUrl = null
+  if (exists && includePicture) {
+    try {
+      profilePictureUrl = await current.profilePictureUrl(target, 'preview', 5000) || null
+    } catch (error) {
+      logger.debug({ err: errorText(error) }, 'WhatsApp profile picture lookup failed')
+    }
+  }
+  return {
+    exists,
+    jid: target || registeredJid,
+    phone_jid: phoneJid,
+    profile_picture_url: profilePictureUrl,
+    detail: exists ? 'registered' : 'not_registered',
   }
 }
 
@@ -184,7 +237,10 @@ async function connect() {
       printQRInTerminal: false,
       markOnlineOnConnect: false,
       syncFullHistory: false,
-      shouldSyncHistoryMessage: () => false,
+      // Baileys 7 needs INITIAL_BOOTSTRAP / mapping-related history records for
+      // stable PN<->LID resolution. Only the large FULL chat-history import is
+      // intentionally skipped by Ladies Explorer.
+      shouldSyncHistoryMessage: ({ syncType }) => syncType !== proto.HistorySync.HistorySyncType.FULL,
       generateHighQualityLinkPreview: false,
     })
     sock = current
@@ -199,8 +255,10 @@ async function connect() {
       }
       if (update.connection === 'close') {
         const code = statusCode(update.lastDisconnect?.error)
+        const reason = errorText(update.lastDisconnect?.error)
         if (code === DisconnectReason.loggedOut) {
-          emit({ type: 'connection', state: 'LOGGED_OUT' })
+          logger.warn({ code, reason }, 'WhatsApp session logged out')
+          emit({ type: 'connection', state: 'LOGGED_OUT', detail: `code_${code || 'unknown'}` })
           return
         }
         if (stopped || manualDisconnect) {
@@ -209,11 +267,12 @@ async function connect() {
         }
         const delay = reconnectDelays[Math.min(reconnectAttempt, reconnectDelays.length - 1)]
         reconnectAttempt += 1
-        emit({ type: 'connection', state: 'RECONNECTING', detail: `retry_in_${delay}ms` })
+        logger.warn({ code, reason, retry_ms: delay }, 'WhatsApp connection closed; reconnecting')
+        emit({ type: 'connection', state: 'RECONNECTING', detail: `code_${code || 'unknown'};retry_in_${delay}ms` })
         setTimeout(() => {
           if (current === sock) sock = null
           connecting = null
-          connect().catch(err => emit({ type: 'error', code: 'RECONNECT_FAILED', message: err?.message || String(err) }))
+          connect().catch(err => emit({ type: 'error', code: 'RECONNECT_FAILED', message: errorText(err) }))
         }, delay)
       }
     })
@@ -250,7 +309,8 @@ async function connect() {
       }
     })
   })().catch(err => {
-    emit({ type: 'error', code: 'CONNECT_FAILED', message: err?.message || String(err) })
+    logger.error({ err: errorText(err) }, 'WhatsApp connect failed')
+    emit({ type: 'error', code: 'CONNECT_FAILED', message: errorText(err) })
     emit({ type: 'connection', state: 'ERROR', detail: 'connect_failed' })
     throw err
   }).finally(() => { connecting = null })
@@ -266,10 +326,19 @@ async function handle(command) {
         await connect()
         reply(id, true)
         break
+      case 'contact_info': {
+        if (!sock) await connect()
+        if (!sock) throw new Error('WhatsApp ist nicht verbunden')
+        const info = await inspectContact(sock, command.jid, command.include_profile_picture !== false)
+        reply(id, true, info)
+        break
+      }
       case 'send_text': {
         if (!sock) await connect()
         if (!sock) throw new Error('WhatsApp ist nicht verbunden')
-        const target = await resolveTargetJid(sock, command.jid)
+        const info = await inspectContact(sock, command.jid, false)
+        if (info.exists === false) throw new Error('Diese Nummer ist nicht bei WhatsApp registriert')
+        const target = await resolveTargetJid(sock, info.jid || command.jid)
         localSendsInFlight += 1
         try {
           const sent = await sock.sendMessage(target, { text: String(command.text || '') })
@@ -331,7 +400,8 @@ async function handle(command) {
         reply(id, false, null, `Unknown command: ${command.type}`)
     }
   } catch (err) {
-    reply(id, false, null, err?.message || String(err))
+    logger.warn({ command: command.type, err: errorText(err) }, 'WhatsApp worker command failed')
+    reply(id, false, null, errorText(err))
   }
 }
 
