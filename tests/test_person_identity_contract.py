@@ -8,7 +8,6 @@ from ladies_v9.core.repositories import RepositoryBundle
 from ladies_v9.database import Database
 from ladies_v9.domain import ProfileData
 from ladies_v9.media import ArchiveManager
-from ladies_v9.repository import Repository
 
 
 class PersonIdentityContractTests(unittest.TestCase):
@@ -16,8 +15,7 @@ class PersonIdentityContractTests(unittest.TestCase):
         database = Database(root / "app.sqlite3")
         database.create_schema()
         archive = ArchiveManager(root / "data")
-        store = Repository(database, archive)
-        return RepositoryBundle.from_store(store).persons
+        return RepositoryBundle.from_dependencies(database, archive).persons
 
     @staticmethod
     def profile(advert_id: str, *, name="Anna", city="Leipzig", phone="0176 12345678"):
@@ -95,7 +93,7 @@ class PersonIdentityContractTests(unittest.TestCase):
                 raw_html="a",
                 http_session=None,
             )
-            second = repository.ingest_profile(
+            repository.ingest_profile(
                 external_listing_id="200",
                 profile=self.profile("200"),
                 raw_html="b",
