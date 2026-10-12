@@ -12,6 +12,7 @@ from flask import jsonify, redirect, request
 from .messaging import install_messaging
 from .messaging.integration import install_identity_merge_listener, reconcile_identity_events
 from .pricing import install_pricing, install_pricing_identity_merge_listener
+from .search_preview import install_search_preview
 from .web import create_app as create_core_app
 
 LOGGER = logging.getLogger("ladies_explorer.messaging.integration")
@@ -60,6 +61,7 @@ def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str =
         default_radius=default_radius,
         profile_delay=profile_delay,
     )
+    install_search_preview(app, default_city=default_city, default_radius=default_radius)
 
     access_token = _load_or_create_access_token(data_dir)
     app.config["LAN_ACCESS_TOKEN"] = access_token
