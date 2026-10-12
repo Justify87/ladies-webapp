@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+logs/
+ladies_v9.sqlite3
+ladies_v9_data/
+ladies_v9_data/whatsapp/
+ladies_v9/messaging/whatsapp_worker/node_modules/
+ladies_v9/messaging/whatsapp_worker/npm-debug.log*
