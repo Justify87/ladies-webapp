@@ -21,7 +21,7 @@ class RepositoryBundle:
     def from_store(cls, store):
         return cls(
             search=SearchRepository(store.database),
-            persons=PersonRepository(store),
+            persons=PersonRepository(store.database, store),
             history=HistoryRepository(store.database),
             settings=SettingsRepository(store.database),
             archive=ArchiveRepository(store.database, store.archive),
