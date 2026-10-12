@@ -11,6 +11,7 @@ from flask import jsonify, redirect, request
 
 from .messaging import install_messaging
 from .messaging.integration import install_identity_merge_listener, reconcile_identity_events
+from .pricing import install_pricing, install_pricing_identity_merge_listener
 from .web import create_app as create_core_app
 
 LOGGER = logging.getLogger("ladies_explorer.messaging.integration")
@@ -49,6 +50,8 @@ def _is_loopback(remote_addr: str | None) -> bool:
 
 
 def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str = "leipzig", default_radius: int = 20, profile_delay: float = 2.0):
+    # Pricing moves extraction refs before messaging may delete a duplicate source thread.
+    install_pricing_identity_merge_listener()
     install_identity_merge_listener()
     app = create_core_app(
         db_path=db_path,
@@ -89,10 +92,12 @@ def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str =
         return response
 
     messaging = install_messaging(app, db_path=db_path, data_dir=data_dir)
+    pricing = install_pricing(app, db_path=db_path, data_dir=data_dir)
     try:
         reconcile_identity_events(messaging.database)
+        pricing.reconcile_identity_events()
     except Exception:
-        LOGGER.exception("Initial messaging identity reconciliation failed")
+        LOGGER.exception("Initial identity reconciliation failed")
 
     @app.after_request
     def reconcile_messaging_after_identity_change(response):
@@ -103,10 +108,12 @@ def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str =
                 if person_id:
                     messaging.sync_person(int(person_id))
                     reconcile_identity_events(messaging.database)
+                    pricing.reconcile_identity_events()
             elif response.status_code < 400 and request.path == "/api/identity/merge":
                 reconcile_identity_events(messaging.database)
+                pricing.reconcile_identity_events()
         except Exception:
-            LOGGER.exception("Messaging identity reconciliation failed path=%s", request.path)
+            LOGGER.exception("Identity reconciliation failed path=%s", request.path)
         return response
 
     return app
