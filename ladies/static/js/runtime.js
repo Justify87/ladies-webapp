@@ -27,6 +27,10 @@
     }
   }
 
+  if (config.version) {
+    openInfoSheet = () => openSheet(`<div class="sheet-title"><h2>Ladies Explorer V${esc(config.version)}</h2></div><p class="about-copy">Die Oberfläche ist personenzentriert. Anzeigen, Snapshots, Medien, Preise und Treffen bleiben historisiert; die mobile UI bildet diese Daten verständlich ab.</p>`);
+  }
+
   const base = Object.freeze({
     bindFilterControls,
     renderFilter,
