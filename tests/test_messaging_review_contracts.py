@@ -3,9 +3,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER = (ROOT / "ladies" / "messaging" / "whatsapp_worker" / "worker.mjs").read_text(encoding="utf-8")
-SERVICE = (ROOT / "ladies" / "messaging" / "service_reviewfix.py").read_text(encoding="utf-8")
-WEB = (ROOT / "ladies" / "messaging" / "web_reviewfix.py").read_text(encoding="utf-8")
-LAUNCHER = (ROOT / "ladies_explorer.py").read_text(encoding="utf-8")
+SERVICE = (ROOT / "ladies" / "messaging" / "service.py").read_text(encoding="utf-8")
+MEDIA = (ROOT / "ladies" / "messaging" / "media_store.py").read_text(encoding="utf-8")
+ROUTES = (ROOT / "ladies" / "messaging" / "routes.py").read_text(encoding="utf-8")
+PYPROJECT = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
 
 def test_worker_streams_incoming_media_and_has_private_view_once_store():
@@ -27,19 +28,18 @@ def test_worker_propagates_remote_edits_and_revokes():
 
 def test_service_hardens_replies_view_once_documents_and_voice():
     assert "derselben WhatsApp-Nummer" in SERVICE
-    assert "SpooledTemporaryFile" in SERVICE
     assert "view_once_consumed_at.is_(None)" in SERVICE
-    assert "source.unlink(missing_ok=True)" in SERVICE
-    assert "application/octet-stream" in SERVICE
-    assert "libopus" in SERVICE
-    assert "audio/ogg; codecs=opus" in SERVICE
+    assert "application/octet-stream" in MEDIA
+    assert "libopus" in MEDIA
+    assert "audio/ogg; codecs=opus" in MEDIA
+    assert "relative_to" in MEDIA
 
 
 def test_whatsapp_archive_is_not_served_directly():
-    assert 'request.path.startswith("/archive/whatsapp/")' in WEB
-    assert "Content-Security-Policy" in WEB
-    assert "X-Content-Type-Options" in WEB
+    assert 'request.path.startswith("/archive/whatsapp/")' in ROUTES
+    assert "Content-Security-Policy" in ROUTES
+    assert "X-Content-Type-Options" in ROUTES
 
 
-def test_launcher_detects_bundled_ffmpeg_dependency():
-    assert '"imageio-ffmpeg": ("imageio_ffmpeg", (0, 6), (1, 0))' in LAUNCHER
+def test_ffmpeg_dependency_is_declared_once_in_project_metadata():
+    assert '"imageio-ffmpeg>=0.6,<1"' in PYPROJECT
