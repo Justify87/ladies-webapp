@@ -1,54 +1,94 @@
 from __future__ import annotations
 
 import logging
-import re
 import time
 import uuid
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, g, jsonify, render_template, request, send_from_directory
+from flask import Flask, Response, g, jsonify, render_template, request, send_from_directory, stream_with_context
 
+from .core.services import ProfileService, SearchService
 from .database import Database
-from .domain import SearchProfile
+from .errors import ExternalServiceError, NotFoundError, ValidationError, install_error_handlers
+from .logging_utils import redact_text, sanitize_log_value
 from .media import ArchiveManager
-from .parser import ADVERT_ID_RE, parse_profile_html
+from .parser import ADVERT_ID_RE
 from .repository import Repository
-from .source import BatchRateLimiter, FixedRateLimiter, build_session, fetch_search_configured, http_get, resolve_location
-from .utils import category_from_url, clean_text, safe_media_url, safe_profile_url
+from .request_parsing import read_int
+from .source import BatchRateLimiter, FixedRateLimiter, build_session, http_get
+from .utils import clean_text, safe_media_url, safe_profile_url
 
 LOGGER = logging.getLogger("ladies_explorer")
+MEDIA_PROXY_LIMIT = 32 * 1024 * 1024
 
 
-def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str = "leipzig", default_radius: int = 20, profile_delay: float = 2.0) -> Flask:
+def create_app(
+    *,
+    db_path: str | Path,
+    data_dir: str | Path,
+    default_city: str = "leipzig",
+    default_radius: int = 20,
+    profile_delay: float = 2.0,
+) -> Flask:
     app = Flask(__name__, template_folder="templates", static_folder="static")
+    install_error_handlers(app)
     database = Database(db_path)
     archive = ArchiveManager(data_dir)
     repo = Repository(database, archive)
     http = build_session()
     limiter = FixedRateLimiter(profile_delay)
     status_limiter = BatchRateLimiter(batch_size=3, pause_seconds=0.8)
-    LOGGER.info("Web app initialized db=%s data_dir=%s default_city=%s default_radius=%s", Path(db_path).resolve(), Path(data_dir).resolve(), default_city, default_radius)
+    search_service = SearchService(repo, http, default_city=default_city, default_radius=default_radius)
+    profile_service = ProfileService(repo, http, limiter)
+    app.extensions["ladies_database"] = database
+    app.extensions["ladies_archive"] = archive
+    app.extensions["ladies_repository"] = repo
+    app.extensions["ladies_http"] = http
+    LOGGER.info(
+        "Web app initialized db=%s data_dir=%s default_city=%s default_radius=%s",
+        Path(db_path).resolve(),
+        Path(data_dir).resolve(),
+        default_city,
+        default_radius,
+    )
 
     @app.before_request
     def log_request_start():
         g.request_started = time.monotonic()
         g.request_id = uuid.uuid4().hex[:10]
-        LOGGER.debug("REQ id=%s method=%s path=%s query=%s", g.request_id, request.method, request.path, request.query_string.decode("utf-8", "replace"))
+        # Query strings may contain remote media URLs or other personal data.
+        LOGGER.debug("REQ id=%s method=%s path=%s", g.request_id, request.method, request.path)
 
     @app.after_request
-    def log_request_end(response):
+    def finalize_response(response):
         elapsed_ms = (time.monotonic() - getattr(g, "request_started", time.monotonic())) * 1000
         level = logging.INFO if response.status_code < 400 else logging.WARNING
-        LOGGER.log(level, "RESP id=%s method=%s path=%s status=%s elapsed_ms=%.1f", getattr(g, "request_id", "-"), request.method, request.path, response.status_code, elapsed_ms)
+        LOGGER.log(
+            level,
+            "RESP id=%s method=%s path=%s status=%s elapsed_ms=%.1f",
+            getattr(g, "request_id", "-"),
+            request.method,
+            request.path,
+            response.status_code,
+            elapsed_ms,
+        )
         response.headers.setdefault("X-Request-ID", getattr(g, "request_id", "-"))
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'self'")
         return response
 
     @app.teardown_request
     def log_request_teardown(exc):
         if exc is not None:
-            LOGGER.exception("REQUEST exception id=%s path=%s", getattr(g, "request_id", "-"), request.path, exc_info=exc)
+            LOGGER.exception(
+                "REQUEST exception id=%s path=%s",
+                getattr(g, "request_id", "-"),
+                request.path,
+                exc_info=exc,
+            )
 
     @app.get("/")
     def index():
@@ -64,26 +104,17 @@ def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str =
 
     @app.get("/api/history/relistings")
     def api_history_relistings():
-        try:
-            limit = int(request.args.get("limit") or 100)
-        except ValueError:
-            limit = 100
+        limit = read_int(request.args, "limit", default=100, minimum=1, maximum=500)
         return jsonify(items=repo.history_relistings(limit))
 
     @app.get("/api/history/changes")
     def api_history_changes():
-        try:
-            limit = int(request.args.get("limit") or 100)
-        except ValueError:
-            limit = 100
+        limit = read_int(request.args, "limit", default=100, minimum=1, maximum=500)
         return jsonify(items=repo.history_changes(limit))
 
     @app.get("/api/recent-searches")
     def api_recent_searches():
-        try:
-            limit = int(request.args.get("limit") or 8)
-        except ValueError:
-            limit = 8
+        limit = read_int(request.args, "limit", default=8, minimum=1, maximum=100)
         return jsonify(items=repo.recent_searches(limit))
 
     @app.get("/api/storage")
@@ -94,11 +125,8 @@ def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str =
     def api_archive_media():
         kind = clean_text(str(request.args.get("kind") or "")).upper() or None
         if kind not in {None, "IMAGE", "VIDEO"}:
-            return jsonify(error="kind muss IMAGE oder VIDEO sein"), 400
-        try:
-            limit = int(request.args.get("limit") or 80)
-        except ValueError:
-            limit = 80
+            raise ValidationError("kind muss IMAGE oder VIDEO sein")
+        limit = read_int(request.args, "limit", default=80, minimum=1, maximum=500)
         return jsonify(items=repo.archive_items(kind=kind, limit=limit))
 
     @app.delete("/api/visual-analysis")
@@ -111,153 +139,77 @@ def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str =
             payload = request.get_json(silent=True) or {}
             key = str(payload.get("key") or "")
             if not key:
-                return jsonify(error="key fehlt"), 400
+                raise ValidationError("key fehlt")
             try:
                 return jsonify(settings=repo.set_setting(key, payload.get("value")))
             except ValueError as exc:
-                return jsonify(error=str(exc)), 400
+                raise ValidationError(str(exc)) from exc
         return jsonify(settings=repo.settings())
 
     @app.post("/api/search")
     def api_search():
-        payload = request.get_json(silent=True) or {}
-        city_raw = clean_text(str(payload.get("city") or default_city))
-        radius = max(1, min(200, int(payload.get("radius") or default_radius)))
-        category = clean_text(str(payload.get("category") or ""))
-        age_min = max(18, min(60, int(payload.get("age_min") or 18)))
-        age_max = max(age_min, min(60, int(payload.get("age_max") or 60)))
-        height_min = max(140, min(200, int(payload.get("height_min") or 140)))
-        height_max = max(height_min, min(200, int(payload.get("height_max") or 200)))
-        selected = payload.get("selected") or {}
-        try:
-            LOGGER.info("Search start city=%s radius=%s category=%s age=%s-%s filters=%s", city_raw, radius, category or "ALL", age_min, age_max, sorted(selected))
-            city_slug, city_display = resolve_location(http, city_raw)
-            run_id = repo.create_search_run(
-                city=city_display,
-                city_slug=city_slug,
-                radius_km=radius,
-                filters={
-                    "category": category, "age_min": age_min, "age_max": age_max,
-                    "height_min": height_min, "height_max": height_max, "selected": selected,
-                },
-            )
-            profiles, meta = fetch_search_configured(
-                session=http,
-                city_slug=city_slug,
-                city_display=city_display,
-                radius_km=radius,
-                category=category,
-                age_min=age_min,
-                age_max=age_max,
-                height_min=height_min,
-                height_max=height_max,
-                selected=selected,
-            )
-            result = repo.finish_search_run(run_id, profiles, meta)
-            LOGGER.info("Search complete run_id=%s results=%s city=%s radius=%s", run_id, len(result), city_display, radius)
-            return jsonify(search_run_id=run_id, results=result, meta=meta)
-        except (ValueError, RuntimeError) as exc:
-            LOGGER.warning("Search rejected: %s", exc)
-            return jsonify(error=str(exc)), 400
-        except Exception as exc:
-            LOGGER.exception("Search failed")
-            return jsonify(error=str(exc)), 502
+        return jsonify(**search_service.execute(request.get_json(silent=True) or {}))
 
     @app.get("/api/profile/<advert_id>")
     def api_profile(advert_id: str):
-        if not advert_id.isdigit():
-            return jsonify(error="Ungültige Anzeigen-ID"), 400
-        target = repo.listing_target(advert_id)
-        if not target:
-            return jsonify(error="Anzeige ist lokal nicht bekannt. Zuerst über die Suche laden."), 404
-        profile_url = safe_profile_url(target.get("current_url") or "")
-        if not profile_url:
-            return jsonify(error="Keine sichere Ladies-Profil-URL gespeichert."), 404
-        fallback = SearchProfile(
-            advert_id=advert_id,
-            name="",
-            city="",
-            category=target.get("category") or category_from_url(profile_url),
-            profile_url=profile_url,
-            thumbnail_url=None,
-        )
-        try:
-            LOGGER.info("Profile load start advert_id=%s person_id=%s", advert_id, target.get("person_id"))
-            limiter.wait()
-            response = http_get(http, profile_url, context=f"profile-{advert_id}", expected_statuses=(200, 404, 410))
-            if response.status_code in {404, 410}:
-                repo.update_listing_status(advert_id, status="UNAVAILABLE", http_status=response.status_code)
-                return jsonify(error="Anzeige ist nicht mehr verfügbar.", status="UNAVAILABLE"), 404
-            response.raise_for_status()
-            match = ADVERT_ID_RE.search(response.text)
-            returned_id = match.group(1) if match else None
-            if returned_id != advert_id:
-                repo.update_listing_status(advert_id, status="UNKNOWN", http_status=response.status_code, details={"returned_id": returned_id, "final_url": response.url})
-                return jsonify(error="Die Profilantwort war nicht eindeutig.", returned_id=returned_id), 409
-            profile = parse_profile_html(response.text, response.url, fallback)
-            payload = repo.ingest_profile(external_listing_id=advert_id, profile=profile, raw_html=response.text, http_session=http)
-            LOGGER.info("Profile load complete advert_id=%s person_id=%s media=%s", advert_id, payload.get("identity", {}).get("person_id"), len(payload.get("profile", {}).get("media", [])))
-            return jsonify(**payload)
-        except Exception as exc:
-            LOGGER.exception("Profile load failed advert_id=%s", advert_id)
-            return jsonify(error=str(exc)), 502
+        return jsonify(**profile_service.load(advert_id))
 
     @app.get("/api/snapshot/<int:snapshot_id>")
     def api_snapshot(snapshot_id: int):
         try:
             return jsonify(repo.snapshot_detail(snapshot_id))
-        except KeyError:
-            return jsonify(error="Snapshot nicht gefunden"), 404
+        except KeyError as exc:
+            raise NotFoundError("Snapshot nicht gefunden") from exc
 
     @app.get("/api/listing/<advert_id>")
     def api_listing(advert_id: str):
         try:
             return jsonify(repo.listing_detail(advert_id))
-        except KeyError:
-            return jsonify(error="Anzeige nicht gefunden"), 404
+        except KeyError as exc:
+            raise NotFoundError("Anzeige nicht gefunden") from exc
 
     @app.get("/api/person/<int:person_id>")
     def api_person(person_id: int):
         try:
             return jsonify(repo.person_detail(person_id))
-        except KeyError:
-            return jsonify(error="Person nicht gefunden"), 404
+        except KeyError as exc:
+            raise NotFoundError("Person nicht gefunden") from exc
 
     @app.post("/api/person/<int:person_id>/state")
     def api_person_state(person_id: int):
         try:
             return jsonify(user_state=repo.set_user_state(person_id, request.get_json(silent=True) or {}))
-        except KeyError:
-            return jsonify(error="Person nicht gefunden"), 404
+        except KeyError as exc:
+            raise NotFoundError("Person nicht gefunden") from exc
         except ValueError as exc:
-            return jsonify(error=str(exc)), 400
+            raise ValidationError(str(exc)) from exc
 
     @app.post("/api/person/<int:person_id>/prices")
     def api_person_prices(person_id: int):
         try:
             return jsonify(price_list=repo.add_price_list(person_id, request.get_json(silent=True) or {}))
-        except KeyError:
-            return jsonify(error="Person nicht gefunden"), 404
+        except KeyError as exc:
+            raise NotFoundError("Person nicht gefunden") from exc
         except (ValueError, TypeError) as exc:
-            return jsonify(error=str(exc)), 400
+            raise ValidationError(str(exc)) from exc
 
     @app.post("/api/person/<int:person_id>/encounters")
     def api_person_encounters(person_id: int):
         try:
             return jsonify(encounter=repo.add_encounter(person_id, request.get_json(silent=True) or {}))
-        except KeyError:
-            return jsonify(error="Person nicht gefunden"), 404
+        except KeyError as exc:
+            raise NotFoundError("Person nicht gefunden") from exc
         except (ValueError, TypeError) as exc:
-            return jsonify(error=str(exc)), 400
+            raise ValidationError(str(exc)) from exc
 
     @app.put("/api/person/<int:person_id>/encounters/<int:encounter_id>")
     def api_person_encounter_update(person_id: int, encounter_id: int):
         try:
             return jsonify(encounter=repo.update_encounter(person_id, encounter_id, request.get_json(silent=True) or {}))
-        except KeyError:
-            return jsonify(error="Treffen nicht gefunden"), 404
+        except KeyError as exc:
+            raise NotFoundError("Treffen nicht gefunden") from exc
         except (ValueError, TypeError) as exc:
-            return jsonify(error=str(exc)), 400
+            raise ValidationError(str(exc)) from exc
 
     @app.get("/api/lists/<tab>")
     def api_lists(tab: str):
@@ -271,76 +223,121 @@ def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str =
     def api_profile_status(advert_id: str):
         target = repo.listing_target(advert_id)
         if not target:
-            return jsonify(error="Anzeige nicht gefunden"), 404
+            raise NotFoundError("Anzeige nicht gefunden")
         url = safe_profile_url(target.get("current_url") or "")
         if not url:
-            return jsonify(error="Keine sichere Profil-URL"), 404
+            raise NotFoundError("Keine sichere Profil-URL")
         try:
             LOGGER.info("Status check start advert_id=%s", advert_id)
             status_limiter.wait()
-            response = http_get(http, url, context=f"status-{advert_id}", expected_statuses=(200, 404, 410))
-            if response.status_code in {404, 410}:
-                return jsonify(repo.update_listing_status(advert_id, status="UNAVAILABLE", http_status=response.status_code))
-            response.raise_for_status()
-            match = ADVERT_ID_RE.search(response.text)
+            upstream = http_get(
+                http,
+                url,
+                context=f"status-{advert_id}",
+                expected_statuses=(200, 404, 410),
+            )
+            if upstream.status_code in {404, 410}:
+                return jsonify(repo.update_listing_status(advert_id, status="UNAVAILABLE", http_status=upstream.status_code))
+            upstream.raise_for_status()
+            match = ADVERT_ID_RE.search(upstream.text)
             returned_id = match.group(1) if match else None
             if returned_id == advert_id:
                 return jsonify(repo.update_listing_status(advert_id, status="ACTIVE", http_status=200))
-            return jsonify(repo.update_listing_status(advert_id, status="UNKNOWN", http_status=200, details={"returned_id": returned_id}))
+            return jsonify(
+                repo.update_listing_status(
+                    advert_id,
+                    status="UNKNOWN",
+                    http_status=200,
+                    details={"returned_id": returned_id},
+                )
+            )
         except Exception as exc:
-            LOGGER.exception("Status check failed %s", advert_id)
-            return jsonify(error=str(exc)), 502
+            LOGGER.exception("Status check failed advert_id=%s", advert_id)
+            raise ExternalServiceError("Profilstatus konnte nicht geprüft werden.") from exc
 
     @app.post("/api/identity/merge")
     def api_identity_merge():
         data = request.get_json(silent=True) or {}
         try:
-            source_person_id = int(data["source_person_id"])
-            target_person_id = int(data["target_person_id"])
+            source_person_id = read_int(data, "source_person_id", minimum=1)
+            target_person_id = read_int(data, "target_person_id", minimum=1)
             return jsonify(repo.merge_persons(source_person_id, target_person_id))
-        except KeyError:
-            return jsonify(error="source_person_id/target_person_id fehlt"), 400
-        except Exception as exc:
-            LOGGER.exception("Manual merge failed")
-            return jsonify(error=str(exc)), 400
+        except ValidationError:
+            raise
+        except (ValueError, KeyError) as exc:
+            LOGGER.warning("Manual merge rejected: %s", exc)
+            raise ValidationError(str(exc) or "Personen konnten nicht zusammengeführt werden") from exc
 
     @app.post("/api/listing-id/<int:listing_id>/split")
     def api_listing_split(listing_id: int):
         try:
             return jsonify(repo.split_listing(listing_id))
-        except KeyError:
-            return jsonify(error="Listing nicht gefunden"), 404
+        except KeyError as exc:
+            raise NotFoundError("Listing nicht gefunden") from exc
 
     @app.post("/api/media/<int:media_asset_id>/visual-analysis")
     def api_visual_analysis(media_asset_id: int):
         try:
             return jsonify(result=repo.save_visual_analysis(media_asset_id, request.get_json(silent=True) or {}))
-        except KeyError:
-            return jsonify(error="Media asset nicht gefunden"), 404
+        except KeyError as exc:
+            raise NotFoundError("Media asset nicht gefunden") from exc
 
     @app.get("/api/media-proxy")
     def api_media_proxy():
         url = safe_media_url(str(request.args.get("url") or ""))
         if not url:
-            return jsonify(error="Ungültige Media-URL"), 400
+            raise ValidationError("Ungültige Media-URL")
         try:
-            response = http.get(url, headers={"Accept": "image/*,*/*", "Referer": "https://www.ladies.de/"}, timeout=30)
-            response.raise_for_status()
-            headers = {"Cache-Control": "private, max-age=3600"}
-            if response.headers.get("Content-Type"):
-                headers["Content-Type"] = response.headers["Content-Type"]
-            return response.content, 200, headers
+            upstream = http.get(
+                url,
+                headers={"Accept": "image/*,video/*,*/*", "Referer": "https://www.ladies.de/"},
+                timeout=30,
+                stream=True,
+            )
+            upstream.raise_for_status()
+            content_length = upstream.headers.get("Content-Length")
+            if content_length and int(content_length) > MEDIA_PROXY_LIMIT:
+                upstream.close()
+                raise ValidationError("Media-Datei ist zu groß")
+            content_type = str(upstream.headers.get("Content-Type") or "application/octet-stream").split(";", 1)[0].lower()
+            if not (content_type.startswith("image/") or content_type.startswith("video/")):
+                upstream.close()
+                raise ValidationError("Nicht unterstützter Media-Typ")
+
+            def chunks():
+                total = 0
+                try:
+                    for chunk in upstream.iter_content(chunk_size=128 * 1024):
+                        if not chunk:
+                            continue
+                        total += len(chunk)
+                        if total > MEDIA_PROXY_LIMIT:
+                            LOGGER.warning("Media proxy response exceeded limit")
+                            break
+                        yield chunk
+                finally:
+                    upstream.close()
+
+            response = Response(stream_with_context(chunks()), content_type=content_type)
+            response.headers["Cache-Control"] = "private, max-age=3600"
+            return response
+        except ValidationError:
+            raise
         except Exception as exc:
             LOGGER.exception("Media proxy failed")
-            return jsonify(error=str(exc)), 502
+            raise ExternalServiceError("Media-Datei konnte nicht geladen werden.") from exc
 
     @app.post("/api/client-log")
     def api_client_log():
         data = request.get_json(silent=True) or {}
+        if len(request.data or b"") > 32 * 1024:
+            raise ValidationError("Client-Log ist zu groß")
         level = str(data.get("level") or "info").lower()
-        message = clean_text(str(data.get("message") or "client"))[:2000]
-        fn = getattr(LOGGER, level, LOGGER.info) if level in {"debug","info","warning","error"} else LOGGER.info
-        fn("CLIENT scope=%s message=%s extra=%s", data.get("scope"), message, data.get("extra"))
+        message = redact_text(clean_text(str(data.get("message") or "client")), limit=1200)
+        scope = redact_text(data.get("scope"), limit=120)
+        extra = sanitize_log_value(data.get("extra"))
+        fn = getattr(LOGGER, level, LOGGER.info) if level in {"debug", "info", "warning", "error"} else LOGGER.info
+        fn("CLIENT scope=%s message=%s extra=%s", scope, message, extra)
         return jsonify(ok=True)
 
     return app
