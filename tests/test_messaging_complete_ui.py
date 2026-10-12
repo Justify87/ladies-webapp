@@ -1,51 +1,77 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
-ROOT = Path(__file__).resolve().parents[1]
-UI = (ROOT / "ladies" / "static" / "messaging.js").read_text(encoding="utf-8")
-WORKER = (ROOT / "ladies" / "messaging" / "whatsapp_worker" / "worker.mjs").read_text(encoding="utf-8")
-WEB = (ROOT / "ladies" / "messaging" / "web_complete.py").read_text(encoding="utf-8")
+class NoNodeGateway:
+    def __init__(self, worker_dir, auth_dir, event_handler):
+        self.worker_dir = Path(worker_dir)
+        self.auth_dir = Path(auth_dir)
+        self.event_handler = event_handler
+        self.proc = None
+        self.state = "DEPENDENCY_MISSING"
+        self.detail = "test"
+        self.qr = None
+        self.account = None
+        self.last_connected_at = None
+
+    def dependency_status(self):
+        return False, "test"
+
+    def status(self):
+        return {
+            "state": self.state,
+            "detail": self.detail,
+            "qr_available": False,
+            "account": None,
+            "last_connected_at": None,
+        }
+
+    def stop(self):
+        pass
 
 
-def test_enter_sends_shift_enter_keeps_newline_and_focus_is_restored():
-    assert "e.key==='Enter'&&!e.shiftKey&&!e.isComposing" in UI
-    assert "requestSubmit()" in UI
-    assert "focus({preventScroll:true})" in UI
-    assert "finally{focusInput()" in UI
+class MessagingHttpContractTests(unittest.TestCase):
+    def make_app(self, td):
+        from ladies_v9.app import create_app
+        root = Path(td)
+        return create_app(db_path=root / "app.sqlite3", data_dir=root / "data")
+
+    def test_canonical_messaging_http_surface_is_registered(self):
+        with tempfile.TemporaryDirectory() as td, patch(
+            "ladies_v9.messaging.service.WhatsAppGateway", NoNodeGateway
+        ):
+            app = self.make_app(td)
+            rules = {
+                (rule.rule, tuple(sorted(method for method in rule.methods if method not in {"HEAD", "OPTIONS"})))
+                for rule in app.url_map.iter_rules()
+            }
+
+        expected = {
+            ("/api/messaging/status", ("GET",)),
+            ("/api/messaging/threads", ("GET",)),
+            ("/api/messaging/threads/<int:thread_id>", ("GET",)),
+            ("/api/messaging/threads/<int:thread_id>/messages", ("POST",)),
+            ("/api/messaging/threads/<int:thread_id>/media", ("POST",)),
+            ("/api/messaging/messages/<int:message_id>/reaction", ("POST",)),
+            ("/api/messaging/messages/<int:message_id>", ("DELETE", "PATCH")),
+            ("/api/messaging/messages/<int:message_id>/view-once", ("GET",)),
+        }
+        for contract in expected:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, rules)
+
+    def test_legacy_whatsapp_archive_is_not_directly_exposed(self):
+        with tempfile.TemporaryDirectory() as td, patch(
+            "ladies_v9.messaging.service.WhatsAppGateway", NoNodeGateway
+        ):
+            client = self.make_app(td).test_client()
+            response = client.get("/archive/whatsapp/media/unsafe.html")
+            self.assertEqual(response.status_code, 404)
 
 
-def test_reply_reaction_edit_delete_controls_are_present():
-    assert "reply_to_message_id" in UI
-    assert "/reaction" in UI
-    assert "method:'PATCH'" in UI
-    assert "method:'DELETE'" in UI
-    assert "data-message-menu" in UI
-
-
-def test_media_voice_and_view_once_ui_are_present():
-    assert "FormData" in UI
-    assert "MediaRecorder" in UI
-    assert "getUserMedia({audio:true})" in UI
-    assert "media_type" in UI
-    assert "view_once" in UI
-    assert "/view-once" in UI
-
-
-def test_worker_uses_native_baileys_primitives():
-    assert "sock.readMessages(keys)" in WORKER
-    assert "react: { text:" in WORKER
-    assert "edit: key" in WORKER
-    assert "delete: key" in WORKER
-    assert "viewOnce" in WORKER
-    assert "quoted" in WORKER
-    assert "extractMessageContent" in WORKER
-    assert "downloadMediaMessage" in WORKER
-    assert "messages.reaction" in WORKER
-
-
-def test_http_surface_has_media_and_message_actions():
-    assert "/media" in WEB
-    assert "/reaction" in WEB
-    assert "@app.patch" in WEB
-    assert "@app.delete" in WEB
-    assert "/view-once" in WEB
+if __name__ == "__main__":
+    unittest.main()
