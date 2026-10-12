@@ -156,9 +156,11 @@
   const syncVersion = () => {
     const version = String(config.version || '').trim();
     if (!version) return;
-    document.title = `Ladies Explorer V${version}`;
+    const title = `Ladies Explorer V${version}`;
+    if (document.title !== title) document.title = title;
     document.querySelectorAll('.version-pill,#versionPill').forEach(element => {
-      element.textContent = `V${version}`;
+      const text = `V${version}`;
+      if (element.textContent !== text) element.textContent = text;
     });
   };
   document.addEventListener('DOMContentLoaded', () => {
