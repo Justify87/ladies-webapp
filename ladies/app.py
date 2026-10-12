@@ -5,6 +5,7 @@ import ipaddress
 import logging
 import os
 import secrets
+import threading
 from pathlib import Path
 
 from flask import jsonify, redirect, request
@@ -101,6 +102,21 @@ def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str =
     except Exception:
         LOGGER.exception("Initial identity reconciliation failed")
 
+    def rehydrate_liked_person(person_id: int) -> None:
+        try:
+            result = messaging.rehydrate_recent_history(int(person_id), limit=10)
+            LOGGER.info(
+                "WhatsApp rehydrate after like person_id=%s restored=%s requested=%s existing=%s",
+                person_id,
+                result.get("restored", 0),
+                result.get("requested", 0),
+                result.get("existing", 0),
+            )
+        except Exception:
+            # History restoration is supplementary. A WhatsApp/Baileys problem
+            # must never turn a successful LIKE into an API failure.
+            LOGGER.exception("WhatsApp rehydrate after like failed person_id=%s", person_id)
+
     @app.after_request
     def reconcile_messaging_after_identity_change(response):
         try:
@@ -114,6 +130,23 @@ def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str =
             elif response.status_code < 400 and request.path == "/api/identity/merge":
                 reconcile_identity_events(messaging.database)
                 pricing.reconcile_identity_events()
+            elif (
+                response.status_code < 400
+                and request.method == "POST"
+                and request.path.startswith("/api/person/")
+                and request.path.endswith("/state")
+            ):
+                submitted = request.get_json(silent=True) or {}
+                if str(submitted.get("preference") or "").upper() == "LIKE":
+                    parts = request.path.strip("/").split("/")
+                    if len(parts) == 4 and parts[:2] == ["api", "person"] and parts[3] == "state":
+                        person_id = int(parts[2])
+                        threading.Thread(
+                            target=rehydrate_liked_person,
+                            args=(person_id,),
+                            daemon=True,
+                            name=f"wa-rehydrate-{person_id}",
+                        ).start()
         except Exception:
             LOGGER.exception("Identity reconciliation failed path=%s", request.path)
         return response
