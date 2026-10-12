@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import hmac
 import ipaddress
 import logging
-import os
-import secrets
-import threading
 from pathlib import Path
 
 from flask import jsonify, redirect, request
 
+from .background import BackgroundTasks
+from .lan_access import LanAccessManager
 from .messaging import install_messaging
 from .messaging.integration import install_identity_merge_listener, reconcile_identity_events
 from .pricing import install_pricing, install_pricing_identity_merge_listener
@@ -18,24 +16,6 @@ from .web import create_app as create_core_app
 
 LOGGER = logging.getLogger("ladies_explorer.messaging.integration")
 LAN_COOKIE = "ladies_access"
-
-
-def _load_or_create_access_token(data_dir: str | Path) -> str:
-    path = Path(data_dir) / "lan_access_token"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        value = path.read_text(encoding="utf-8").strip()
-        if len(value) >= 24:
-            return value
-    except OSError:
-        pass
-    value = secrets.token_urlsafe(32)
-    path.write_text(value + "\n", encoding="utf-8")
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
-    return value
 
 
 def _is_loopback(remote_addr: str | None) -> bool:
@@ -64,8 +44,12 @@ def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str =
     )
     install_search_preview(app, default_city=default_city, default_radius=default_radius)
 
-    access_token = _load_or_create_access_token(data_dir)
-    app.config["LAN_ACCESS_TOKEN"] = access_token
+    lan_access = LanAccessManager(data_dir)
+    app.config["LAN_ACCESS_TOKEN"] = lan_access.pairing_token
+    app.extensions["ladies_lan_access"] = lan_access
+
+    background = BackgroundTasks(max_workers=2)
+    app.extensions["ladies_background_tasks"] = background
 
     @app.before_request
     def protect_remote_local_data():
@@ -74,18 +58,18 @@ def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str =
         if not (request.path.startswith("/api/") or request.path.startswith("/archive/")):
             return None
         supplied = request.cookies.get(LAN_COOKIE, "")
-        if supplied and hmac.compare_digest(supplied, access_token):
+        if lan_access.authorized(supplied):
             return None
         return jsonify(error="Dieses Gerät ist noch nicht mit Ladies Explorer gekoppelt."), 401
 
     @app.get("/pair/<token>")
     def pair_lan_device(token: str):
-        if not hmac.compare_digest(str(token), access_token):
+        if not lan_access.valid_pairing_token(token):
             return jsonify(error="Ungültiger Pairing-Code"), 404
         response = redirect("/", code=302)
         response.set_cookie(
             LAN_COOKIE,
-            access_token,
+            lan_access.issue_device_session(),
             max_age=365 * 24 * 60 * 60,
             httponly=True,
             samesite="Strict",
@@ -96,6 +80,7 @@ def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str =
 
     messaging = install_messaging(app, db_path=db_path, data_dir=data_dir)
     pricing = install_pricing(app, db_path=db_path, data_dir=data_dir)
+    app.extensions["ladies_database"] = messaging.database
     try:
         reconcile_identity_events(messaging.database)
         pricing.reconcile_identity_events()
@@ -141,12 +126,11 @@ def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str =
                     parts = request.path.strip("/").split("/")
                     if len(parts) == 4 and parts[:2] == ["api", "person"] and parts[3] == "state":
                         person_id = int(parts[2])
-                        threading.Thread(
-                            target=rehydrate_liked_person,
-                            args=(person_id,),
-                            daemon=True,
-                            name=f"wa-rehydrate-{person_id}",
-                        ).start()
+                        background.submit(
+                            ("wa-rehydrate", person_id),
+                            rehydrate_liked_person,
+                            person_id,
+                        )
         except Exception:
             LOGGER.exception("Identity reconciliation failed path=%s", request.path)
         return response
