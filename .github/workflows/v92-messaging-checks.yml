@@ -1,0 +1,65 @@
+name: V9.2 Messaging Checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - feature/whatsapp-person-chat
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Python dependencies
+        run: pip install -r requirements_v9_1.txt
+      - name: Compile Python
+        run: python -m compileall ladies_v9 ladies_explorer_v9_1.py
+      - name: Messaging unit tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Flask smoke test without starting a server
+        run: |
+          python - <<'PY'
+          import tempfile
+          from pathlib import Path
+          from unittest.mock import patch
+          from ladies_v9.web_v92 import create_app
+
+          class NoNodeWorker:
+              def __init__(self, worker_dir, auth_dir, event_handler):
+                  self.worker_dir=Path(worker_dir); self.auth_dir=Path(auth_dir); self.event_handler=event_handler
+                  self.proc=None; self.state='NOT_CONFIGURED'; self.detail=None; self.qr=None; self.account=None; self.last_connected_at=None
+              def dependency_status(self): return False, 'Node.js 20+ fehlt'
+              def status(self): return {'state':self.state,'detail':self.detail,'qr_available':False,'account':None,'last_connected_at':None}
+              def stop(self): pass
+
+          with tempfile.TemporaryDirectory() as td, patch('ladies_v9.messaging.service_v92.BaileysWorkerManager', NoNodeWorker):
+              root=Path(td)
+              app=create_app(db_path=root/'app.sqlite3', data_dir=root/'data')
+              client=app.test_client()
+              assert client.get('/').status_code == 200
+              status=client.get('/api/messaging/status')
+              assert status.status_code == 200
+              assert status.get_json()['state'] == 'DEPENDENCY_MISSING'
+              assert client.get('/api/dashboard').status_code == 200
+          PY
+
+  node:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ladies_v9/messaging/whatsapp_worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install pinned worker dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Check worker syntax
+        run: node --check worker.mjs
+      - name: Verify pinned Baileys 7 version
+        run: node -e "const p=require('./node_modules/@whiskeysockets/baileys/package.json'); if(p.version!=='7.0.0-rc14') throw new Error('Unexpected Baileys '+p.version); console.log(p.version)"
