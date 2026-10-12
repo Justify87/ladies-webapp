@@ -16,6 +16,7 @@ dependencies = [
   "orjson>=3.10,<4",
   "qrcode>=8,<9",
   "nodeenv>=1.10,<2",
+  "imageio-ffmpeg>=0.6,<1",
 ]
 
 [tool.setuptools]
