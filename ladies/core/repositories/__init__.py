@@ -19,11 +19,17 @@ class RepositoryBundle:
 
     @classmethod
     def from_store(cls, store):
+        settings = SettingsRepository(store.database)
         return cls(
             search=SearchRepository(store.database),
-            persons=PersonRepository(store.database, store),
+            persons=PersonRepository(
+                store.database,
+                store.archive,
+                settings,
+                store,
+            ),
             history=HistoryRepository(store.database),
-            settings=SettingsRepository(store.database),
+            settings=settings,
             archive=ArchiveRepository(store.database, store.archive),
         )
 
