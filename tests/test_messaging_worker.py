@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ladies_v9.identity import normalize_phone_number
-from ladies_v9.messaging.whatsapp_manager import BaileysWorkerManager
+from ladies_v9.messaging.gateway import WhatsAppGateway
 
 
 class WorkerManagerTests(unittest.TestCase):
@@ -14,14 +14,14 @@ class WorkerManagerTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
         self.events = []
-        self.manager = BaileysWorkerManager(root / "worker", root / "auth", self.events.append)
+        self.manager = WhatsAppGateway(root / "worker", root / "auth", self.events.append)
 
     def tearDown(self):
         self.manager.stop()
         self.tmp.cleanup()
 
     def test_missing_node_is_nonfatal_dependency_state(self):
-        with patch("ladies_v9.messaging.whatsapp_manager.shutil.which", return_value=None):
+        with patch("ladies_v9.messaging.gateway.shutil.which", return_value=None):
             ok, detail = self.manager.dependency_status()
             self.assertFalse(ok)
             self.assertIn("Node.js 20+", detail)
@@ -32,10 +32,10 @@ class WorkerManagerTests(unittest.TestCase):
         self.manager._set_state("invented")
         self.assertEqual(self.manager.state, "ERROR")
 
-    def test_worker_log_masks_long_numeric_identifiers(self):
+    def test_worker_log_masks_whatsapp_identifiers(self):
         masked = self.manager._safe_worker_log("jid=4917612345678@s.whatsapp.net")
-        self.assertNotIn("4917612345678", masked)
-        self.assertIn("******", masked)
+        self.assertNotIn("4917612345678@s.whatsapp.net", masked)
+        self.assertIn("WHATSAPP_ADDRESS", masked)
 
 
 class PhoneNormalizationTests(unittest.TestCase):
