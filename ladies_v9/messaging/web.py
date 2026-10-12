@@ -4,16 +4,13 @@ import base64
 import io
 import json
 import queue
-import time
-from typing import Any
 
 import qrcode
 from flask import Response, jsonify, request, stream_with_context
-from sqlalchemy import select
 
 from ladies_v9.models import Person, PersonUserState
 from .models import ContactEndpoint
-from .service import MessagingService
+from .service_v92 import MessagingService
 
 
 def _qr_data_uri(value: str) -> str:
