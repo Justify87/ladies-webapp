@@ -8,9 +8,9 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from ladies_v9.web import create_app
+from ladies_v9.web_v92 import create_app
 
-VERSION = "9.1.4"
+VERSION = "9.2.0"
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
@@ -95,7 +95,7 @@ def main() -> int:
     if args.host in {"0.0.0.0", "::"}:
         for ip in local_ipv4_addresses():
             print(f"Heimnetz:  http://{ip}:{args.port}")
-    print("Hinweis: V9 verwendet absichtlich eine neue, inkompatible Datenbankstruktur.")
+    print("WhatsApp wird intern verwaltet; Node.js 20+ wird nur für die Chat-Funktion benötigt.")
     app.run(host=args.host, port=args.port, threaded=True, use_reloader=False)
     return 0
 
