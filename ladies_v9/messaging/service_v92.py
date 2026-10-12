@@ -10,11 +10,12 @@ from typing import Any
 from sqlalchemy import desc, select
 
 from ladies_v9.database import Database
-from ladies_v9.models import Listing, Person, PersonIdentifier
+from ladies_v9.models import AppSetting, Listing, Person, PersonIdentifier, utcnow
 from .service import EventHub, MessagingService as BaseMessagingService
 from .whatsapp_manager import BaileysWorkerManager
 
 LOGGER = logging.getLogger("ladies_explorer.messaging")
+TYPING_SETTING_KEY = "whatsapp_typing_enabled"
 
 
 class MessagingService(BaseMessagingService):
@@ -30,7 +31,9 @@ class MessagingService(BaseMessagingService):
         from . import models as _messaging_models  # noqa: F401
         self.database.create_schema()
         self.events = EventHub()
-        self.typing_enabled = True
+        with self.database.session() as db:
+            setting = db.get(AppSetting, TYPING_SETTING_KEY)
+            self.typing_enabled = setting is None or setting.value_json.strip().lower() != "false"
         self.data_dir = Path(data_dir)
         self.auth_dir = self.data_dir / "whatsapp" / "auth"
         self.media_dir = self.data_dir / "whatsapp" / "media"
@@ -49,6 +52,17 @@ class MessagingService(BaseMessagingService):
             self.worker.start()
         else:
             self.worker.state = "NOT_CONFIGURED"
+
+    def set_typing_enabled(self, value: bool) -> None:
+        self.typing_enabled = bool(value)
+        with self.database.session() as db:
+            row = db.get(AppSetting, TYPING_SETTING_KEY)
+            stored = "true" if self.typing_enabled else "false"
+            if row is None:
+                db.add(AppSetting(key=TYPING_SETTING_KEY, value_json=stored))
+            else:
+                row.value_json = stored
+                row.updated_at = utcnow()
 
     def connect(self) -> dict[str, Any]:
         ok, detail = self.worker.dependency_status()
