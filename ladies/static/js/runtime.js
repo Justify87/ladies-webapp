@@ -152,4 +152,18 @@
       enumerable: false,
     });
   }
+
+  const syncVersion = () => {
+    const version = String(config.version || '').trim();
+    if (!version) return;
+    document.title = `Ladies Explorer V${version}`;
+    document.querySelectorAll('.version-pill,#versionPill').forEach(element => {
+      element.textContent = `V${version}`;
+    });
+  };
+  document.addEventListener('DOMContentLoaded', () => {
+    syncVersion();
+    const observer = new MutationObserver(syncVersion);
+    observer.observe(document.body, {childList:true, subtree:true});
+  }, {once:true});
 })();
