@@ -58,7 +58,7 @@ class SearchRepositoryTests(unittest.TestCase):
             with database.session() as db:
                 self.assertEqual(db.scalar(select(func.count(Listing.listing_id))), 1)
                 self.assertEqual(db.scalar(select(func.count(SearchResult.search_result_id))), 2)
-                self.assertEqual(db.scalar(select(func.count(ListingObservation.listing_observation_id))), 2)
+                self.assertEqual(db.scalar(select(func.count(ListingObservation.observation_id))), 2)
 
     def test_recent_searches_are_deduplicated_by_city_and_radius(self):
         with tempfile.TemporaryDirectory() as td:
