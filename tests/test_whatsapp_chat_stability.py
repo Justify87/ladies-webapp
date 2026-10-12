@@ -70,7 +70,7 @@ class WhatsAppChatStabilityTests(unittest.TestCase):
         self.assertIn(".messaging-chat-layer{z-index:140", css)
 
     def test_profile_contact_probe_returns_registration_and_picture(self):
-        with tempfile.TemporaryDirectory() as td, patch("ladies_v9.messaging.service_runtime.BaileysWorkerManager", ProbeWorker):
+        with tempfile.TemporaryDirectory() as td, patch("ladies_v9.messaging.service.WhatsAppGateway", ProbeWorker):
             from ladies_v9.app import create_app
 
             root = Path(td)
