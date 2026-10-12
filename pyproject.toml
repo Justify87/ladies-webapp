@@ -19,13 +19,14 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["ladies_v9", "ladies_v9.messaging"]
+packages = ["ladies_v9", "ladies_v9.messaging", "ladies_v9.pricing"]
 py-modules = ["ladies_explorer"]
 include-package-data = true
 
 [tool.setuptools.package-dir]
 ladies_v9 = "ladies"
 "ladies_v9.messaging" = "ladies/messaging"
+"ladies_v9.pricing" = "ladies/pricing"
 
 [tool.setuptools.package-data]
 ladies_v9 = ["static/*", "templates/*"]
