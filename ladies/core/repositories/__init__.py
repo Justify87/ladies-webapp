@@ -20,6 +20,9 @@ class RepositoryBundle:
 
     @classmethod
     def from_dependencies(cls, database, archive):
+        # Schema creation/migration is an application-composition concern. It
+        # must happen before any repository constructor touches settings/tables.
+        database.create_schema()
         settings = SettingsRepository(database)
         person_read = PersonReadRepository(database)
         return cls(
