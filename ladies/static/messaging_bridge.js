@@ -21,6 +21,11 @@ window.saveDefaultFilters = saveDefaultFilters;
 window.deleteDefaultFilters = deleteDefaultFilters;
 window.updateFilterCount = updateFilterCount;
 
+// V9 kept height unrestricted as null; the restored dual-thumb UI needs the
+// equivalent explicit full range while preserving the same search semantics.
+if (state.filters.heightMin == null) state.filters.heightMin = 140;
+if (state.filters.heightMax == null) state.filters.heightMax = 200;
+
 // Load messaging UI policy first, then the compact cross-feature follow-up layer.
 document.addEventListener('DOMContentLoaded', () => {
   const loadFollowup = () => {
