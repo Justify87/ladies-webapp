@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from flask import jsonify, request
 
-from .service import PriceIntelligenceService
+from .service_hardened import PriceIntelligenceService
 
 
 def install_pricing(app, *, db_path, data_dir) -> PriceIntelligenceService:
@@ -50,7 +50,10 @@ def install_pricing(app, *, db_path, data_dir) -> PriceIntelligenceService:
     @app.post("/api/pricing/proposals/<int:extraction_id>/accept")
     def pricing_accept_proposal(extraction_id: int):
         try:
-            return jsonify(service.accept(extraction_id, request.get_json(silent=True) or {}))
+            result = service.accept(extraction_id, request.get_json(silent=True) or {})
+            if result.get("status") == "STALE":
+                return jsonify(result), 409
+            return jsonify(result)
         except KeyError:
             return jsonify(error="Preisvorschlag nicht gefunden"), 404
         except (ValueError, TypeError) as exc:
