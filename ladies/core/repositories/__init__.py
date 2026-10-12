@@ -24,7 +24,7 @@ class RepositoryBundle:
             persons=PersonRepository(store),
             history=HistoryRepository(store),
             settings=SettingsRepository(store.database),
-            archive=ArchiveRepository(store),
+            archive=ArchiveRepository(store.database, store.archive),
         )
 
 
