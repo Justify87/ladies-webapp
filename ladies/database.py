@@ -59,7 +59,7 @@ class Database:
         backup_dir = self.path.parent / "migration-backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
         suffix = self.path.suffix or ".sqlite3"
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
         backup = backup_dir / (
             f"{self.path.stem}.schema-v{from_version}-to-v{to_version}-{stamp}{suffix}"
         )
@@ -68,7 +68,7 @@ class Database:
         LOGGER.warning("Database migration backup created path=%s", backup.resolve())
 
         backups = sorted(
-            backup_dir.glob(f"{self.path.stem}.schema-v*-to-v-*{suffix}"),
+            backup_dir.glob(f"{self.path.stem}.schema-v*-to-v*-*{suffix}"),
             key=lambda item: item.stat().st_mtime,
             reverse=True,
         )
