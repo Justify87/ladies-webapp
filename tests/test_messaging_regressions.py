@@ -23,6 +23,7 @@ class FakeWorker:
         self.last_connected_at = None
         self.proc = None
         self.fail_send = False
+        self.receipt_before_return = False
         self.send_counter = 0
 
     def dependency_status(self):
@@ -49,7 +50,17 @@ class FakeWorker:
                 self.fail_send = False
                 raise RuntimeError("send failed")
             self.send_counter += 1
-            return {"ok": True, "payload": {"provider_message_id": f"wa-out-{self.send_counter}"}}
+            provider_id = f"wa-out-{self.send_counter}"
+            if self.receipt_before_return:
+                self.event_handler({
+                    "type": "message_update",
+                    "payload": {
+                        "provider_message_id": provider_id,
+                        "client_message_id": payload.get("client_message_id"),
+                        "status": "READ",
+                    },
+                })
+            return {"ok": True, "payload": {"provider_message_id": provider_id}}
         if command_type == "disconnect":
             self.state = "DISCONNECTED"
         if command_type == "logout":
@@ -182,6 +193,78 @@ class MessagingRegressionTests(unittest.TestCase):
             self.assertIsNone(wrong)
             self.assertIsNotNone(right)
 
+    def test_existing_phone_endpoint_and_lid_endpoint_coalesce_without_unique_collision(self):
+        person_id = self.make_person("Coalesce", "+4917612345678")
+        self.service.sync_person(person_id)
+        self.service._ingest_message({
+            "provider_message_id": "coalesce-lid-1",
+            "jid": "555666777888999@lid",
+            "from_me": False,
+            "text": "LID first",
+            "message_type": "TEXT",
+        })
+        lid_endpoint_id = self.service.unassigned()[0]["endpoint"]["endpoint_id"]
+        self.service.assign_endpoint(lid_endpoint_id, person_id)
+        self.service._ingest_message({
+            "provider_message_id": "coalesce-lid-2",
+            "jid": "555666777888999@lid",
+            "phone_jid": "4917612345678@s.whatsapp.net",
+            "from_me": False,
+            "text": "PN known",
+            "message_type": "TEXT",
+        })
+        with self.service.database.session() as db:
+            endpoints = db.scalars(select(ContactEndpoint).where(ContactEndpoint.person_id == person_id)).all()
+            self.assertEqual(len(endpoints), 1)
+            endpoint = endpoints[0]
+            self.assertEqual(endpoint.normalized_phone, "+4917612345678")
+            self.assertEqual(endpoint.provider_address, "555666777888999@lid")
+            dangling = db.scalar(select(func.count(ChatMessage.message_id)).where(ChatMessage.endpoint_id == lid_endpoint_id))
+            self.assertEqual(dangling, 0)
+
+    def test_manual_assignment_rejects_phone_owned_by_other_person_before_move(self):
+        person_a = self.make_person("A")
+        person_b = self.make_person("B", "+4917612345678")
+        with self.service.database.session() as db:
+            endpoint = ContactEndpoint(
+                person_id=None,
+                provider="WHATSAPP",
+                normalized_phone="+4917612345678",
+                display_phone="+49 176 12345678",
+                provider_address="4917612345678@s.whatsapp.net",
+                state="ACTIVE",
+            )
+            db.add(endpoint)
+            db.flush()
+            thread = ChatThread(person_id=None)
+            db.add(thread)
+            db.flush()
+            db.add(ChatMessage(
+                thread_id=thread.thread_id,
+                endpoint_id=endpoint.endpoint_id,
+                direction="IN",
+                message_type="TEXT",
+                text="unknown",
+                status="RECEIVED",
+            ))
+            endpoint_id = endpoint.endpoint_id
+            thread_id = thread.thread_id
+        with self.assertRaises(ValueError):
+            self.service.assign_endpoint(endpoint_id, person_a)
+        with self.service.database.session() as db:
+            endpoint = db.get(ContactEndpoint, endpoint_id)
+            message = db.scalar(select(ChatMessage).where(ChatMessage.thread_id == thread_id))
+            self.assertIsNone(endpoint.person_id)
+            self.assertEqual(endpoint.state, "ACTIVE")
+            self.assertIsNotNone(message)
+            self.assertEqual(
+                db.scalar(select(PersonIdentifier).where(
+                    PersonIdentifier.person_id == person_b,
+                    PersonIdentifier.normalized_value == "+4917612345678",
+                )).person_id,
+                person_b,
+            )
+
     def test_retry_reuses_same_message_row(self):
         person_id = self.make_person("Retry", "+4917611111111")
         thread_id = self.service.ensure_person_thread(person_id)["thread_id"]
@@ -201,6 +284,21 @@ class MessagingRegressionTests(unittest.TestCase):
                 ChatMessage.direction == "OUT",
             ))
             self.assertEqual(count, 1)
+
+    def test_early_read_receipt_correlates_to_pending_message_and_is_not_downgraded(self):
+        person_id = self.make_person("Receipt", "+4917611111111")
+        thread_id = self.service.ensure_person_thread(person_id)["thread_id"]
+        self.service.worker.receipt_before_return = True
+        result = self.service.send_text(thread_id, "Fast receipt")
+        self.assertEqual(result["status"], "READ")
+        self.assertEqual(result["provider_message_id"], "wa-out-1")
+        with self.service.database.session() as db:
+            rows = db.scalars(select(ChatMessage).where(
+                ChatMessage.thread_id == thread_id,
+                ChatMessage.direction == "OUT",
+            )).all()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].status, "READ")
 
     def test_thread_cursor_pagination_has_no_overlap(self):
         person_id = self.make_person("History", "+4917611111111")
