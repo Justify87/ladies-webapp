@@ -24,11 +24,6 @@ ALLOWED_STATES = {
 RESTART_DELAYS = (1, 2, 5, 10, 30)
 
 
-def _runtime_executable(name: str) -> str | None:
-    """Resolve node/npm from PATH; startup bootstrap may prepend a local runtime."""
-    return shutil.which(name)
-
-
 class BaileysWorkerManager:
     def __init__(self, worker_dir: Path, auth_dir: Path, event_handler: Callable[[dict[str, Any]], None]):
         self.worker_dir = Path(worker_dir)
@@ -65,28 +60,19 @@ class BaileysWorkerManager:
         self.event_handler({"type": "connection", "state": state, "detail": detail})
 
     def dependency_status(self) -> tuple[bool, str | None]:
-        node = _runtime_executable("node")
+        node = shutil.which("node")
         if not node:
-            return False, "Node.js fehlt"
+            return False, "Node.js 20+ fehlt"
         try:
             major = int(subprocess.check_output(
                 [node, "-p", "process.versions.node.split('.')[0]"],
                 text=True,
                 timeout=5,
             ).strip())
-            if major < 20 or major > 24:
-                return False, "Node.js 20–24 erforderlich"
+            if major < 20:
+                return False, "Node.js 20+ erforderlich"
         except Exception:
             return False, "Node.js-Version konnte nicht geprüft werden"
-        npm = _runtime_executable("npm")
-        if not npm:
-            return False, "npm fehlt"
-        try:
-            npm_major = int(subprocess.check_output([npm, "--version"], text=True, timeout=5).strip().split(".", 1)[0])
-            if npm_major < 10:
-                return False, "npm 10+ erforderlich"
-        except Exception:
-            return False, "npm-Version konnte nicht geprüft werden"
         return True, None
 
     def bootstrap(self) -> bool:
@@ -94,7 +80,7 @@ class BaileysWorkerManager:
         if not ok:
             self._set_state("DEPENDENCY_MISSING", detail)
             return False
-        npm = _runtime_executable("npm")
+        npm = shutil.which("npm")
         if not npm:
             self._set_state("DEPENDENCY_MISSING", "npm fehlt")
             return False
@@ -139,7 +125,7 @@ class BaileysWorkerManager:
             env = os.environ.copy()
             env["LADIES_WHATSAPP_AUTH_DIR"] = str(self.auth_dir)
             proc = subprocess.Popen(
-                [_runtime_executable("node") or "node", "worker.mjs"],
+                [shutil.which("node") or "node", "worker.mjs"],
                 cwd=self.worker_dir,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -233,37 +219,42 @@ class BaileysWorkerManager:
         with self._lock:
             self._pending[request_id] = response_queue
         try:
-            message = {"id": request_id, "type": command_type, **payload}
+            raw = json.dumps({"id": request_id, "type": command_type, **payload}, ensure_ascii=False)
             if not proc.stdin:
-                raise RuntimeError("WhatsApp-Worker hat keinen Eingabekanal")
+                raise RuntimeError("Worker stdin nicht verfügbar")
             with self._write_lock:
-                proc.stdin.write(json.dumps(message, ensure_ascii=False) + "\n")
+                proc.stdin.write(raw + "\n")
                 proc.stdin.flush()
-            response = response_queue.get(timeout=timeout)
-            if response.get("ok") is False:
-                raise RuntimeError(str(response.get("error") or "WhatsApp-Befehl fehlgeschlagen"))
-            return response
-        except queue.Empty as exc:
-            raise RuntimeError("WhatsApp-Worker antwortet nicht") from exc
+            event = response_queue.get(timeout=timeout)
+            if event.get("ok") is False:
+                raise RuntimeError(event.get("message") or "Worker-Fehler")
+            return event
         finally:
             with self._lock:
                 self._pending.pop(request_id, None)
 
     def stop(self) -> None:
         with self._lock:
-            self._stopping = True
             proc = self.proc
-            self.proc = None
-        if not proc:
-            return
+            if not proc:
+                return
+            self._stopping = True
         try:
-            if proc.stdin and proc.poll() is None:
+            request_id = uuid.uuid4().hex
+            if proc.stdin:
                 with self._write_lock:
-                    proc.stdin.write(json.dumps({"id": uuid.uuid4().hex, "type": "shutdown"}) + "\n")
+                    proc.stdin.write(json.dumps({"id": request_id, "type": "shutdown"}) + "\n")
                     proc.stdin.flush()
         except Exception:
             pass
         try:
+            proc.terminate()
             proc.wait(timeout=3)
         except Exception:
-            proc.kill()
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        with self._lock:
+            if self.proc is proc:
+                self.proc = None
