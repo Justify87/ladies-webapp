@@ -22,6 +22,32 @@ MONEY_RE = re.compile(
 )
 RANGE_RE = re.compile(r"(?<!\d)(\d{2,4})\s*(?:€\s*)?[-–]\s*(\d{2,4})\s*(?:€|eur|euro)?", re.I)
 
+_PRICE_FIRST_MINUTES_RE = re.compile(
+    r"^\s*(?P<price>\d{2,4})(?:\s*(?:€|eur|euro))?\s+(?P<duration>\d{1,3})\s*(?:min(?:ute[n]?)?|mins?)\b",
+    re.I,
+)
+_PRICE_FIRST_HOURS_RE = re.compile(
+    r"^\s*(?P<price>\d{2,4})(?:\s*(?:€|eur|euro))?\s+(?P<hours>\d+(?:[\.,]\d+)?)\s*(?:h|std\.?|stunde[n]?)\b",
+    re.I,
+)
+_PRICE_PER_HOUR_SHORTHAND_RE = re.compile(
+    r"^\s*(?P<price>\d{2,4})(?:\s*(?:€|eur|euro))?\s*(?:h|std\.?|stunde[n]?)\s*$",
+    re.I,
+)
+_DURATION_FIRST_MINUTES_RE = re.compile(
+    r"^\s*(?P<duration>\d{1,3})\s*(?:min(?:ute[n]?)?|mins?)\s+(?P<price>\d{2,4})(?:\s*(?:€|eur|euro))?\b",
+    re.I,
+)
+_DURATION_FIRST_HOURS_RE = re.compile(
+    r"^\s*(?P<hours>\d+(?:[\.,]\d+)?)\s*(?:h|std\.?|stunde[n]?)\s+(?P<price>\d{2,4})(?:\s*(?:€|eur|euro))?\b",
+    re.I,
+)
+_COMPACT_PRICE_MINUTES_RE = re.compile(
+    r"^\s*(?P<combined>\d{4,7})\s*(?:min(?:ute[n]?)?|mins?)\b",
+    re.I,
+)
+_COMMON_DURATIONS = {15, 20, 30, 45, 60, 90, 120, 180}
+
 SERVICE_ALIASES = {
     "KISSING": {"küssen", "kussen", "kusse", "küsse", "kuesse", "kissing", "zk"},
     "FRENCH": {"französisch", "franzosisch", "franzoesisch", "franz", "franz."},
@@ -55,6 +81,93 @@ def extract_durations(text: str) -> list[dict[str, Any]]:
             if 1 <= minutes <= 1440:
                 out.append({"minutes": minutes, "start": match.start(), "end": match.end(), "raw": match.group(0)})
     return sorted(_dedupe_spans(out), key=lambda x: x["start"])
+
+
+def extract_price_duration_pairs(text: str | None) -> list[dict[str, Any]]:
+    """Extract line-oriented price rows that are common in chat price lists.
+
+    Besides normal forms such as ``50 20 Minuten`` this deliberately handles
+    compact typing like ``10045 Minuten`` (100 EUR / 45 min) and the common
+    shorthand ``130 Std`` (130 EUR / one hour).  Conservative amount and
+    duration bounds keep ordinary duration-only chat text from becoming a
+    price row accidentally.
+    """
+    value = unicodedata.normalize("NFKC", str(text or "")).replace("\u00a0", " ")
+    out: list[dict[str, Any]] = []
+    for line_match in re.finditer(r"[^\r\n]+", value):
+        line = normalize_text(line_match.group(0))
+        if not line:
+            continue
+        pair = _parse_price_duration_line(line)
+        if pair is None:
+            continue
+        price, minutes = pair
+        if not (20 <= price <= 5000 and 5 <= minutes <= 1440):
+            continue
+        out.append({
+            "duration_minutes": minutes,
+            "amount_cents": price * 100,
+            "start": line_match.start(),
+            "end": line_match.end(),
+            "raw": line,
+        })
+    seen: set[tuple[int, int]] = set()
+    unique = []
+    for row in out:
+        key = (row["duration_minutes"], row["amount_cents"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(row)
+    return unique
+
+
+def _parse_price_duration_line(line: str) -> tuple[int, int] | None:
+    match = _PRICE_FIRST_MINUTES_RE.search(line)
+    if match:
+        return int(match.group("price")), int(match.group("duration"))
+
+    match = _PRICE_FIRST_HOURS_RE.search(line)
+    if match:
+        hours = float(match.group("hours").replace(",", "."))
+        return int(match.group("price")), round(hours * 60)
+
+    match = _DURATION_FIRST_MINUTES_RE.search(line)
+    if match:
+        return int(match.group("price")), int(match.group("duration"))
+
+    match = _DURATION_FIRST_HOURS_RE.search(line)
+    if match:
+        hours = float(match.group("hours").replace(",", "."))
+        return int(match.group("price")), round(hours * 60)
+
+    match = _PRICE_PER_HOUR_SHORTHAND_RE.search(line)
+    if match:
+        return int(match.group("price")), 60
+
+    match = _COMPACT_PRICE_MINUTES_RE.search(line)
+    if not match:
+        return None
+    digits = match.group("combined")
+    candidates: list[tuple[int, int, int]] = []
+    for split in range(2, min(4, len(digits) - 1) + 1):
+        price = int(digits[:split])
+        minutes = int(digits[split:])
+        if not (20 <= price <= 5000 and 5 <= minutes <= 240):
+            continue
+        score = 0
+        if minutes in _COMMON_DURATIONS:
+            score += 5
+        if 15 <= minutes <= 120:
+            score += 2
+        if 40 <= price <= 500:
+            score += 2
+        if len(digits[:split]) in (2, 3):
+            score += 1
+        candidates.append((score, price, minutes))
+    if not candidates:
+        return None
+    _, price, minutes = max(candidates, key=lambda row: (row[0], -abs(row[2] - 60), -row[1]))
+    return price, minutes
 
 
 def extract_money(text: str) -> list[dict[str, Any]]:
