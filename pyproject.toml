@@ -24,6 +24,7 @@ package-dir = {"ladies_v9" = "ladies"}
 packages = [
   "ladies_v9",
   "ladies_v9.core",
+  "ladies_v9.core.repositories",
   "ladies_v9.core.services",
   "ladies_v9.messaging",
   "ladies_v9.pricing",
