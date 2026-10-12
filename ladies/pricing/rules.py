@@ -5,7 +5,7 @@ from copy import deepcopy
 from typing import Any
 
 from .context import PriceContext
-from .normalize import canonical_service, extract_durations, extract_money, fold, normalize_text
+from .normalize import canonical_service, extract_durations, extract_money, extract_price_duration_pairs, fold, normalize_text
 from .schema import empty_proposal, validate_proposal
 
 INCLUDED_RE = re.compile(r"\b(inkl\.?|inklusive|dabei|inbegriffen)\b", re.I)
@@ -13,7 +13,7 @@ EXCLUDED_RE = re.compile(r"\b(nicht|kein(?:e|en|er|es)?|ohne)\b", re.I)
 ON_REQUEST_RE = re.compile(r"\b(auf\s+anfrage|nach\s+absprache|auf\s+wunsch)\b", re.I)
 NEGOTIABLE_RE = re.compile(r"\b(vb|verhandelbar|verhandlungssache)\b", re.I)
 SURCHARGE_WORD_RE = re.compile(r"\b(extra|aufpreis|zuschlag)\b", re.I)
-FULL_RE = re.compile(r"\b(preisliste|meine\s+preise|aktuelle\s+preise|preise\s+sind)\b", re.I)
+FULL_RE = re.compile(r"\b(preisliste|meine\s+preise|mein\s+preis|aktuelle\s+preise|preise\s+sind)\b", re.I)
 PARTIAL_RE = re.compile(r"\b(jetzt|ab\s+jetzt|neu(?:e|er|en)?\s+preis|kostet\s+jetzt|nun)\b", re.I)
 TRAVEL_RE = re.compile(r"\b(hausbesuch|hausbesuche|anfahrt|fahrtkosten)\b", re.I)
 HOTEL_RE = re.compile(r"\b(hotel|hotelkosten)\b", re.I)
@@ -32,7 +32,8 @@ def extract_with_rules(context: PriceContext, *, has_existing_price_list: bool =
     previous_outgoing = None
     previous_outgoing_message = None
     for msg in context.messages:
-        text = normalize_text(msg.effective_text)
+        raw_text = str(msg.effective_text or "")
+        text = normalize_text(raw_text)
         if not text:
             continue
         if msg.direction == "OUT":
@@ -43,6 +44,23 @@ def extract_with_rules(context: PriceContext, *, has_existing_price_list: bool =
         evidence = [{"message_id": msg.message_id, "excerpt": text[:500], "source_type": source_type}]
         durations = extract_durations(text)
         monies = extract_money(text)
+        structured_pairs = extract_price_duration_pairs(raw_text)
+
+        for pair in structured_pairs:
+            key = (pair["duration_minutes"], pair["amount_cents"], None, "EXACT")
+            if key in seen_offer:
+                continue
+            seen_offer.add(key)
+            offers.append({
+                "proposal_key": f"offer_{len(offers)+1}",
+                "duration_minutes": pair["duration_minutes"],
+                "duration_max_minutes": None,
+                "amount_type": "EXACT",
+                "amount_cents": pair["amount_cents"],
+                "amount_max_cents": None,
+                "label": f"{pair['duration_minutes']} Minuten",
+                "evidence": evidence,
+            })
 
         if not monies and previous_outgoing and re.search(r"\b(kost|preis|wie\s+viel|nimm)\w*\b", fold(previous_outgoing)):
             m = re.fullmatch(r"\s*(\d{2,4})(?:[\.,](\d{1,2}))?\s*", text)
@@ -61,24 +79,28 @@ def extract_with_rules(context: PriceContext, *, has_existing_price_list: bool =
                     {"message_id": previous_outgoing_message.message_id, "excerpt": previous_outgoing[:500], "source_type": "CHAT_TEXT"},
                     {"message_id": msg.message_id, "excerpt": text[:500], "source_type": source_type},
                 ] if previous_outgoing_message is not None else evidence
-        for d in pair_durations:
-            if not available:
-                continue
-            money = min(available, key=lambda m: abs(((m["start"] + m["end"]) / 2) - ((d["start"] + d["end"]) / 2)))
-            key = (d["minutes"], money["amount_cents"], money.get("amount_max_cents"), money["amount_type"])
-            if key in seen_offer:
-                continue
-            seen_offer.add(key)
-            offers.append({
-                "proposal_key": f"offer_{len(offers)+1}",
-                "duration_minutes": d["minutes"],
-                "duration_max_minutes": None,
-                "amount_type": money["amount_type"],
-                "amount_cents": money["amount_cents"],
-                "amount_max_cents": money.get("amount_max_cents"),
-                "label": f"{d['minutes']} Minuten",
-                "evidence": evidence,
-            })
+        # Multiple structured rows are authoritative for this message.  Skipping
+        # nearest-neighbour pairing avoids bogus rows from compact text such as
+        # "10045 Minuten", where the generic money regex can otherwise see 1004.
+        if len(structured_pairs) < 2:
+            for d in pair_durations:
+                if not available:
+                    continue
+                money = min(available, key=lambda m: abs(((m["start"] + m["end"]) / 2) - ((d["start"] + d["end"]) / 2)))
+                key = (d["minutes"], money["amount_cents"], money.get("amount_max_cents"), money["amount_type"])
+                if key in seen_offer:
+                    continue
+                seen_offer.add(key)
+                offers.append({
+                    "proposal_key": f"offer_{len(offers)+1}",
+                    "duration_minutes": d["minutes"],
+                    "duration_max_minutes": None,
+                    "amount_type": money["amount_type"],
+                    "amount_cents": money["amount_cents"],
+                    "amount_max_cents": money.get("amount_max_cents"),
+                    "label": f"{d['minutes']} Minuten",
+                    "evidence": evidence,
+                })
 
         service_key, alias = canonical_service(text)
         surcharge = next((m for m in monies if m.get("is_surcharge")), None)
@@ -125,7 +147,7 @@ def extract_with_rules(context: PriceContext, *, has_existing_price_list: bool =
                 "evidence": evidence,
             })
 
-        if monies and not durations and not service_key and not condition_type and len(text) > 8:
+        if monies and not durations and not structured_pairs and not service_key and not condition_type and len(text) > 8:
             uncertainties.append(f"Unklare Preisangabe: {text[:180]}")
 
     proposal["offers"] = offers

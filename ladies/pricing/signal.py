@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .normalize import extract_durations, extract_money, fold
+from .normalize import extract_durations, extract_money, extract_price_duration_pairs, fold
 
 PRICE_WORD_RE = re.compile(r"\b(preis(?:e|liste)?|kost(?:et|en)?|nehme|nimmt|zahlen?|euro|eur)\b", re.I)
 INCLUDE_RE = re.compile(r"\b(inkl\.?|inklusive|dabei|inbegriffen)\b", re.I)
@@ -23,18 +23,21 @@ def detect_price_signal(text: str | None, *, previous_outgoing: str | None = Non
     folded = fold(value)
     durations = extract_durations(value)
     monies = extract_money(value)
+    structured_pairs = extract_price_duration_pairs(value)
     score = 0
     reasons: list[str] = []
 
     if re.search(r"€|\beur\b|\beuro\b", value, re.I):
         score += 4; reasons.append("currency")
-    if durations:
+    if durations or structured_pairs:
         score += 3; reasons.append("duration")
     explicit_money = [m for m in monies if m.get("explicit")]
     if explicit_money:
         score += 2; reasons.append("amount")
-    if durations and monies:
+    if (durations and monies) or structured_pairs:
         score += 5; reasons.append("duration_amount")
+    if structured_pairs:
+        score += 2; reasons.append("structured_price_rows")
     if PRICE_WORD_RE.search(value):
         score += 2; reasons.append("price_word")
     if SURCHARGE_RE.search(value):
@@ -48,7 +51,7 @@ def detect_price_signal(text: str | None, *, previous_outgoing: str | None = Non
     if has_image:
         score += 1; reasons.append("image")
 
-    if not (durations or PRICE_WORD_RE.search(value) or explicit_money or previous_outgoing):
+    if not (durations or structured_pairs or PRICE_WORD_RE.search(value) or explicit_money or previous_outgoing):
         if re.search(r"\+?\d{8,}", folded):
             score = max(0, score - 4); reasons.append("phone_like")
 

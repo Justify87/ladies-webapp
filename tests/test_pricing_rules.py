@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from ladies_v9.pricing.context import ContextMessage, build_context
-from ladies_v9.pricing.normalize import extract_money
+from ladies_v9.pricing.normalize import extract_money, extract_price_duration_pairs
 from ladies_v9.pricing.rules import extract_with_rules, merge_partial
 from ladies_v9.pricing.signal import detect_price_signal
 
@@ -40,6 +40,42 @@ class PricingRulesTests(unittest.TestCase):
         rules = {(x["service_key"], x["status"], x["amount_cents"]) for x in proposal["service_rules"]}
         self.assertIn(("KISSING", "INCLUDED", None), rules)
         self.assertIn(("ANAL", "SURCHARGE", 5000), rules)
+
+    def test_compact_multiline_price_list_from_real_chat(self):
+        message = """👄Hallo Schatz 👄
+
+♥️Mein Preis ♥️
+
+ 50 20 Minuten
+70 30 Minuten
+10045 Minuten
+130 Std
+
+💖Mein Service💖
+
+Blassen f**cken Massage leken Anfassen Stellungen wechseln 69 d@ggy
+
+Adresse
+Leipzig
+Härtelstr.9a"""
+        proposal = extract_with_rules(_ctx(("IN", message)))
+        self.assertEqual(
+            {(x["duration_minutes"], x["amount_cents"]) for x in proposal["offers"]},
+            {(20, 5000), (30, 7000), (45, 10000), (60, 13000)},
+        )
+        self.assertEqual(proposal["update_mode"], "FULL")
+        signal = detect_price_signal(message)
+        self.assertTrue(signal.strong)
+        self.assertIn("structured_price_rows", signal.reasons)
+
+    def test_compact_price_and_duration_without_space_is_split_plausibly(self):
+        rows = extract_price_duration_pairs("10045 Minuten")
+        self.assertEqual([(x["amount_cents"], x["duration_minutes"]) for x in rows], [(10000, 45)])
+
+    def test_hour_price_shorthand_means_one_hour(self):
+        rows = extract_price_duration_pairs("130 Std")
+        self.assertEqual([(x["amount_cents"], x["duration_minutes"]) for x in rows], [(13000, 60)])
+        self.assertEqual(extract_price_duration_pairs("2 Std"), [])
 
     def test_partial_merge_keeps_unmentioned_offer(self):
         base = extract_with_rules(_ctx(("IN", "30 min 100 €, 1h 160 €")))
