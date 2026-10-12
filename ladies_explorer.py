@@ -15,7 +15,7 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-VERSION = "9.3.0"
+VERSION = "9.4.0"
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_FILE = SCRIPT_DIR / "pyproject.toml"
 NODE_VERSION = "22.23.3"

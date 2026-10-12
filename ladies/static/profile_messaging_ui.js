@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const APP_VERSION = '9.3.0';
+  const APP_VERSION = '9.4.0';
   document.title = `Ladies Explorer V${APP_VERSION}`;
   document.querySelectorAll('.version-pill').forEach(el => { el.textContent = `V${APP_VERSION}`; });
 
