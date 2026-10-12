@@ -180,7 +180,7 @@ node --check ladies_v9/static/messaging.js
 node --check ladies_v9/static/messaging_bridge.js
 ```
 
-Die Regressionstests decken insbesondere ab:
+Aktuell laufen **29 automatisierte Python-Tests**. Die Regressionstests decken insbesondere ab:
 
 - bekannte und neue Nummern sowie LID-only-Kontakte;
 - LID→PN-Lernen und Identity-Konflikte;
