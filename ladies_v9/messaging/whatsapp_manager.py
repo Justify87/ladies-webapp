@@ -30,6 +30,7 @@ class BaileysWorkerManager:
         self.event_handler = event_handler
         self.proc: subprocess.Popen[str] | None = None
         self._lock = threading.RLock()
+        self._write_lock = threading.Lock()
         self._pending: dict[str, queue.Queue] = {}
         self._stopping = False
         self._restart_attempt = 0
@@ -88,7 +89,7 @@ class BaileysWorkerManager:
         try:
             LOGGER.info("Installing WhatsApp worker dependencies")
             lock = self.worker_dir / "package-lock.json"
-            command = [npm, "ci", "--omit=dev"] if lock.exists() else [npm, "install", "--omit=dev", "--no-audit", "--no-fund"]
+            command = [npm, "ci", "--omit=dev", "--no-audit", "--no-fund"] if lock.exists() else [npm, "install", "--omit=dev", "--no-audit", "--no-fund"]
             subprocess.run(command, cwd=self.worker_dir, check=True, timeout=180, stdout=subprocess.DEVNULL)
             return True
         except Exception as exc:
@@ -131,12 +132,14 @@ class BaileysWorkerManager:
             except Exception:
                 LOGGER.warning("Ignoring invalid worker JSON")
                 continue
-            self._handle(event)
+            try:
+                self._handle(event)
+            except Exception:
+                # A malformed or late event must never kill the only stdout reader.
+                LOGGER.exception("WhatsApp worker event handling failed")
 
     @staticmethod
     def _safe_worker_log(line: str) -> str:
-        # Worker logs may contain transport diagnostics. Never mirror complete
-        # phone-like identifiers into the Ladies log.
         return re.sub(r"(?<!\d)(\d{3})\d{4,}(\d{4})(?!\d)", r"\1******\2", line)[:1200]
 
     def _read_stderr(self, proc: subprocess.Popen[str]) -> None:
@@ -179,32 +182,41 @@ class BaileysWorkerManager:
                 self.account = event.get("account")
                 self.last_connected_at = time.time()
         request_id = event.get("id")
-        if request_id and request_id in self._pending:
+        target = None
+        if request_id:
+            with self._lock:
+                target = self._pending.get(request_id)
+        if target is not None:
             try:
-                self._pending[request_id].put_nowait(event)
+                target.put_nowait(event)
             except queue.Full:
                 pass
         self.event_handler(event)
 
     def command(self, command_type: str, timeout: int = 15, **payload):
         self.start()
-        if not self.proc or self.proc.poll() is not None:
+        with self._lock:
+            proc = self.proc
+        if not proc or proc.poll() is not None:
             raise RuntimeError(self.detail or "WhatsApp-Worker nicht verfügbar")
         request_id = uuid.uuid4().hex
         response_queue: queue.Queue = queue.Queue(maxsize=1)
-        self._pending[request_id] = response_queue
+        with self._lock:
+            self._pending[request_id] = response_queue
         try:
             raw = json.dumps({"id": request_id, "type": command_type, **payload}, ensure_ascii=False)
-            if not self.proc.stdin:
+            if not proc.stdin:
                 raise RuntimeError("Worker stdin nicht verfügbar")
-            self.proc.stdin.write(raw + "\n")
-            self.proc.stdin.flush()
+            with self._write_lock:
+                proc.stdin.write(raw + "\n")
+                proc.stdin.flush()
             event = response_queue.get(timeout=timeout)
             if event.get("ok") is False:
                 raise RuntimeError(event.get("message") or "Worker-Fehler")
             return event
         finally:
-            self._pending.pop(request_id, None)
+            with self._lock:
+                self._pending.pop(request_id, None)
 
     def stop(self) -> None:
         with self._lock:
@@ -212,20 +224,22 @@ class BaileysWorkerManager:
             if not proc:
                 return
             self._stopping = True
-            try:
-                request_id = uuid.uuid4().hex
-                if proc.stdin:
+        try:
+            request_id = uuid.uuid4().hex
+            if proc.stdin:
+                with self._write_lock:
                     proc.stdin.write(json.dumps({"id": request_id, "type": "shutdown"}) + "\n")
                     proc.stdin.flush()
+        except Exception:
+            pass
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.kill()
             except Exception:
                 pass
-            try:
-                proc.terminate()
-                proc.wait(timeout=3)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+        with self._lock:
             if self.proc is proc:
                 self.proc = None
