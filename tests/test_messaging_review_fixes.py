@@ -10,7 +10,7 @@ from unittest.mock import patch
 from sqlalchemy import select
 
 from ladies_v9.models import Person, PersonIdentifier, PersonUserState
-from ladies_v9.messaging.models import ChatMessage, ChatMessageMeta, ContactEndpoint
+from ladies_v9.messaging.models import ChatMessage, ContactEndpoint
 
 
 class ReviewWorker:
@@ -67,7 +67,7 @@ class MessagingReviewFixTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        patcher = patch("ladies_v9.messaging.service_v92.BaileysWorkerManager", ReviewWorker)
+        patcher = patch("ladies_v9.messaging.service.WhatsAppGateway", ReviewWorker)
         self.addCleanup(patcher.stop)
         patcher.start()
         from ladies_v9.messaging import MessagingService
@@ -225,8 +225,8 @@ class MessagingReviewFixTests(unittest.TestCase):
             Path(command[-1]).write_bytes(b"OggS")
             return SimpleNamespace(returncode=0, stderr="")
 
-        with patch("ladies_v9.messaging.service_reviewfix.imageio_ffmpeg.get_ffmpeg_exe", return_value="ffmpeg"), patch(
-            "ladies_v9.messaging.service_reviewfix.subprocess.run", side_effect=fake_run
+        with patch("ladies_v9.messaging.media_store.imageio_ffmpeg.get_ffmpeg_exe", return_value="ffmpeg"), patch(
+            "ladies_v9.messaging.media_store.subprocess.run", side_effect=fake_run
         ):
             result = self.service.send_media(
                 self.thread_id,
@@ -247,7 +247,7 @@ class MessagingReviewFixTests(unittest.TestCase):
 class MediaHttpHardeningTests(unittest.TestCase):
     def test_archive_bypass_is_blocked_and_html_document_is_attachment(self):
         with tempfile.TemporaryDirectory() as td, patch(
-            "ladies_v9.messaging.service_v92.BaileysWorkerManager", ReviewWorker
+            "ladies_v9.messaging.service.WhatsAppGateway", ReviewWorker
         ):
             from ladies_v9.app import create_app
             root = Path(td)
