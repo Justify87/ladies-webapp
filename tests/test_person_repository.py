@@ -5,20 +5,24 @@ import unittest
 from pathlib import Path
 
 from ladies_v9.core.repositories.persons import PersonRepository
+from ladies_v9.core.repositories.settings import SettingsRepository
 from ladies_v9.database import Database
+from ladies_v9.media import ArchiveManager
 from ladies_v9.models import Listing, Person, PersonUserState
 
 
-class DummyProfileStore:
+class DummyReadStore:
     def __getattr__(self, name):
-        raise AssertionError(f"legacy profile store unexpectedly used: {name}")
+        raise AssertionError(f"legacy read store unexpectedly used: {name}")
 
 
 class PersonRepositoryTests(unittest.TestCase):
     def make_repository(self, root: Path):
         database = Database(root / "app.sqlite3")
         database.create_schema()
-        return database, PersonRepository(database, DummyProfileStore())
+        archive = ArchiveManager(root / "data")
+        settings = SettingsRepository(database)
+        return database, PersonRepository(database, archive, settings, DummyReadStore())
 
     @staticmethod
     def seed_person(database: Database):
