@@ -23,7 +23,7 @@ class RepositoryBundle:
             search=SearchRepository(store),
             persons=PersonRepository(store),
             history=HistoryRepository(store),
-            settings=SettingsRepository(store),
+            settings=SettingsRepository(store.database),
             archive=ArchiveRepository(store),
         )
 
