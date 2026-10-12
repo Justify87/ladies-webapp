@@ -13,7 +13,10 @@ class ContactEndpoint(Base):
         Index("idx_contact_endpoint_person", "person_id"),
     )
     endpoint_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    person_id: Mapped[Optional[int]] = mapped_column(ForeignKey("persons.person_id", ondelete="SET NULL"), nullable=True)
+    # Deliberately not a DB FK: the existing V9 merge deletes source Person in its
+    # transaction. Keeping the source id until IdentityEvent reconciliation lets
+    # messaging move endpoints/threads losslessly to the canonical target person.
+    person_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     provider: Mapped[str] = mapped_column(String(24), default="WHATSAPP", nullable=False)
     normalized_phone: Mapped[str] = mapped_column(String(64), nullable=False)
     display_phone: Mapped[Optional[str]] = mapped_column(String(128))
@@ -34,7 +37,9 @@ class ChatThread(Base):
         Index("idx_chat_thread_activity", "last_message_at"),
     )
     thread_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    person_id: Mapped[Optional[int]] = mapped_column(ForeignKey("persons.person_id", ondelete="SET NULL"), nullable=True)
+    # See ContactEndpoint.person_id: logical reference is required for safe replay
+    # of the repository-owned IdentityEvent merge path.
+    person_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
