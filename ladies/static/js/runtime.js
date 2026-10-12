@@ -4,54 +4,114 @@
 (() => {
   const config = window.__LADIES_CONFIG__ || {};
 
-  // Server-side Ladies mappings are the source of truth. The core arrays are
-  // deliberately mutated before feature scripts initialize, so all consumers
-  // see the same values without another hard-coded backend catalog.
   if (config.defaults) {
-    if (config.defaults.city) {
-      BUILTIN_FILTERS.city = String(config.defaults.city);
-      if (!state.filters.city) state.filters.city = BUILTIN_FILTERS.city;
-    }
-    if (Number.isFinite(Number(config.defaults.radius_km))) {
-      BUILTIN_FILTERS.radius = Number(config.defaults.radius_km);
-      if (!Number.isFinite(Number(state.filters.radius))) state.filters.radius = BUILTIN_FILTERS.radius;
-    }
+    if (config.defaults.city) BUILTIN_FILTERS.city = String(config.defaults.city);
+    if (Number.isFinite(Number(config.defaults.radius_km))) BUILTIN_FILTERS.radius = Number(config.defaults.radius_km);
+    if (!state.filters.city) state.filters.city = BUILTIN_FILTERS.city;
+    if (!Number.isFinite(Number(state.filters.radius))) state.filters.radius = BUILTIN_FILTERS.radius;
   }
   if (Array.isArray(config.categories) && config.categories.length) {
-    CATEGORIES.splice(0, CATEGORIES.length, ...config.categories.map(item => [String(item.value || ''), String(item.label || item.value || 'Alle')]));
+    CATEGORIES.splice(
+      0,
+      CATEGORIES.length,
+      ...config.categories.map(item => [String(item.value || ''), String(item.label || item.value || 'Alle')]),
+    );
   }
   if (Array.isArray(config.filter_groups)) {
     for (const group of config.filter_groups) {
       const key = String(group?.key || '');
       if (!key || !Array.isArray(group.options)) continue;
-      SERVER_FILTERS[key] = group.options.map(option => String(option.label || option.value || '')).filter(Boolean);
+      SERVER_FILTERS[key] = group.options
+        .map(option => String(option.label || option.value || ''))
+        .filter(Boolean);
+    }
+  }
+
+  const base = Object.freeze({
+    bindFilterControls,
+    renderFilter,
+    updateFilterCount,
+    performSearch,
+    renderHome,
+    openFilter,
+    renderMyData,
+    saveMyData,
+  });
+
+  const hookSetters = Object.freeze({
+    bindFilterControls: handler => { bindFilterControls = handler; },
+    renderFilter: handler => { renderFilter = handler; },
+    updateFilterCount: handler => { updateFilterCount = handler; },
+    performSearch: handler => { performSearch = handler; },
+    renderHome: handler => { renderHome = handler; },
+    openFilter: handler => { openFilter = handler; },
+    renderMyData: handler => { renderMyData = handler; },
+    saveMyData: handler => { saveMyData = handler; },
+  });
+
+  function registerHooks(hooks, source = 'feature') {
+    if (!hooks || typeof hooks !== 'object') return;
+    for (const [name, handler] of Object.entries(hooks)) {
+      const setter = hookSetters[name];
+      if (!setter) throw new Error(`Unbekannter LadiesApp-Hook: ${name}`);
+      if (typeof handler !== 'function') throw new TypeError(`Hook ${name} aus ${source} ist keine Funktion`);
+      setter(handler);
     }
   }
 
   const runtime = {
-    config,
-    get state() { return state; },
+    config: Object.freeze(config),
+    base,
+    registerHooks,
+    state,
     api,
     setScreen,
-    switchMain,
-    setLoading,
+    openPerson,
+    closeProfile,
+    renderProfile,
+    latestSnapshot,
+    fetchPersonDetail,
+    loadDashboard,
+    loadRecentSearches,
+    loadStorage,
+    resetFilters,
+    applyRecentSearch,
+    ratingButtons,
+    choice,
+    readChoice,
+    readRating,
     toast,
     openSheet,
     closeSheet,
-    openPerson,
-    openSearchProfile,
-    applyMainFilters,
-    renderDeck,
-    showMedia,
-    openVisualAnalysis,
-    localMediaUrl,
-    profileName,
-    dollars,
-    datePretty,
     esc,
     ico,
-    $, $$,
+    $,
+    $$,
+    fmtDate,
+    fmtShortDate,
+    euro,
+    SERVER_FILTERS,
+    CATEGORIES,
+    BUILTIN_FILTERS,
   };
+
+  for (const name of Object.keys(hookSetters)) {
+    Object.defineProperty(runtime, name, {
+      enumerable: true,
+      configurable: false,
+      get: () => ({
+        bindFilterControls,
+        renderFilter,
+        updateFilterCount,
+        performSearch,
+        renderHome,
+        openFilter,
+        renderMyData,
+        saveMyData,
+      })[name],
+    });
+  }
+
   Object.defineProperty(window, 'LadiesApp', {
     value: Object.freeze(runtime),
     configurable: false,
@@ -59,27 +119,26 @@
     writable: false,
   });
 
-  // Temporary compatibility surface for existing feature scripts. All aliases
-  // live here instead of being created by a dynamic bridge/loading chain.
+  // Transitional read-only aliases for messaging/pricing scripts that are still
+  // classic scripts. Search/filter features must use registerHooks and never
+  // assign these globals themselves.
   const aliases = {
     state: () => state,
     setScreen: () => setScreen,
-    switchMain: () => switchMain,
-    setLoading: () => setLoading,
     api: () => api,
+    openPerson: () => openPerson,
+    closeProfile: () => closeProfile,
+    renderProfile: () => renderProfile,
+    latestSnapshot: () => latestSnapshot,
+    fetchPersonDetail: () => fetchPersonDetail,
+    loadDashboard: () => loadDashboard,
+    loadRecentSearches: () => loadRecentSearches,
+    loadStorage: () => loadStorage,
     openSheet: () => openSheet,
     closeSheet: () => closeSheet,
-    openPerson: () => openPerson,
-    openSearchProfile: () => openSearchProfile,
-    applyMainFilters: () => applyMainFilters,
-    renderDeck: () => renderDeck,
-    showMedia: () => showMedia,
-    openVisualAnalysis: () => openVisualAnalysis,
-    localMediaUrl: () => localMediaUrl,
-    profileName: () => profileName,
-    dollars: () => dollars,
-    datePretty: () => datePretty,
+    toast: () => toast,
     esc: () => esc,
+    ico: () => ico,
   };
   for (const [name, getter] of Object.entries(aliases)) {
     if (Object.prototype.hasOwnProperty.call(window, name)) continue;
