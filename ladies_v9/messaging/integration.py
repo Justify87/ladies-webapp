@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import event as sa_event, select
+from sqlalchemy import delete, event as sa_event, select, update
 from sqlalchemy.orm import Session
 
 from ladies_v9.models import IdentityEvent, Person
@@ -27,13 +27,29 @@ def _merge_messaging_in_session(db: Session, source_id: int, target_id: int) -> 
         if target_thread is None:
             source_thread.person_id = target_id
         elif target_thread.thread_id != source_thread.thread_id:
-            for message in db.scalars(select(ChatMessage).where(ChatMessage.thread_id == source_thread.thread_id)).all():
-                message.thread_id = target_thread.thread_id
+            source_thread_id = source_thread.thread_id
+            target_thread_id = target_thread.thread_id
+            # New messages have not reached SQLite yet, so move those ORM objects
+            # explicitly. Existing rows are moved with SQL before the source thread
+            # is deleted. Avoid ORM delete-orphan cascade here: it can otherwise
+            # delete messages whose FK has just been reassigned in the same flush.
+            for pending in list(db.new):
+                if isinstance(pending, ChatMessage) and pending.thread_id == source_thread_id:
+                    pending.thread_id = target_thread_id
+            db.execute(
+                update(ChatMessage)
+                .where(ChatMessage.thread_id == source_thread_id)
+                .values(thread_id=target_thread_id)
+            )
             target_thread.unread_count += source_thread.unread_count
             times = [x for x in (target_thread.last_message_at, source_thread.last_message_at) if x]
             if times:
                 target_thread.last_message_at = max(times)
-            db.delete(source_thread)
+            db.execute(delete(ChatThread).where(ChatThread.thread_id == source_thread_id))
+            try:
+                db.expunge(source_thread)
+            except Exception:
+                pass
     LOGGER.info("Messaging person merge source_person_id=%s target_person_id=%s", source_id, target_id)
     return True
 
