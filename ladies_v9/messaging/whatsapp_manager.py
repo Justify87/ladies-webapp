@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import logging
 import os
@@ -79,18 +80,33 @@ class BaileysWorkerManager:
         if not ok:
             self._set_state("DEPENDENCY_MISSING", detail)
             return False
-        modules = self.worker_dir / "node_modules" / "@whiskeysockets" / "baileys"
-        if modules.exists():
-            return True
         npm = shutil.which("npm")
         if not npm:
             self._set_state("DEPENDENCY_MISSING", "npm fehlt")
             return False
+        lock = self.worker_dir / "package-lock.json"
+        if not lock.exists():
+            self._set_state("UNAVAILABLE", "WhatsApp-Lockfile fehlt")
+            return False
+        lock_digest = hashlib.sha256(lock.read_bytes()).hexdigest()
+        stamp = self.worker_dir / "node_modules" / ".ladies-lock.sha256"
+        modules = self.worker_dir / "node_modules" / "@whiskeysockets" / "baileys"
         try:
-            LOGGER.info("Installing WhatsApp worker dependencies")
-            lock = self.worker_dir / "package-lock.json"
-            command = [npm, "ci", "--omit=dev", "--no-audit", "--no-fund"] if lock.exists() else [npm, "install", "--omit=dev", "--no-audit", "--no-fund"]
-            subprocess.run(command, cwd=self.worker_dir, check=True, timeout=180, stdout=subprocess.DEVNULL)
+            if modules.exists() and stamp.exists() and stamp.read_text(encoding="ascii").strip() == lock_digest:
+                return True
+        except OSError:
+            pass
+        try:
+            LOGGER.info("Installing locked WhatsApp worker dependencies")
+            subprocess.run(
+                [npm, "ci", "--omit=dev", "--no-audit", "--no-fund"],
+                cwd=self.worker_dir,
+                check=True,
+                timeout=180,
+                stdout=subprocess.DEVNULL,
+            )
+            stamp.parent.mkdir(parents=True, exist_ok=True)
+            stamp.write_text(lock_digest + "\n", encoding="ascii")
             return True
         except Exception as exc:
             LOGGER.error("WhatsApp worker bootstrap failed: %s", exc)
@@ -135,7 +151,6 @@ class BaileysWorkerManager:
             try:
                 self._handle(event)
             except Exception:
-                # A malformed or late event must never kill the only stdout reader.
                 LOGGER.exception("WhatsApp worker event handling failed")
 
     @staticmethod
