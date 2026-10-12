@@ -8,6 +8,7 @@ from pathlib import Path
 from flask import jsonify, redirect, request
 
 from .background import BackgroundTasks
+from .config import frontend_config
 from .lan_access import LanAccessManager
 from .messaging import install_messaging
 from .messaging.integration import install_identity_merge_listener, reconcile_identity_events
@@ -51,6 +52,10 @@ def create_app(
         profile_delay=profile_delay,
     )
     install_search_preview(app, default_city=default_city, default_radius=default_radius)
+
+    @app.get("/api/config")
+    def api_config():
+        return jsonify(frontend_config(default_city=default_city, default_radius=default_radius))
 
     access = LanAccessManager(data_dir)
     background = BackgroundTasks(max_workers=2)
