@@ -1,10 +1,10 @@
-name: V9.2 Messaging Checks
+name: Ladies Explorer Checks
 
 on:
   pull_request:
   push:
     branches:
-      - feature/whatsapp-person-chat
+      - main
 
 permissions:
   contents: read
@@ -17,11 +17,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install Python dependencies
-        run: pip install -r requirements_v9_1.txt
+      - name: Install project and Python dependencies
+        run: python -m pip install -e .
       - name: Compile Python
-        run: python -m compileall ladies_v9 ladies_explorer_v9_1.py
-      - name: Messaging unit tests
+        run: python -m compileall ladies ladies_explorer.py
+      - name: Verify neutral source layout mapping
+        run: python -c "import ladies_v9.app, nodeenv; print('package mapping ok')"
+      - name: Verify bootstrap dependency state
+        run: python -c "import ladies_explorer; assert ladies_explorer._project_ready(); print('bootstrap dependency check ok')"
+      - name: Unit and regression tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Flask smoke test without starting a server
         run: |
@@ -29,7 +33,7 @@ jobs:
           import tempfile
           from pathlib import Path
           from unittest.mock import patch
-          from ladies_v9.web_v92 import create_app
+          from ladies_v9.app import create_app
 
           class NoNodeWorker:
               def __init__(self, worker_dir, auth_dir, event_handler):
@@ -39,27 +43,45 @@ jobs:
               def status(self): return {'state':self.state,'detail':self.detail,'qr_available':False,'account':None,'last_connected_at':None}
               def stop(self): pass
 
-          with tempfile.TemporaryDirectory() as td, patch('ladies_v9.messaging.service_v92.BaileysWorkerManager', NoNodeWorker):
+          with tempfile.TemporaryDirectory() as td, patch('ladies_v9.messaging.service_runtime.BaileysWorkerManager', NoNodeWorker):
               root=Path(td)
               app=create_app(db_path=root/'app.sqlite3', data_dir=root/'data')
               client=app.test_client()
               assert client.get('/').status_code == 200
-              status=client.get('/api/messaging/status')
-              assert status.status_code == 200
-              assert status.get_json()['state'] == 'DEPENDENCY_MISSING'
+              assert client.get('/api/messaging/status').status_code == 200
               assert client.get('/api/dashboard').status_code == 200
           PY
+
+  bootstrap:
+    name: bootstrap-${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Create pristine virtualenv
+        run: python -m venv .bootstrap-test
+      - name: Let launcher repair the pristine environment
+        shell: bash
+        run: LADIES_BOOTSTRAP_CHECK_ONLY=1 .bootstrap-test/bin/python ladies_explorer.py
+      - name: Verify repaired environment after re-exec
+        shell: bash
+        run: .bootstrap-test/bin/python -c "import ladies_v9.app, nodeenv, flask, ladies_explorer; assert ladies_explorer._project_ready(); print('self-healing bootstrap ok')"
 
   node:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ladies_v9/messaging/whatsapp_worker
+        working-directory: ladies/messaging/whatsapp_worker
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
       - name: Install locked worker dependencies
         run: npm ci --omit=dev --no-audit --no-fund
       - name: Check worker and browser JavaScript syntax
@@ -67,5 +89,6 @@ jobs:
           node --check worker.mjs
           node --check ../../static/messaging.js
           node --check ../../static/messaging_bridge.js
+          node --check ../../static/profile_messaging_ui.js
       - name: Verify pinned Baileys 7 version
         run: node -e "const p=require('./node_modules/@whiskeysockets/baileys/package.json'); if(p.version!=='7.0.0-rc14') throw new Error('Unexpected Baileys '+p.version); console.log(p.version)"

@@ -11,7 +11,7 @@ from flask import jsonify, redirect, request
 
 from .messaging import install_messaging
 from .messaging.integration import install_identity_merge_listener, reconcile_identity_events
-from .web import create_app as create_v91_app
+from .web import create_app as create_core_app
 
 LOGGER = logging.getLogger("ladies_explorer.messaging.integration")
 LAN_COOKIE = "ladies_access"
@@ -50,7 +50,7 @@ def _is_loopback(remote_addr: str | None) -> bool:
 
 def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str = "leipzig", default_radius: int = 20, profile_delay: float = 2.0):
     install_identity_merge_listener()
-    app = create_v91_app(
+    app = create_core_app(
         db_path=db_path,
         data_dir=data_dir,
         default_city=default_city,
@@ -63,9 +63,6 @@ def create_app(*, db_path: str | Path, data_dir: str | Path, default_city: str =
 
     @app.before_request
     def protect_remote_local_data():
-        # Localhost remains zero-friction. Remote/LAN clients pair once and then
-        # use an HttpOnly cookie; sensitive APIs and every archived file are not
-        # exposed merely because the server is bound to 0.0.0.0.
         if _is_loopback(request.remote_addr) or request.path.startswith("/pair/"):
             return None
         if not (request.path.startswith("/api/") or request.path.startswith("/archive/")):
