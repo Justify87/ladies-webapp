@@ -195,7 +195,7 @@ Aktuell laufen **29 automatisierte Python-Tests**. Die Regressionstests decken i
 - LAN-Pairing und Schutz von API/Archiv;
 - Erhalt der lokalen Historie nach WhatsApp-Logout.
 
-Der letzte vollständige GitHub-Actions-Lauf auf dem überprüften Code-Stand war grün: Python-Compile, 29 Unit-/Regressionstests, Flask-Smoke, deterministisches `npm ci`, Worker-/Frontend-JavaScript-Syntax und der exakte Baileys-`7.0.0-rc14`-Pin wurden geprüft.
+Die GitHub-Actions-Prüfung umfasst Python-Compile, 29 Unit-/Regressionstests, Flask-Smoke, deterministisches `npm ci`, Worker-/Frontend-JavaScript-Syntax und den exakten Baileys-`7.0.0-rc14`-Pin.
 
 Automatisierte Tests benötigen keinen echten WhatsApp-Account. Eine reale QR-Kopplung, echte Nachrichten mit einem Testkonto und der Soft-Keyboard-Test auf einem Smartphone bleiben bewusst manuelle E2E-Schritte.
 
