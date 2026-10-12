@@ -20,7 +20,7 @@ class RepositoryBundle:
     @classmethod
     def from_store(cls, store):
         return cls(
-            search=SearchRepository(store),
+            search=SearchRepository(store.database),
             persons=PersonRepository(store),
             history=HistoryRepository(store),
             settings=SettingsRepository(store.database),
