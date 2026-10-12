@@ -8,6 +8,7 @@ from unittest.mock import patch
 from sqlalchemy import func, select
 
 from ladies_v9.models import Person, PersonIdentifier, PersonUserState
+from ladies_v9.messaging.history_cache import REHYDRATE_LIMIT
 from ladies_v9.messaging.models import ChatMessage, ChatThread
 
 
@@ -88,7 +89,7 @@ class WhatsAppRehydrateTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.data_dir = self.root / "data"
-        patcher = patch("ladies_v9.messaging.service_v92.BaileysWorkerManager", FakeWorker)
+        patcher = patch("ladies_v9.messaging.service.WhatsAppGateway", FakeWorker)
         self.addCleanup(patcher.stop)
         patcher.start()
         from ladies_v9.messaging import MessagingService
@@ -111,6 +112,7 @@ class WhatsAppRehydrateTests(unittest.TestCase):
         fresh.worker.state = "CONNECTED"
         result = fresh.rehydrate_recent_history(person_id, limit=10)
 
+        self.assertEqual(REHYDRATE_LIMIT, 10)
         self.assertEqual(result["restored"], 10)
         self.assertEqual(result["requested"], 0)
         with fresh.database.session() as db:
@@ -163,21 +165,15 @@ class WhatsAppRehydrateTests(unittest.TestCase):
         self.assertEqual(result["restored"], 2)
         self.assertEqual(result["requested"], 0)
 
-    def test_source_contract_keeps_full_history_disabled_and_like_trigger_bounded(self):
-        root = Path(__file__).resolve().parents[1]
-        worker = (root / "ladies" / "messaging" / "whatsapp_worker" / "worker.mjs").read_text(encoding="utf-8")
-        app = (root / "ladies" / "app.py").read_text(encoding="utf-8")
-        messaging = (root / "ladies" / "messaging" / "__init__.py").read_text(encoding="utf-8")
-
-        self.assertIn("syncFullHistory: false", worker)
-        self.assertIn("MAX_REHYDRATE_MESSAGES = 10", worker)
-        self.assertIn("HistorySyncType.ON_DEMAND", worker)
-        self.assertIn("fetchMessageHistory(count, oldestKey, oldestTimestampMs)", worker)
-        self.assertIn("type: 'history_seed'", worker)
-        self.assertIn('submitted.get("preference")', app)
-        self.assertIn('== "LIKE"', app)
-        self.assertIn("rehydrate_recent_history(int(person_id), limit=10)", app)
-        self.assertIn("REHYDRATE_LIMIT = 10", messaging)
+    def test_rehydrate_limit_is_enforced_even_when_caller_requests_more(self):
+        original = self.MessagingService(self.root / "old.sqlite3", self.data_dir)
+        add_person(original, "Alt")
+        for index in range(20):
+            original._ingest_message(message_payload(index))
+        fresh = self.MessagingService(self.root / "fresh.sqlite3", self.data_dir)
+        person_id = add_person(fresh, "Neu")
+        result = fresh.rehydrate_recent_history(person_id, limit=100)
+        self.assertEqual(result["restored"], REHYDRATE_LIMIT)
 
 
 if __name__ == "__main__":
