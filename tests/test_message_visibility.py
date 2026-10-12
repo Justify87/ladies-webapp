@@ -41,7 +41,7 @@ class MessageVisibilityTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.patcher = patch("ladies_v9.messaging.service_runtime.BaileysWorkerManager", QuietWorker)
+        self.patcher = patch("ladies_v9.messaging.service.WhatsAppGateway", QuietWorker)
         self.patcher.start()
         self.addCleanup(self.patcher.stop)
         from ladies_v9.messaging import MessagingService
