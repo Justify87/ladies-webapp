@@ -23,10 +23,20 @@ let sock = null
 let stopped = false
 let manualDisconnect = false
 let connecting = null
+let localSendsInFlight = 0
+const locallySentIds = new Map()
+const pendingOwnMessages = new Map()
+const pendingMessageUpdates = []
 
-const emit = (event) => process.stdout.write(`${JSON.stringify(event)}\n`)
+const emit = event => process.stdout.write(`${JSON.stringify(event)}\n`)
 const reply = (id, ok, payload = null, message = null) => emit({ type: 'response', id, ok, payload, message })
 const isPhoneJid = jid => typeof jid === 'string' && jid.endsWith('@s.whatsapp.net')
+
+function rememberLocalSend(id) {
+  if (!id) return
+  locallySentIds.set(id, Date.now())
+  setTimeout(() => locallySentIds.delete(id), 5 * 60 * 1000).unref?.()
+}
 
 function statusCode(error) {
   try { return new Boom(error).output.statusCode } catch { return undefined }
@@ -102,6 +112,48 @@ function directMessageAddresses(key) {
   return { primary, phoneJid }
 }
 
+async function emitMessage(current, msg) {
+  const { primary: jid, phoneJid } = directMessageAddresses(msg.key)
+  if (!jid || jid === 'status@broadcast' || jid.endsWith('@g.us')) return
+  const media = await messageMediaWithBytes(current, msg)
+  emit({
+    type: 'message',
+    payload: {
+      provider_message_id: msg.key?.id || null,
+      jid,
+      phone_jid: phoneJid,
+      from_me: Boolean(msg.key?.fromMe),
+      timestamp: Number(msg.messageTimestamp || Math.floor(Date.now() / 1000)),
+      message_type: messageType(msg.message),
+      text: messageText(msg.message),
+      media,
+    },
+  })
+}
+
+async function flushBufferedOwnMessages() {
+  if (localSendsInFlight > 0) return
+  const items = [...pendingOwnMessages.values()]
+  pendingOwnMessages.clear()
+  for (const { current, msg } of items) {
+    const providerId = msg.key?.id || null
+    if (providerId && locallySentIds.has(providerId)) continue
+    await emitMessage(current, msg)
+  }
+}
+
+function emitMessageUpdate(item) {
+  const mapped = mapReceiptStatus(item.update?.status)
+  if (!mapped || !item.key?.id) return
+  emit({ type: 'message_update', payload: { provider_message_id: item.key.id, status: mapped } })
+}
+
+function flushBufferedUpdates() {
+  if (localSendsInFlight > 0) return
+  const items = pendingMessageUpdates.splice(0, pendingMessageUpdates.length)
+  for (const item of items) emitMessageUpdate(item)
+}
+
 async function connect() {
   if (stopped) return
   if (connecting) return connecting
@@ -155,29 +207,19 @@ async function connect() {
     current.ev.on('messages.upsert', async event => {
       if (event.type !== 'notify') return
       for (const msg of event.messages || []) {
-        const { primary: jid, phoneJid } = directMessageAddresses(msg.key)
-        if (!jid || jid === 'status@broadcast' || jid.endsWith('@g.us')) continue
-        const media = await messageMediaWithBytes(current, msg)
-        emit({
-          type: 'message',
-          payload: {
-            provider_message_id: msg.key?.id || null,
-            jid,
-            phone_jid: phoneJid,
-            from_me: Boolean(msg.key?.fromMe),
-            timestamp: Number(msg.messageTimestamp || Math.floor(Date.now() / 1000)),
-            message_type: messageType(msg.message),
-            text: messageText(msg.message),
-            media,
-          },
-        })
+        const providerId = msg.key?.id || null
+        if (msg.key?.fromMe && providerId && locallySentIds.has(providerId)) continue
+        if (msg.key?.fromMe && localSendsInFlight > 0 && providerId) {
+          pendingOwnMessages.set(providerId, { current, msg })
+          continue
+        }
+        await emitMessage(current, msg)
       }
     })
     current.ev.on('messages.update', updates => {
       for (const item of updates || []) {
-        const mapped = mapReceiptStatus(item.update?.status)
-        if (!mapped || !item.key?.id) continue
-        emit({ type: 'message_update', payload: { provider_message_id: item.key.id, status: mapped } })
+        if (localSendsInFlight > 0) pendingMessageUpdates.push(item)
+        else emitMessageUpdate(item)
       }
     })
     current.ev.on('presence.update', update => {
@@ -215,8 +257,19 @@ async function handle(command) {
         if (!sock) await connect()
         if (!sock) throw new Error('WhatsApp ist nicht verbunden')
         const target = await resolveTargetJid(sock, command.jid)
-        const sent = await sock.sendMessage(target, { text: String(command.text || '') })
-        reply(id, true, { provider_message_id: sent?.key?.id || null, provider_address: target })
+        localSendsInFlight += 1
+        try {
+          const sent = await sock.sendMessage(target, { text: String(command.text || '') })
+          const providerId = sent?.key?.id || null
+          rememberLocalSend(providerId)
+          reply(id, true, { provider_message_id: providerId, provider_address: target })
+        } finally {
+          localSendsInFlight = Math.max(0, localSendsInFlight - 1)
+          if (localSendsInFlight === 0) {
+            await flushBufferedOwnMessages()
+            flushBufferedUpdates()
+          }
+        }
         break
       }
       case 'presence': {
@@ -233,27 +286,34 @@ async function handle(command) {
         reply(id, true, { provider_address: target })
         break
       }
-      case 'disconnect':
+      case 'disconnect': {
         manualDisconnect = true
-        if (sock) sock.end(new Error('Ladies disconnect'))
+        const current = sock
         sock = null
+        if (current) current.end(new Error('Ladies disconnect'))
+        emit({ type: 'connection', state: 'DISCONNECTED' })
         reply(id, true)
         break
-      case 'logout':
+      }
+      case 'logout': {
         manualDisconnect = true
-        if (sock) await sock.logout()
+        const current = sock
         sock = null
+        if (current) await current.logout()
         emit({ type: 'connection', state: 'LOGGED_OUT' })
         reply(id, true)
         break
-      case 'shutdown':
+      }
+      case 'shutdown': {
         stopped = true
         manualDisconnect = true
-        if (sock) sock.end(new Error('Ladies shutdown'))
+        const current = sock
         sock = null
+        if (current) current.end(new Error('Ladies shutdown'))
         reply(id, true)
         setTimeout(() => process.exit(0), 25)
         break
+      }
       default:
         reply(id, false, null, `Unknown command: ${command.type}`)
     }
