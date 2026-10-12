@@ -1,11 +1,9 @@
 'use strict';
 
 (() => {
-  const APP_VERSION = '9.5.0';
-  document.title = `Ladies Explorer V${APP_VERSION}`;
-  document.querySelectorAll('.version-pill').forEach(el => { el.textContent = `V${APP_VERSION}`; });
-
-  const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const App = window.LadiesApp;
+  if (!App) throw new Error('LadiesApp runtime fehlt');
+  const {state, toast, esc} = App;
   const icon = name => `<svg aria-hidden="true"><use href="/static/icons.svg#${name}"/></svg>`;
   const contactCache = new Map();
   let activeThreadId = null;
@@ -16,92 +14,12 @@
   let presenceExpiredAt = 0;
   let presenceObserverMuted = false;
 
-  const style = document.createElement('style');
-  style.textContent = `
-    .profile-chat-section{display:none!important}
-    .profile-big-action[data-contact]{gap:.38rem;min-width:0}
-    .profile-big-action[data-contact]>.profile-contact-cta{
-      width:100%;max-width:116px;height:50px;border-radius:14px;background:#e8f2ff;color:#2273df;
-      display:flex;flex-direction:row;align-items:center;justify-content:center;gap:7px;padding:0 9px;
-      box-shadow:inset 0 0 0 1px #d9e8fa
-    }
-    .profile-big-action[data-contact]>.profile-contact-cta svg{width:21px;height:21px;flex:0 0 auto}
-    .profile-big-action[data-contact]>.profile-contact-cta b{font-size:11px;line-height:1;font-weight:800;white-space:nowrap}
-    .profile-big-action[data-contact]>.profile-contact-number{
-      display:block;width:100%;max-width:120px;min-height:1.15em;margin:0;text-align:center;
-      color:#71849a;font-size:9.5px;font-weight:650;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis
-    }
-    .profile-big-action[data-contact].wa-missing>.profile-contact-cta{background:#f2f4f7;color:#8b98a8;box-shadow:inset 0 0 0 1px #e2e7ed}
-    .profile-big-action[data-contact].wa-missing>.profile-contact-number{color:#b04459}
-    .profile-big-action[data-contact]:disabled{opacity:1;cursor:default}
-
-    .messaging-chat-layer{
-      overflow:hidden!important;padding-bottom:0!important;
-      background:
-        radial-gradient(circle at 85% -10%,rgba(92,139,196,.18),transparent 34%),
-        linear-gradient(180deg,#f7faff 0%,#f2f6fb 100%)!important
-    }
-    .chat-header{
-      min-height:64px!important;
-      background:rgba(7,28,49,.88)!important;
-      border-bottom:1px solid rgba(255,255,255,.09)!important;
-      box-shadow:0 8px 24px rgba(5,25,45,.12)!important;
-      -webkit-backdrop-filter:blur(22px) saturate(165%);backdrop-filter:blur(22px) saturate(165%)
-    }
-    .chat-icon-btn{background:rgba(255,255,255,.07)!important;border:1px solid rgba(255,255,255,.06)!important}
-    .chat-avatar{border-radius:15px!important;box-shadow:0 4px 14px rgba(0,0,0,.2)}
-    .chat-avatar.wa-avatar img{width:100%;height:100%;object-fit:cover}
-    .chat-identity small.wa-unavailable{color:#ffb7c6}
-    .chat-messages{padding:15px 11px 10px!important;scroll-padding-bottom:86px!important}
-    .message-bubble{
-      border:1px solid rgba(218,228,239,.72)!important;
-      background:rgba(255,255,255,.82)!important;
-      box-shadow:0 5px 18px rgba(18,43,70,.065)!important;
-      -webkit-backdrop-filter:blur(14px) saturate(135%);backdrop-filter:blur(14px) saturate(135%)
-    }
-    .message-line.out .message-bubble{
-      background:linear-gradient(145deg,rgba(255,239,245,.96),rgba(255,225,236,.92))!important;
-      border-color:rgba(247,47,100,.10)!important
-    }
-    .chat-composer{
-      grid-template-columns:minmax(0,1fr) 50px!important;align-items:end!important;gap:9px!important;
-      padding:9px 11px max(10px,env(safe-area-inset-bottom))!important;
-      background:rgba(248,251,255,.82)!important;
-      border-top:1px solid rgba(204,217,231,.72)!important;
-      box-shadow:0 -9px 28px rgba(26,57,89,.08)!important;
-      -webkit-backdrop-filter:blur(24px) saturate(175%);backdrop-filter:blur(24px) saturate(175%)
-    }
-    .composer-plus{display:none!important}
-    .chat-composer textarea{
-      width:100%!important;min-height:48px!important;max-height:112px!important;margin:0!important;
-      border:1px solid rgba(193,208,224,.9)!important;border-radius:20px!important;
-      padding:13px 15px!important;background:rgba(255,255,255,.86)!important;
-      box-shadow:inset 0 1px 2px rgba(20,44,69,.03),0 3px 12px rgba(31,64,99,.04)!important;
-      overflow-y:auto!important;line-height:1.32!important
-    }
-    .chat-composer textarea:focus{
-      background:#fff!important;border-color:rgba(46,124,246,.48)!important;
-      box-shadow:0 0 0 3px rgba(46,124,246,.09),0 5px 16px rgba(31,64,99,.06)!important
-    }
-    .composer-send{
-      width:50px!important;height:50px!important;border-radius:17px!important;
-      background:linear-gradient(145deg,#ff4d7d,#ec225b)!important;color:#fff!important;
-      box-shadow:0 8px 20px rgba(238,31,91,.28),inset 0 1px 0 rgba(255,255,255,.28)!important;
-      transition:transform .12s ease,filter .12s ease,opacity .12s ease
-    }
-    .composer-send:not(:disabled):active{transform:scale(.94);filter:brightness(.96)}
-    .composer-send svg{width:23px!important;height:23px!important;stroke-width:2.2}
-    .composer-send:disabled{box-shadow:none!important;filter:saturate(.45)}
-    body.chat-open{overscroll-behavior:none}
-  `;
-  document.head.appendChild(style);
-
   function currentProfileContext() {
-    const detail = window.state?.detail;
+    const detail = state?.detail;
     const personId = detail?.person?.person_id;
     if (!personId) return null;
-    const listing = detail.listings?.find(x => String(x.advert_id) === String(window.state.detailAdvertId)) || detail.listings?.[0];
-    return { personId, listingId: listing?.listing_id || null };
+    const listing = detail.listings?.find(x => String(x.advert_id) === String(state.detailAdvertId)) || detail.listings?.[0];
+    return {personId, listingId: listing?.listing_id || null};
   }
 
   async function getJson(url, options) {
@@ -125,7 +43,7 @@
     const cached = contactCache.get(key);
     if (cached && Date.now() - cached.at < 5 * 60 * 1000) return cached.value;
     const value = await getJson(`/api/messaging/endpoints/${key}/probe`);
-    contactCache.set(key, { at: Date.now(), value });
+    contactCache.set(key, {at: Date.now(), value});
     return value;
   }
 
@@ -319,7 +237,7 @@
     event.stopPropagation();
     event.stopImmediatePropagation();
     if (button.disabled || button.classList.contains('wa-missing')) {
-      window.toast?.('Für diese Nummer wurde kein WhatsApp-Konto gefunden.');
+      toast('Für diese Nummer wurde kein WhatsApp-Konto gefunden.');
       return;
     }
     const threadId = Number(button.dataset.messagingThread || 0) || null;
@@ -330,7 +248,7 @@
     }
     if (!openInternalChat()) {
       setTimeout(() => {
-        if (!openInternalChat()) window.toast?.('Chat wird noch vorbereitet.');
+        if (!openInternalChat()) toast('Chat wird noch vorbereitet.');
       }, 60);
     }
   }, true);
