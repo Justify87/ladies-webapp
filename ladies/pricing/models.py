@@ -38,7 +38,7 @@ class PriceExtraction(Base):
 
     price_extraction_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     person_id: Mapped[Optional[int]] = mapped_column(ForeignKey("persons.person_id", ondelete="SET NULL"))
-    thread_id: Mapped[int] = mapped_column(ForeignKey("chat_threads.thread_id", ondelete="CASCADE"), nullable=False)
+    thread_id: Mapped[Optional[int]] = mapped_column(ForeignKey("chat_threads.thread_id", ondelete="SET NULL"), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="PENDING", nullable=False)
     trigger_type: Mapped[str] = mapped_column(String(24), default="AUTO", nullable=False)
     schema_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
