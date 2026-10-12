@@ -5,17 +5,19 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
   <meta name="theme-color" content="#071c31">
   <meta name="color-scheme" content="light">
-  <title>Ladies Explorer V9.2.0</title>
+  <title>Ladies Explorer V{{ config["APP_VERSION"] }}</title>
   <link rel="stylesheet" href="/static/app.css">
   <link rel="stylesheet" href="/static/messaging.css">
-  <link rel="stylesheet" href="/static/ui_consolidation.css">
+  <link rel="stylesheet" href="/static/css/search_ui.css">
+  <link rel="stylesheet" href="/static/pricing.css">
+  <script>window.__LADIES_CONFIG__={{ config["FRONTEND_CONFIG"]|tojson }};</script>
 </head>
 <body>
 <div id="app" class="app-frame view-home">
   <header id="appHeader" class="app-header">
     <button id="menuBtn" class="header-icon" type="button" aria-label="Menü"><svg><use href="/static/icons.svg#menu"/></svg></button>
     <button id="brandBtn" class="brand" type="button" aria-label="Startseite">
-      <span class="brand-title">Ladies Explorer</span><span class="version-pill">V9.2.0</span>
+      <span class="brand-title">Ladies Explorer</span><span class="version-pill">V{{ config["APP_VERSION"] }}</span>
       <small id="brandSubtitle">Neue Menschen. Echte Begegnungen.</small>
     </button>
     <button id="headerAction" class="header-icon notify-dot" type="button" aria-label="Benachrichtigungen"><svg><use href="/static/icons.svg#bell"/></svg></button>
@@ -102,8 +104,11 @@
   <div id="toast" class="toast" role="status"></div>
 </div>
 <script src="/static/app.js" defer></script>
-<script src="/static/ui_consolidation.js" defer></script>
-<script src="/static/messaging_bridge.js" defer></script>
+<script src="/static/js/runtime.js" defer></script>
+<script src="/static/js/search_ui.js" defer></script>
+<script src="/static/profile_messaging_ui.js" defer></script>
+<script src="/static/js/filter_ui.js" defer></script>
 <script src="/static/messaging.js" defer></script>
+<script src="/static/pricing.js" defer></script>
 </body>
 </html>
