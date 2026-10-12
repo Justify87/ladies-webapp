@@ -22,7 +22,7 @@ class RepositoryBundle:
         return cls(
             search=SearchRepository(store.database),
             persons=PersonRepository(store),
-            history=HistoryRepository(store),
+            history=HistoryRepository(store.database),
             settings=SettingsRepository(store.database),
             archive=ArchiveRepository(store.database, store.archive),
         )
