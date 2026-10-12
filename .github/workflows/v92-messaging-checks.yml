@@ -7,7 +7,7 @@ on:
       - feature/whatsapp-person-chat
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   python:
@@ -60,8 +60,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Install pinned worker dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Install locked worker dependencies
+        run: npm ci --omit=dev --no-audit --no-fund
       - name: Check worker and browser JavaScript syntax
         run: |
           node --check worker.mjs
@@ -69,13 +69,3 @@ jobs:
           node --check ../../static/messaging_bridge.js
       - name: Verify pinned Baileys 7 version
         run: node -e "const p=require('./node_modules/@whiskeysockets/baileys/package.json'); if(p.version!=='7.0.0-rc14') throw new Error('Unexpected Baileys '+p.version); console.log(p.version)"
-      - name: Commit generated lockfile once
-        if: github.event_name == 'push'
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add package-lock.json
-          if ! git diff --cached --quiet; then
-            git commit -m "Lock WhatsApp worker dependencies"
-            git push
-          fi
