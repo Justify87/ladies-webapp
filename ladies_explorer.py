@@ -62,7 +62,7 @@ def _project_ready() -> bool:
             current = _version_tuple(importlib.metadata.version(dist_name))
         except importlib.metadata.PackageNotFoundError:
             return False
-        if not (_version_tuple(".".join(map(str, minimum))) <= current < _version_tuple(".".join(map(str, maximum))):
+        if not (_version_tuple(".".join(map(str, minimum))) <= current < _version_tuple(".".join(map(str, maximum)))):
             return False
     return True
 
@@ -248,16 +248,16 @@ def migrate_legacy_paths() -> None:
 
 def configure_logging(log_path: Path) -> logging.Logger:
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    requested_level = str(os.environ.get("LADIES_LOG_LEVEL") or "WARNING").upper()
+    file_level = getattr(logging, requested_level, logging.WARNING)
     logger = logging.getLogger("ladies_explorer")
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.DEBUG if file_level <= logging.DEBUG else logging.INFO)
     logger.propagate = False
     if not logger.handlers:
         formatter = logging.Formatter(
             "%(asctime)s %(levelname)-8s %(name)s [%(threadName)s] %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
-        requested_level = str(os.environ.get("LADIES_LOG_LEVEL") or "WARNING").upper()
-        file_level = getattr(logging, requested_level, logging.WARNING)
         file_handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
         file_handler.setLevel(file_level)
         file_handler.setFormatter(formatter)
@@ -276,7 +276,7 @@ def configure_logging(log_path: Path) -> logging.Logger:
     logger.info(
         "Logging initialized file=%s file_level=%s python=%s",
         log_path.resolve(),
-        logging.getLevelName(next((h.level for h in logger.handlers if isinstance(h, RotatingFileHandler)), logging.WARNING)),
+        logging.getLevelName(file_level),
         sys.version.split()[0],
     )
     return logger
