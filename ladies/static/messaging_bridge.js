@@ -1,8 +1,6 @@
 'use strict';
 
-// Explicit, tiny compatibility bridge between the existing framework-free V9 UI
-// and the additive messaging module. Keeps messaging.js from reaching into
-// implementation details while preserving the existing app.js architecture.
+// Small bridge between the framework-free core UI and the messaging module.
 window.ladiesMessagingBridge = {
   get state() { return state; },
   setScreen,
@@ -19,3 +17,10 @@ window.openSheet = openSheet;
 window.closeSheet = closeSheet;
 window.openContactSheet = openContactSheet;
 window.toast = toast;
+
+// Load UI policy overrides after all deferred core/messaging scripts have run.
+document.addEventListener('DOMContentLoaded', () => {
+  const script = document.createElement('script');
+  script.src = '/static/profile_messaging_ui.js';
+  document.head.appendChild(script);
+});

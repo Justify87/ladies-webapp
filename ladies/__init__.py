@@ -1,4 +1,4 @@
-"""Ladies Explorer V9 package."""
+"""Ladies Explorer application package."""
 import logging
 
 LOGGER = logging.getLogger("ladies_explorer.package")

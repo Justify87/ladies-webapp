@@ -10,7 +10,7 @@ from flask import Response, jsonify, request, stream_with_context
 
 from ladies_v9.models import Person, PersonUserState
 from .models import ContactEndpoint
-from .service_v92 import MessagingService
+from . import MessagingService
 
 
 def _qr_data_uri(value: str) -> str:
