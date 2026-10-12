@@ -1,9 +1,33 @@
 'use strict';
 
-// Canonical browser boundary between the large core UI and feature scripts.
-// New code uses LadiesApp instead of depending on script load side effects.
+// Canonical browser boundary between the core UI and feature scripts.
 (() => {
   const config = window.__LADIES_CONFIG__ || {};
+
+  // Server-side Ladies mappings are the source of truth. The core arrays are
+  // deliberately mutated before feature scripts initialize, so all consumers
+  // see the same values without another hard-coded backend catalog.
+  if (config.defaults) {
+    if (config.defaults.city) {
+      BUILTIN_FILTERS.city = String(config.defaults.city);
+      if (!state.filters.city) state.filters.city = BUILTIN_FILTERS.city;
+    }
+    if (Number.isFinite(Number(config.defaults.radius_km))) {
+      BUILTIN_FILTERS.radius = Number(config.defaults.radius_km);
+      if (!Number.isFinite(Number(state.filters.radius))) state.filters.radius = BUILTIN_FILTERS.radius;
+    }
+  }
+  if (Array.isArray(config.categories) && config.categories.length) {
+    CATEGORIES.splice(0, CATEGORIES.length, ...config.categories.map(item => [String(item.value || ''), String(item.label || item.value || 'Alle')]));
+  }
+  if (Array.isArray(config.filter_groups)) {
+    for (const group of config.filter_groups) {
+      const key = String(group?.key || '');
+      if (!key || !Array.isArray(group.options)) continue;
+      SERVER_FILTERS[key] = group.options.map(option => String(option.label || option.value || '')).filter(Boolean);
+    }
+  }
+
   const runtime = {
     config,
     get state() { return state; },
@@ -35,10 +59,8 @@
     writable: false,
   });
 
-  // V9.6 transition contract: existing feature files are loaded explicitly by
-  // index.html (never dynamically), but some still call the former bridge names.
-  // Keep those aliases in one place until each feature file is migrated to the
-  // LadiesApp namespace; state itself remains owned by app.js.
+  // Temporary compatibility surface for existing feature scripts. All aliases
+  // live here instead of being created by a dynamic bridge/loading chain.
   const aliases = {
     state: () => state,
     setScreen: () => setScreen,
