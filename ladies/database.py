@@ -7,6 +7,7 @@ from pathlib import Path
 import sqlite3
 import threading
 from typing import Iterator
+import weakref
 
 from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.orm import Session, sessionmaker
@@ -18,20 +19,47 @@ CURRENT_SCHEMA_VERSION = 1
 MAX_MIGRATION_BACKUPS = 3
 
 
-class Database:
-    def __init__(self, path: str | Path):
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+class _DatabaseState:
+    def __init__(self, path: Path):
+        self.path = path
         self.engine = create_engine(
-            f"sqlite:///{self.path}",
+            f"sqlite:///{path}",
             future=True,
             connect_args={"check_same_thread": False, "timeout": 30},
         )
-        event.listen(self.engine, "connect", self._configure_sqlite)
+        event.listen(self.engine, "connect", Database._configure_sqlite)
         self.Session = sessionmaker(bind=self.engine, expire_on_commit=False, future=True)
-        self._schema_lock = threading.RLock()
-        self._schema_ready = False
-        LOGGER.info("Database configured path=%s", self.path.resolve())
+        self.schema_lock = threading.RLock()
+        self.schema_ready = False
+
+
+class Database:
+    """Lightweight handle to one shared SQLite application context per path.
+
+    Core, messaging and pricing historically constructed their own ``Database``
+    objects for the same file. Handles may still be created independently during
+    the staged refactor, but they now share one engine, session factory and schema
+    initialization state. Later slices can inject the handle explicitly without a
+    behavioral migration at the same time.
+    """
+
+    _states: weakref.WeakValueDictionary[str, _DatabaseState] = weakref.WeakValueDictionary()
+    _states_lock = threading.RLock()
+
+    def __init__(self, path: str | Path):
+        canonical = Path(path).expanduser().resolve()
+        canonical.parent.mkdir(parents=True, exist_ok=True)
+        key = str(canonical)
+        with self._states_lock:
+            state = self._states.get(key)
+            if state is None:
+                state = _DatabaseState(canonical)
+                self._states[key] = state
+                LOGGER.info("Database context configured path=%s", canonical)
+        self._state = state
+        self.path = state.path
+        self.engine = state.engine
+        self.Session = state.Session
 
     @staticmethod
     def _configure_sqlite(dbapi_connection, _connection_record) -> None:
@@ -173,19 +201,12 @@ class Database:
             raise RuntimeError("Datenbankschema ist unvollständig: " + "; ".join(details))
 
     def create_schema(self) -> None:
-        """Create or upgrade the schema once for this application Database.
-
-        All feature models must be registered before the first call. The integrated
-        app imports core, messaging and pricing before constructing repositories,
-        so a shared Database can safely initialize the complete metadata exactly
-        once. The lock also prevents concurrent startup paths from racing schema
-        creation or migrations.
-        """
-        with self._schema_lock:
-            if self._schema_ready:
+        """Create or upgrade the schema exactly once per shared DB context."""
+        with self._state.schema_lock:
+            if self._state.schema_ready:
                 return
             self._create_schema()
-            self._schema_ready = True
+            self._state.schema_ready = True
 
     def _create_schema(self) -> None:
         with self.engine.connect() as connection:
