@@ -46,19 +46,22 @@ class MessagingHttpContractTests(unittest.TestCase):
         ):
             app = self.make_app(td)
             rules = {
-                (rule.rule, tuple(sorted(method for method in rule.methods if method not in {"HEAD", "OPTIONS"})))
+                (rule.rule, method)
                 for rule in app.url_map.iter_rules()
+                for method in rule.methods
+                if method not in {"HEAD", "OPTIONS"}
             }
 
         expected = {
-            ("/api/messaging/status", ("GET",)),
-            ("/api/messaging/threads", ("GET",)),
-            ("/api/messaging/threads/<int:thread_id>", ("GET",)),
-            ("/api/messaging/threads/<int:thread_id>/messages", ("POST",)),
-            ("/api/messaging/threads/<int:thread_id>/media", ("POST",)),
-            ("/api/messaging/messages/<int:message_id>/reaction", ("POST",)),
-            ("/api/messaging/messages/<int:message_id>", ("DELETE", "PATCH")),
-            ("/api/messaging/messages/<int:message_id>/view-once", ("GET",)),
+            ("/api/messaging/status", "GET"),
+            ("/api/messaging/threads", "GET"),
+            ("/api/messaging/threads/<int:thread_id>", "GET"),
+            ("/api/messaging/threads/<int:thread_id>/messages", "POST"),
+            ("/api/messaging/threads/<int:thread_id>/media", "POST"),
+            ("/api/messaging/messages/<int:message_id>/reaction", "POST"),
+            ("/api/messaging/messages/<int:message_id>", "PATCH"),
+            ("/api/messaging/messages/<int:message_id>", "DELETE"),
+            ("/api/messaging/messages/<int:message_id>/view-once", "GET"),
         }
         for contract in expected:
             with self.subTest(contract=contract):
