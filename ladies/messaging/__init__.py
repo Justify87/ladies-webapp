@@ -15,6 +15,14 @@ sys.modules.setdefault(__name__ + ".service_v92", _service_runtime)
 class MessagingService(_service_runtime.MessagingService):
     """Current messaging service plus user-facing thread visibility rules."""
 
+    def subscribe_presence(self, thread_id: int) -> None:
+        # Opening/refreshing a thread can happen while Baileys is reconnecting.
+        # Presence is supplementary, so do not turn a transient disconnect into
+        # repeated worker warnings or visible chat instability.
+        if self.worker.state != "CONNECTED":
+            return
+        return super().subscribe_presence(thread_id)
+
     def threads(self, filter_name: str = "ALL"):
         if filter_name == "UNASSIGNED":
             return super().threads(filter_name)
@@ -30,9 +38,20 @@ class MessagingService(_service_runtime.MessagingService):
             for thread in rows:
                 if thread.person_id is None:
                     continue
-                state = db.get(PersonUserState, int(thread.person_id))
-                if state is None or not (state.favorite or state.preference == "LIKE"):
+
+                last = db.scalar(
+                    select(ChatMessage)
+                    .where(ChatMessage.thread_id == thread.thread_id)
+                    .order_by(desc(ChatMessage.timestamp), desc(ChatMessage.message_id))
+                    .limit(1)
+                )
+                # Empty placeholder threads should stay out of the inbox. Once a
+                # real message exists, however, the conversation is user data and
+                # must remain visible regardless of Like/Favorite/neutral state.
+                if last is None:
                     continue
+
+                state = db.get(PersonUserState, int(thread.person_id))
                 has_outgoing = db.scalar(
                     select(ChatMessage.message_id)
                     .where(
@@ -40,24 +59,20 @@ class MessagingService(_service_runtime.MessagingService):
                         ChatMessage.direction == "OUT",
                     )
                     .limit(1)
-                )
-                if has_outgoing is None:
+                ) is not None
+                liked_or_favorite = bool(state and (state.favorite or state.preference == "LIKE"))
+                if not (has_outgoing or liked_or_favorite):
                     continue
                 if filter_name == "UNREAD" and not thread.unread_count:
                     continue
-                last = db.scalar(
-                    select(ChatMessage)
-                    .where(ChatMessage.thread_id == thread.thread_id)
-                    .order_by(desc(ChatMessage.timestamp), desc(ChatMessage.message_id))
-                    .limit(1)
-                )
+
                 payload = self._thread_payload(db, thread, last)
-                payload["favorite"] = bool(state.favorite)
-                payload["preference"] = state.preference
+                payload["favorite"] = bool(state.favorite) if state else False
+                payload["preference"] = state.preference if state else None
                 out.append(payload)
 
-            # Preserve newest-message order inside each group while pinning
-            # contacted favorites before contacted likes.
+            # Keep newest-message order inside each stable group while pinning
+            # favorites first, then likes, then neutral conversations.
             out.sort(key=lambda item: (
                 0 if item.get("favorite") else 1,
                 0 if item.get("preference") == "LIKE" else 1,
