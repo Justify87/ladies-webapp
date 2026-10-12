@@ -93,8 +93,13 @@ def main() -> int:
     print(f"Debug-Log: {Path(args.log).resolve()}")
     print(f"Lokal:     http://127.0.0.1:{args.port}")
     if args.host in {"0.0.0.0", "::"}:
+        token = app.config.get("LAN_ACCESS_TOKEN")
         for ip in local_ipv4_addresses():
-            print(f"Heimnetz:  http://{ip}:{args.port}")
+            if token:
+                print(f"Heimnetz-Pairing: http://{ip}:{args.port}/pair/{token}")
+            else:
+                print(f"Heimnetz:  http://{ip}:{args.port}")
+        print("Hinweis: Im Heimnetz zuerst einmalig die Pairing-URL auf dem Smartphone öffnen.")
     print("WhatsApp wird intern verwaltet; Node.js 20+ wird nur für die Chat-Funktion benötigt.")
     app.run(host=args.host, port=args.port, threaded=True, use_reloader=False)
     return 0
