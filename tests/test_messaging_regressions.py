@@ -367,7 +367,11 @@ class LanAccessTests(unittest.TestCase):
             paired = client.get(f"/pair/{token}", environ_base=remote)
             self.assertEqual(paired.status_code, 302)
             self.assertEqual(client.get("/api/dashboard", environ_base=remote).status_code, 200)
-            self.assertEqual(client.get("/archive/secret.txt", environ_base=remote).status_code, 200)
+            archive_response = client.get("/archive/secret.txt", environ_base=remote)
+            try:
+                self.assertEqual(archive_response.status_code, 200)
+            finally:
+                archive_response.close()
 
 
 if __name__ == "__main__":
