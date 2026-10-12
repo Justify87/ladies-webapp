@@ -16,7 +16,8 @@ class LanAccessManager:
 
     Existing V9.5 ``lan_access_token`` cookies remain valid as legacy sessions
     during the V9.6 migration. New pairings receive independent random device
-    sessions and rotate the pairing token immediately.
+    sessions. The pairing token is rotated on every server start, while already
+    paired device sessions survive restarts.
     """
 
     def __init__(self, data_dir: str | Path):
@@ -43,22 +44,30 @@ class LanAccessManager:
             return None
 
     def _load_or_create(self) -> dict[str, Any]:
-        try:
-            state = json.loads(self.state_path.read_text(encoding="utf-8"))
-            if isinstance(state, dict) and state.get("master_secret") and state.get("pairing_token"):
-                state.setdefault("sessions", {})
-                state.setdefault("legacy_session_hash", self._hash(self._legacy_token()) if self._legacy_token() else None)
-                return state
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            pass
         legacy = self._legacy_token()
-        state = {
-            "version": 1,
-            "master_secret": secrets.token_urlsafe(48),
-            "pairing_token": legacy or secrets.token_urlsafe(32),
-            "legacy_session_hash": self._hash(legacy) if legacy else None,
-            "sessions": {},
-        }
+        state: dict[str, Any] | None = None
+        try:
+            loaded = json.loads(self.state_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and loaded.get("master_secret"):
+                state = loaded
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            state = None
+
+        if state is None:
+            state = {
+                "version": 1,
+                "master_secret": secrets.token_urlsafe(48),
+                "legacy_session_hash": self._hash(legacy) if legacy else None,
+                "sessions": {},
+            }
+        else:
+            state.setdefault("version", 1)
+            state.setdefault("sessions", {})
+            state.setdefault("legacy_session_hash", self._hash(legacy) if legacy else None)
+
+        # Pairing credentials belong to the current server process/session and
+        # are deliberately not stable credentials like device sessions.
+        state["pairing_token"] = secrets.token_urlsafe(32)
         self._write(state)
         return state
 
@@ -90,8 +99,6 @@ class LanAccessManager:
                 "created_at": self._now(),
                 "last_seen_at": self._now(),
             }
-            # Pairing URLs are single-use. The next QR/link gets a new token.
-            self._state["pairing_token"] = secrets.token_urlsafe(32)
             self._write(self._state)
             return session
 
