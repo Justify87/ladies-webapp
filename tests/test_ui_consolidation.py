@@ -16,8 +16,12 @@ class UiConsolidationTests(unittest.TestCase):
             "/static/app.js",
             "/static/js/runtime.js",
             "/static/js/search_ui.js",
-            "/static/profile_messaging_ui.js",
             "/static/js/filter_ui.js",
+            "/static/js/chat_profile.js",
+            "/static/css/search_ui.css",
+            "/static/css/filter_ui.css",
+            "/static/css/chat_profile.css",
+            "/static/profile_messaging_ui.js",
             "/static/messaging.js",
             "/static/pricing.js",
         ):
@@ -51,7 +55,13 @@ class UiConsolidationTests(unittest.TestCase):
         index = (ROOT / "ladies" / "templates" / "index.html").read_text(encoding="utf-8")
         config_pos = index.index("window.__LADIES_CONFIG__")
         app_pos = index.index('/static/app.js')
+        runtime_pos = index.index('/static/js/runtime.js')
+        search_pos = index.index('/static/js/search_ui.js')
+        filter_pos = index.index('/static/js/filter_ui.js')
         self.assertLess(config_pos, app_pos)
+        self.assertLess(app_pos, runtime_pos)
+        self.assertLess(runtime_pos, search_pos)
+        self.assertLess(search_pos, filter_pos)
 
 
 if __name__ == "__main__":
