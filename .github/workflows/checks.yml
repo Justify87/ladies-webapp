@@ -23,6 +23,8 @@ jobs:
         run: python -m compileall ladies ladies_explorer.py
       - name: Verify neutral source layout mapping
         run: python -c "import ladies_v9.app, nodeenv; print('package mapping ok')"
+      - name: Verify bootstrap dependency state
+        run: python -c "import ladies_explorer; assert ladies_explorer._project_ready(); print('bootstrap dependency check ok')"
       - name: Unit and regression tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Flask smoke test without starting a server
@@ -37,7 +39,7 @@ jobs:
               def __init__(self, worker_dir, auth_dir, event_handler):
                   self.worker_dir=Path(worker_dir); self.auth_dir=Path(auth_dir); self.event_handler=event_handler
                   self.proc=None; self.state='NOT_CONFIGURED'; self.detail=None; self.qr=None; self.account=None; self.last_connected_at=None
-              def dependency_status(self): return False, 'Node.js fehlt'
+              def dependency_status(self): return False, 'Node.js 20+ fehlt'
               def status(self): return {'state':self.state,'detail':self.detail,'qr_available':False,'account':None,'last_connected_at':None}
               def stop(self): pass
 
