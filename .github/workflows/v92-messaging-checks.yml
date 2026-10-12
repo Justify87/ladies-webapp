@@ -6,6 +6,9 @@ on:
     branches:
       - feature/whatsapp-person-chat
 
+permissions:
+  contents: write
+
 jobs:
   python:
     runs-on: ubuntu-latest
@@ -66,9 +69,13 @@ jobs:
           node --check ../../static/messaging_bridge.js
       - name: Verify pinned Baileys 7 version
         run: node -e "const p=require('./node_modules/@whiskeysockets/baileys/package.json'); if(p.version!=='7.0.0-rc14') throw new Error('Unexpected Baileys '+p.version); console.log(p.version)"
-      - name: Capture generated lockfile
-        uses: actions/upload-artifact@v4
-        with:
-          name: whatsapp-worker-lockfile
-          path: ladies_v9/messaging/whatsapp_worker/package-lock.json
-          if-no-files-found: error
+      - name: Commit generated lockfile once
+        if: github.event_name == 'push'
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add package-lock.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Lock WhatsApp worker dependencies"
+            git push
+          fi
