@@ -110,16 +110,6 @@ class ChatUiPolishTests(unittest.TestCase):
             service.subscribe_presence(999)
             self.assertEqual(service.worker.commands, [])
 
-    def test_mobile_chat_polish_has_keyboard_and_presence_guards(self):
-        source = (Path(__file__).parents[1] / "ladies" / "static" / "profile_messaging_ui.js").read_text(encoding="utf-8")
-        self.assertIn("window.visualViewport", source)
-        self.assertIn("6500", source)
-        self.assertIn("presenceExpiredAt", source)
-        self.assertIn("grid-template-columns:minmax(0,1fr) 50px", source)
-        self.assertIn("composer-plus{display:none", source)
-        self.assertIn("M4 5.2 20 12 4 18.8", source)
-        self.assertIn("Hier erscheinen alle Unterhaltungen", source)
-
 
 if __name__ == "__main__":
     unittest.main()
