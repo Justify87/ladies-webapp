@@ -23,6 +23,7 @@ NODE_MIN_MAJOR = 20
 NODE_MAX_MAJOR = 24
 NPM_MIN_MAJOR = 10
 BOOTSTRAP_MARKER = "LADIES_BOOTSTRAP_CHILD"
+BOOTSTRAP_CHECK_ONLY = "LADIES_BOOTSTRAP_CHECK_ONLY"
 PYTHON_MIN = (3, 12)
 PYTHON_MAX_EXCLUSIVE = (3, 14)
 PYTHON_REQUIREMENTS = {
@@ -91,7 +92,7 @@ def ensure_python_environment() -> None:
     """Install into the exact invoked environment, or create a local one safely.
 
     - `uv run` already syncs pyproject dependencies before this file starts.
-    - direct Python inside a supported venv is repaired in-place.
+    - direct Python inside a supported venv is repaired in-place and re-execed.
     - direct system Python is never mutated: use uv's project env when available,
       otherwise create .venv and re-exec there.
     - unsupported Python versions are handed to uv when available instead of
@@ -123,6 +124,11 @@ def ensure_python_environment() -> None:
         subprocess.run([str(python), "-m", "pip", "install", "-e", str(SCRIPT_DIR)], check=True)
         _reexec(python, [str(Path(__file__).resolve()), *sys.argv[1:]])
 
+    # An editable install may add .pth/import mappings that only become visible
+    # to a newly started interpreter. Always re-exec after an actual repair.
+    if os.environ.get(BOOTSTRAP_MARKER) == "1":
+        raise RuntimeError("Python-Abhängigkeiten sind nach der automatischen Reparatur weiterhin unvollständig")
+
     print(f"[Setup] Python-Abhängigkeiten werden für {sys.executable} synchronisiert …")
     if uv:
         subprocess.run(
@@ -136,8 +142,7 @@ def ensure_python_environment() -> None:
             subprocess.run([sys.executable, "-m", "ensurepip", "--upgrade"], check=True)
         subprocess.run([sys.executable, "-m", "pip", "install", "-e", str(SCRIPT_DIR)], check=True)
 
-    if not _project_ready():
-        raise RuntimeError("Python-Abhängigkeiten konnten nicht vollständig in der aktiven Umgebung eingerichtet werden")
+    _reexec(sys.executable, [str(Path(__file__).resolve()), *sys.argv[1:]])
 
 
 def _major(executable: str, expression: list[str]) -> int | None:
@@ -295,6 +300,10 @@ def local_ipv4_addresses() -> list[str]:
 
 def main() -> int:
     ensure_python_environment()
+    if os.environ.get(BOOTSTRAP_CHECK_ONLY) == "1":
+        print(f"[Setup] Python-Bootstrap OK ({sys.executable})")
+        return 0
+
     migrate_legacy_paths()
     _, npm = ensure_node_runtime()
     ensure_javascript_dependencies(npm)
