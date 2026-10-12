@@ -29,6 +29,7 @@ fs.mkdirSync(viewOnceDir, { recursive: true })
 const logger = pino({ level: process.env.LADIES_BAILEYS_LOG_LEVEL || 'warn' }, pino.destination(2))
 const reconnectDelays = [1000, 2000, 5000, 10000, 30000]
 const MAX_INCOMING_MEDIA = 96 * 1024 * 1024
+const MAX_REHYDRATE_MESSAGES = 10
 let reconnectAttempt = 0
 let sock = null
 let stopped = false
@@ -329,30 +330,52 @@ function directMessageAddresses(key) {
   return { primary, phoneJid }
 }
 
-async function emitMessage(current, msg) {
+async function buildMessagePayload(current, msg, { downloadMedia = true, rehydrated = false } = {}) {
   const raw = msg.message
   const content = contentOf(raw)
-  if (!content || content.reactionMessage || content.protocolMessage) return
-  const { primary: jid, phoneJid } = directMessageAddresses(msg.key)
-  if (!jid || jid === 'status@broadcast' || jid.endsWith('@g.us')) return
+  if (!content || content.reactionMessage || content.protocolMessage) return null
+  const { primary: jid, phoneJid: directPhoneJid } = directMessageAddresses(msg.key)
+  if (!jid || jid === 'status@broadcast' || jid.endsWith('@g.us')) return null
+  const phoneJid = directPhoneJid || await resolvePhoneJid(current, jid)
   const viewOnce = isViewOnceMessage(raw, msg.key)
-  const media = await messageMediaWithFile(current, msg, content, viewOnce)
-  emit({
-    type: 'message',
-    payload: {
-      provider_message_id: msg.key?.id || null,
-      provider_key: providerKey(msg.key),
-      jid,
-      phone_jid: phoneJid,
-      from_me: Boolean(msg.key?.fromMe),
-      timestamp: Number(msg.messageTimestamp || Math.floor(Date.now() / 1000)),
-      message_type: messageType(content),
-      text: messageText(content),
-      media,
-      quote: quoteInfo(content),
-      view_once: viewOnce,
-    },
-  })
+  const media = downloadMedia
+    ? await messageMediaWithFile(current, msg, content, viewOnce)
+    : messageMedia(content)
+  return {
+    provider_message_id: msg.key?.id || null,
+    provider_key: providerKey(msg.key),
+    jid,
+    phone_jid: phoneJid,
+    from_me: Boolean(msg.key?.fromMe),
+    timestamp: Number(msg.messageTimestamp || Math.floor(Date.now() / 1000)),
+    message_type: messageType(content),
+    text: messageText(content),
+    media,
+    quote: quoteInfo(content),
+    view_once: viewOnce,
+    ...(rehydrated ? { rehydrated: true } : {}),
+  }
+}
+
+async function emitMessage(current, msg, { rehydrated = false } = {}) {
+  const payload = await buildMessagePayload(current, msg, { downloadMedia: true, rehydrated })
+  if (!payload) return
+  emit({ type: 'message', payload })
+}
+
+async function historySeedPayloads(current, messages) {
+  const grouped = new Map()
+  for (const msg of messages || []) {
+    const payload = await buildMessagePayload(current, msg, { downloadMedia: false })
+    if (!payload?.provider_message_id) continue
+    const key = payload.phone_jid || payload.jid
+    if (!key) continue
+    const rows = grouped.get(key) || []
+    rows.push(payload)
+    rows.sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0))
+    grouped.set(key, rows.slice(-MAX_REHYDRATE_MESSAGES))
+  }
+  return [...grouped.values()].flat()
 }
 
 async function flushBufferedOwnMessages() {
@@ -522,6 +545,20 @@ async function connect() {
         }, delay)
       }
     })
+    current.ev.on('messaging-history.set', async event => {
+      const syncType = Number(event.syncType)
+      if (syncType === Number(proto.HistorySync.HistorySyncType.FULL)) return
+      const messages = event.messages || []
+      if (syncType === Number(proto.HistorySync.HistorySyncType.ON_DEMAND)) {
+        const ordered = [...messages].sort((a, b) => Number(a.messageTimestamp || 0) - Number(b.messageTimestamp || 0))
+        for (const msg of ordered.slice(-MAX_REHYDRATE_MESSAGES)) {
+          await emitMessage(current, msg, { rehydrated: true })
+        }
+        return
+      }
+      const payloads = await historySeedPayloads(current, messages)
+      if (payloads.length) emit({ type: 'history_seed', payloads })
+    })
     current.ev.on('messages.upsert', async event => {
       if (event.type !== 'notify') return
       for (const msg of event.messages || []) {
@@ -591,6 +628,21 @@ async function handle(command) {
         if (!sock) throw new Error('WhatsApp ist nicht verbunden')
         const info = await inspectContact(sock, command.jid, command.include_profile_picture !== false)
         reply(id, true, info)
+        break
+      }
+      case 'fetch_recent_history': {
+        if (!sock) await connect()
+        if (!sock) throw new Error('WhatsApp ist nicht verbunden')
+        const count = Math.max(1, Math.min(MAX_REHYDRATE_MESSAGES, Number(command.count || MAX_REHYDRATE_MESSAGES)))
+        const target = await connectedTarget(command)
+        const oldestKey = asProviderKey(command.oldest_key)
+        if (!oldestKey.remoteJid) oldestKey.remoteJid = target
+        const oldestTimestampMs = Number(command.oldest_timestamp_ms)
+        if (!Number.isFinite(oldestTimestampMs) || oldestTimestampMs <= 0) {
+          throw new Error('Historien-Anker hat keinen gültigen Zeitstempel')
+        }
+        const requestId = await sock.fetchMessageHistory(count, oldestKey, oldestTimestampMs)
+        reply(id, true, { request_id: requestId, count })
         break
       }
       case 'send_text':
