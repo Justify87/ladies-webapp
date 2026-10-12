@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 
 from ladies_v9.database import Database
 from ladies_v9.models import AppSetting, Listing, Person, PersonIdentifier, utcnow
@@ -20,6 +20,10 @@ from .whatsapp_manager import BaileysWorkerManager
 
 LOGGER = logging.getLogger("ladies_explorer.messaging")
 TYPING_SETTING_KEY = "whatsapp_typing_enabled"
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 class MessagingService(BaseMessagingService):
@@ -90,6 +94,59 @@ class MessagingService(BaseMessagingService):
             self.worker.state = "LOGGED_OUT"
         return self.status()
 
+    def sync_person(self, person_id: int) -> list[int]:
+        created: list[int] = []
+        with self.database.session() as db:
+            if db.get(Person, int(person_id)) is None:
+                raise KeyError(person_id)
+            identifiers = db.scalars(
+                select(PersonIdentifier)
+                .where(PersonIdentifier.person_id == int(person_id), PersonIdentifier.kind == "PHONE")
+                .order_by(PersonIdentifier.last_seen_at)
+            ).all()
+            for ident in identifiers:
+                endpoint = db.scalar(select(ContactEndpoint).where(
+                    ContactEndpoint.provider == "WHATSAPP",
+                    ContactEndpoint.normalized_phone == ident.normalized_value,
+                ))
+                if endpoint is None:
+                    endpoint = ContactEndpoint(
+                        person_id=person_id,
+                        normalized_phone=ident.normalized_value,
+                        display_phone=ident.raw_value,
+                        source_listing_id=ident.listing_id,
+                        state="ACTIVE",
+                    )
+                    db.add(endpoint)
+                    db.flush()
+                    created.append(endpoint.endpoint_id)
+                    thread = self._get_thread(db, person_id=person_id)
+                    if db.scalar(select(func.count(ChatMessage.message_id)).where(ChatMessage.thread_id == thread.thread_id)):
+                        db.add(ChatMessage(
+                            thread_id=thread.thread_id,
+                            endpoint_id=endpoint.endpoint_id,
+                            direction="SYSTEM",
+                            message_type="SYSTEM",
+                            text=f"Neue Telefonnummer erkannt. {endpoint.display_phone or endpoint.normalized_phone} wurde dieser Person zugeordnet.",
+                            status="RECEIVED",
+                        ))
+                elif endpoint.person_id is None:
+                    self._assign_endpoint_in_session(db, endpoint, int(person_id))
+                elif endpoint.person_id != int(person_id):
+                    LOGGER.warning(
+                        "Endpoint conflict endpoint_id=%s existing_person=%s candidate_person=%s",
+                        endpoint.endpoint_id,
+                        endpoint.person_id,
+                        person_id,
+                    )
+                if endpoint.last_seen_at and ident.last_seen_at:
+                    endpoint.last_seen_at = max(_as_utc(endpoint.last_seen_at), _as_utc(ident.last_seen_at))
+                elif ident.last_seen_at:
+                    endpoint.last_seen_at = ident.last_seen_at
+                endpoint.source_listing_id = ident.listing_id or endpoint.source_listing_id
+                endpoint.updated_at = utcnow()
+        return created
+
     def _archive_incoming_media(self, payload: dict[str, Any]) -> dict[str, Any]:
         media = payload.get("media")
         if not isinstance(media, dict) or not media.get("data_base64"):
@@ -112,11 +169,7 @@ class MessagingService(BaseMessagingService):
         return payload
 
     def _ingest_message(self, payload: dict[str, Any]) -> None:
-        """Ingest Baileys 7 messages without ever treating a LID as a phone.
-
-        `jid` is the provider address to preserve and may be an @lid address.
-        `phone_jid` is the alternate PN address when WhatsApp exposes one.
-        """
+        """Ingest Baileys 7 messages without ever treating a LID as a phone."""
         payload = self._archive_incoming_media(payload)
         provider_id = payload.get("provider_message_id")
         if not provider_id:
@@ -128,7 +181,6 @@ class MessagingService(BaseMessagingService):
         with self.database.session() as db:
             if db.scalar(select(ChatMessage).where(ChatMessage.provider_message_id == provider_id)) is not None:
                 return
-
             endpoint = None
             if provider_address:
                 endpoint = db.scalar(select(ContactEndpoint).where(
@@ -140,7 +192,6 @@ class MessagingService(BaseMessagingService):
                     ContactEndpoint.provider == "WHATSAPP",
                     ContactEndpoint.normalized_phone == phone,
                 ))
-
             if endpoint is None:
                 person_id = None
                 if phone:
@@ -173,7 +224,6 @@ class MessagingService(BaseMessagingService):
                     )).all())
                     if len(person_ids) == 1:
                         self._assign_endpoint_in_session(db, endpoint, int(next(iter(person_ids))), add_system_message=False)
-
             thread = self._get_thread(db, person_id=endpoint.person_id, endpoint=endpoint)
             provider_ts = payload.get("timestamp")
             timestamp = datetime.fromtimestamp(float(provider_ts), timezone.utc) if provider_ts else utcnow()
