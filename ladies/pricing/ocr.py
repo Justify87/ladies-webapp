@@ -31,7 +31,11 @@ class OcrEngine:
 
 
 class PaddleOcrV6TinyEngine(OcrEngine):
-    """Optional PP-OCRv6 Tiny adapter using PaddleOCR's ONNX Runtime backend."""
+    """Optional PP-OCRv6 Tiny adapter using PaddleOCR's ONNX Runtime backend.
+
+    Deliberately never falls back to PaddleOCR's default models: mobile-size
+    predictability is part of the feature contract.
+    """
 
     name = "PP-OCRv6-tiny"
     version = "6"
@@ -61,8 +65,12 @@ class PaddleOcrV6TinyEngine(OcrEngine):
                 device="cpu",
                 enable_mkldnn=True,
             )
-        except TypeError:
-            self._pipeline = PaddleOCR(device="cpu")
+        except TypeError as exc:
+            raise RuntimeError(
+                "Die installierte PaddleOCR-Version unterstützt die explizite "
+                "PP-OCRv6-Tiny-Konfiguration nicht. Kein Fallback auf größere "
+                "Default-Modelle wird verwendet."
+            ) from exc
         return self._pipeline
 
     def extract(self, image_path: Path) -> OcrResult:
