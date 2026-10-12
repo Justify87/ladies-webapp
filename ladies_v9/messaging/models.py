@@ -5,6 +5,7 @@ from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, Uniqu
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ladies_v9.models import Base, utcnow
 
+
 class ContactEndpoint(Base):
     __tablename__ = "contact_endpoints"
     __table_args__ = (
@@ -12,7 +13,7 @@ class ContactEndpoint(Base):
         Index("idx_contact_endpoint_person", "person_id"),
     )
     endpoint_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    person_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    person_id: Mapped[Optional[int]] = mapped_column(ForeignKey("persons.person_id", ondelete="SET NULL"), nullable=True)
     provider: Mapped[str] = mapped_column(String(24), default="WHATSAPP", nullable=False)
     normalized_phone: Mapped[str] = mapped_column(String(64), nullable=False)
     display_phone: Mapped[Optional[str]] = mapped_column(String(128))
@@ -25,17 +26,22 @@ class ContactEndpoint(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
+
 class ChatThread(Base):
     __tablename__ = "chat_threads"
-    __table_args__ = (UniqueConstraint("person_id", name="uq_chat_thread_person"), Index("idx_chat_thread_activity", "last_message_at"))
+    __table_args__ = (
+        UniqueConstraint("person_id", name="uq_chat_thread_person"),
+        Index("idx_chat_thread_activity", "last_message_at"),
+    )
     thread_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    person_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    person_id: Mapped[Optional[int]] = mapped_column(ForeignKey("persons.person_id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     unread_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     messages: Mapped[list["ChatMessage"]] = relationship(back_populates="thread", cascade="all, delete-orphan")
+
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
