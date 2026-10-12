@@ -87,10 +87,6 @@ jobs:
       - name: Check worker and browser JavaScript syntax
         run: |
           node --check worker.mjs
-          node --check ../../static/messaging.js
-          node --check ../../static/messaging_bridge.js
-          node --check ../../static/profile_messaging_ui.js
-          node --check ../../static/pricing.js
-          node --check ../../static/ui_consolidation.js
+          find ../../static -type f \( -name '*.js' -o -name '*.mjs' \) -print -exec node --check {} \;
       - name: Verify pinned Baileys 7 version
         run: node -e "const p=require('./node_modules/@whiskeysockets/baileys/package.json'); if(p.version!=='7.0.0-rc14') throw new Error('Unexpected Baileys '+p.version); console.log(p.version)"
