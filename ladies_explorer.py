@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import importlib.util
 import logging
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -21,15 +23,47 @@ NODE_MIN_MAJOR = 20
 NODE_MAX_MAJOR = 24
 NPM_MIN_MAJOR = 10
 BOOTSTRAP_MARKER = "LADIES_BOOTSTRAP_CHILD"
+PYTHON_MIN = (3, 12)
+PYTHON_MAX_EXCLUSIVE = (3, 14)
+PYTHON_REQUIREMENTS = {
+    "Flask": ("flask", (3, 1), (4, 0)),
+    "requests": ("requests", (2, 32), (3, 0)),
+    "beautifulsoup4": ("bs4", (4, 12), (5, 0)),
+    "Pillow": ("PIL", (10, 0), (15, 0)),
+    "SQLAlchemy": ("sqlalchemy", (2, 0), (3, 0)),
+    "orjson": ("orjson", (3, 10), (4, 0)),
+    "qrcode": ("qrcode", (8, 0), (9, 0)),
+    "nodeenv": ("nodeenv", (1, 10), (2, 0)),
+}
 
 
 def _in_virtualenv() -> bool:
     return sys.prefix != getattr(sys, "base_prefix", sys.prefix) or bool(os.environ.get("VIRTUAL_ENV"))
 
 
+def _version_tuple(value: str) -> tuple[int, int, int]:
+    parts = [int(x) for x in re.findall(r"\d+", value)[:3]]
+    return tuple((parts + [0, 0, 0])[:3])  # type: ignore[return-value]
+
+
+def _python_version_supported() -> bool:
+    current = sys.version_info[:2]
+    return PYTHON_MIN <= current < PYTHON_MAX_EXCLUSIVE
+
+
 def _project_ready() -> bool:
-    required = ("flask", "requests", "bs4", "PIL", "sqlalchemy", "orjson", "qrcode", "nodeenv", "ladies_v9")
-    return all(importlib.util.find_spec(name) is not None for name in required)
+    if not _python_version_supported() or importlib.util.find_spec("ladies_v9") is None:
+        return False
+    for dist_name, (module_name, minimum, maximum) in PYTHON_REQUIREMENTS.items():
+        if importlib.util.find_spec(module_name) is None:
+            return False
+        try:
+            current = _version_tuple(importlib.metadata.version(dist_name))
+        except importlib.metadata.PackageNotFoundError:
+            return False
+        if not (_version_tuple(".".join(map(str, minimum))) <= current < _version_tuple(".".join(map(str, maximum)))):
+            return False
+    return True
 
 
 def _venv_python(root: Path) -> Path:
@@ -45,13 +79,23 @@ def _reexec(executable: str | Path, argv: list[str], *, mark_child: bool = True)
     os.execve(str(executable), [str(executable), *argv], env)
 
 
+def _uv_reexec(uv: str) -> None:
+    print("[Setup] Python-Umgebung wird mit uv synchronisiert …")
+    _reexec(
+        uv,
+        ["run", "--project", str(SCRIPT_DIR), "python", str(Path(__file__).resolve()), *sys.argv[1:]],
+    )
+
+
 def ensure_python_environment() -> None:
     """Install into the exact invoked environment, or create a local one safely.
 
     - `uv run` already syncs pyproject dependencies before this file starts.
-    - direct Python inside a venv is repaired in-place using that interpreter.
+    - direct Python inside a supported venv is repaired in-place.
     - direct system Python is never mutated: use uv's project env when available,
       otherwise create .venv and re-exec there.
+    - unsupported Python versions are handed to uv when available instead of
+      trying to mutate or upgrade the system interpreter.
     """
     if _project_ready():
         return
@@ -59,13 +103,17 @@ def ensure_python_environment() -> None:
         raise RuntimeError(f"Projektdefinition fehlt: {PROJECT_FILE}")
 
     uv = shutil.which("uv")
+    if not _python_version_supported():
+        if uv and os.environ.get(BOOTSTRAP_MARKER) != "1":
+            _uv_reexec(uv)
+        raise RuntimeError(
+            f"Python 3.12 oder 3.13 erforderlich; aktiv ist {sys.version.split()[0]}. "
+            "Installiere eine passende Python-Version oder uv."
+        )
+
     if not _in_virtualenv() and os.environ.get(BOOTSTRAP_MARKER) != "1":
         if uv:
-            print("[Setup] Python-Umgebung wird mit uv synchronisiert …")
-            _reexec(
-                uv,
-                ["run", "--project", str(SCRIPT_DIR), "python", str(Path(__file__).resolve()), *sys.argv[1:]],
-            )
+            _uv_reexec(uv)
         venv_dir = SCRIPT_DIR / ".venv"
         python = _venv_python(venv_dir)
         if not python.exists():
@@ -89,7 +137,7 @@ def ensure_python_environment() -> None:
         subprocess.run([sys.executable, "-m", "pip", "install", "-e", str(SCRIPT_DIR)], check=True)
 
     if not _project_ready():
-        raise RuntimeError("Python-Abhängigkeiten konnten nicht vollständig eingerichtet werden")
+        raise RuntimeError("Python-Abhängigkeiten konnten nicht vollständig in der aktiven Umgebung eingerichtet werden")
 
 
 def _major(executable: str, expression: list[str]) -> int | None:
