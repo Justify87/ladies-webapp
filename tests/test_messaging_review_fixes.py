@@ -288,16 +288,20 @@ class MediaHttpHardeningTests(unittest.TestCase):
             client = app.test_client()
             blocked = client.get("/archive/whatsapp/media/active.html", environ_base={"REMOTE_ADDR": "127.0.0.1"})
             self.assertEqual(blocked.status_code, 404)
+            blocked.close()
 
             response = client.get(
                 f"/api/messaging/messages/{message_id}/media",
                 environ_base={"REMOTE_ADDR": "127.0.0.1"},
             )
-            self.assertEqual(response.status_code, 200)
-            self.assertTrue(response.headers["Content-Type"].startswith("application/octet-stream"))
-            self.assertIn("attachment", response.headers.get("Content-Disposition", ""))
-            self.assertIn("sandbox", response.headers.get("Content-Security-Policy", ""))
-            self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
+            try:
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(response.headers["Content-Type"].startswith("application/octet-stream"))
+                self.assertIn("attachment", response.headers.get("Content-Disposition", ""))
+                self.assertIn("sandbox", response.headers.get("Content-Security-Policy", ""))
+                self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
+            finally:
+                response.close()
 
 
 if __name__ == "__main__":
