@@ -80,7 +80,7 @@ class MessageVisibilityTests(unittest.TestCase):
                 status="SENT",
             ))
 
-    def test_only_contacted_favorites_and_likes_are_listed_favorites_first(self):
+    def test_started_chats_are_listed_regardless_of_person_state_favorites_first(self):
         liked = self.person("Like", "+4917610000001", like=True)
         favorite = self.person("Favorit", "+4917610000002", favorite=True)
         untouched_like = self.person("Nur gelikt", "+4917610000003", like=True)
@@ -92,9 +92,11 @@ class MessageVisibilityTests(unittest.TestCase):
         self.add_outgoing(neutral_contact, "Hallo Neutral")
 
         items = self.service.threads("ALL")
-        self.assertEqual([item["display_name"] for item in items], ["Favorit", "Like"])
+        self.assertEqual([item["display_name"] for item in items], ["Favorit", "Like", "Neutral"])
         self.assertTrue(items[0]["favorite"])
         self.assertEqual(items[1]["preference"], "LIKE")
+        self.assertEqual(items[2]["preference"], "NONE")
+        self.assertNotIn("Nur gelikt", [item["display_name"] for item in items])
 
 
 if __name__ == "__main__":
