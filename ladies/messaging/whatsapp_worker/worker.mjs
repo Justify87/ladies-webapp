@@ -6,6 +6,7 @@ import makeWASocket, {
   makeCacheableSignalKeyStore,
   proto,
   useMultiFileAuthState,
+  WAMessageStubType,
 } from '@whiskeysockets/baileys'
 import { Boom } from '@hapi/boom'
 import crypto from 'node:crypto'
@@ -21,7 +22,9 @@ if (!authDir) {
   process.exit(2)
 }
 const mediaDir = path.resolve(authDir, '..', 'media')
+const viewOnceDir = path.resolve(authDir, '..', 'view-once')
 fs.mkdirSync(mediaDir, { recursive: true })
+fs.mkdirSync(viewOnceDir, { recursive: true })
 
 const logger = pino({ level: process.env.LADIES_BAILEYS_LOG_LEVEL || 'warn' }, pino.destination(2))
 const reconnectDelays = [1000, 2000, 5000, 10000, 30000]
@@ -168,32 +171,59 @@ function mediaExtension(mime, type) {
   return subtype ? `.${subtype.slice(0, 12)}` : '.bin'
 }
 
-async function messageMediaWithFile(current, msg, content) {
+async function messageMediaWithFile(current, msg, content, viewOnce = false) {
   const media = messageMedia(content)
   if (!media) return null
+  const root = viewOnce ? viewOnceDir : mediaDir
+  const temporary = path.join(root, `.incoming-${crypto.randomUUID()}.part`)
+  let handle = null
+  let total = 0
   try {
-    const buffer = await downloadMediaMessage(
+    const stream = await downloadMediaMessage(
       msg,
-      'buffer',
+      'stream',
       {},
       { logger, reuploadRequest: current.updateMediaMessage },
     )
-    if (!Buffer.isBuffer(buffer) || !buffer.length) return media
-    if (buffer.length > MAX_INCOMING_MEDIA) {
-      media.download_error = 'media_too_large'
-      media.byte_size = buffer.length
+    handle = await fs.promises.open(temporary, 'wx')
+    const digest = crypto.createHash('sha256')
+    for await (const chunk of stream) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      total += buffer.length
+      if (total > MAX_INCOMING_MEDIA) {
+        const error = new Error('media_too_large')
+        error.code = 'MEDIA_TOO_LARGE'
+        throw error
+      }
+      digest.update(buffer)
+      await handle.write(buffer)
+    }
+    await handle.close()
+    handle = null
+    if (!total) {
+      await fs.promises.unlink(temporary).catch(() => {})
       return media
     }
-    const digest = crypto.createHash('sha256').update(buffer).digest('hex')
-    const filename = `${digest}${mediaExtension(media.mime_type, messageType(content))}`
-    const target = path.join(mediaDir, filename)
-    if (!fs.existsSync(target)) fs.writeFileSync(target, buffer)
+    const hash = digest.digest('hex')
+    const filename = `${hash}${mediaExtension(media.mime_type, messageType(content))}`
+    const target = path.join(root, filename)
+    if (fs.existsSync(target)) await fs.promises.unlink(temporary)
+    else await fs.promises.rename(temporary, target)
     media.archive_name = filename
-    media.byte_size = buffer.length
-    media.sha256 = digest
+    media.byte_size = total
+    media.sha256 = hash
+    if (viewOnce) media.private_view_once = true
   } catch (error) {
-    logger.warn({ err: errorText(error), type: messageType(content) }, 'incoming media download failed')
-    media.download_error = 'download_failed'
+    if (handle) await handle.close().catch(() => {})
+    await fs.promises.unlink(temporary).catch(() => {})
+    media.byte_size = total || media.byte_size || null
+    if (error?.code === 'MEDIA_TOO_LARGE') {
+      media.download_error = 'media_too_large'
+      logger.warn({ bytes: total, type: messageType(content) }, 'incoming media exceeded local size limit')
+    } else {
+      logger.warn({ err: errorText(error), type: messageType(content) }, 'incoming media download failed')
+      media.download_error = 'download_failed'
+    }
   }
   return media
 }
@@ -305,7 +335,8 @@ async function emitMessage(current, msg) {
   if (!content || content.reactionMessage || content.protocolMessage) return
   const { primary: jid, phoneJid } = directMessageAddresses(msg.key)
   if (!jid || jid === 'status@broadcast' || jid.endsWith('@g.us')) return
-  const media = await messageMediaWithFile(current, msg, content)
+  const viewOnce = isViewOnceMessage(raw, msg.key)
+  const media = await messageMediaWithFile(current, msg, content, viewOnce)
   emit({
     type: 'message',
     payload: {
@@ -319,7 +350,7 @@ async function emitMessage(current, msg) {
       text: messageText(content),
       media,
       quote: quoteInfo(content),
-      view_once: isViewOnceMessage(raw, msg.key),
+      view_once: viewOnce,
     },
   })
 }
@@ -336,9 +367,37 @@ async function flushBufferedOwnMessages() {
 }
 
 function emitMessageUpdate(item) {
-  const mapped = mapReceiptStatus(item.update?.status)
   const providerId = item.key?.id || null
-  if (!mapped || !providerId) return
+  if (!providerId) return
+
+  const editedRaw = item.update?.message?.editedMessage?.message
+  const edited = editedRaw ? contentOf(editedRaw) : null
+  if (edited) {
+    emit({
+      type: 'message_content_update',
+      payload: {
+        provider_message_id: providerId,
+        action: 'EDIT',
+        text: messageText(edited),
+        message_type: messageType(edited),
+      },
+    })
+  }
+
+  const revoked = item.update?.message === null
+    && Number(item.update?.messageStubType) === Number(WAMessageStubType.REVOKE)
+  if (revoked) {
+    emit({
+      type: 'message_content_update',
+      payload: {
+        provider_message_id: providerId,
+        action: 'DELETE',
+      },
+    })
+  }
+
+  const mapped = mapReceiptStatus(item.update?.status)
+  if (!mapped) return
   emit({
     type: 'message_update',
     payload: {
