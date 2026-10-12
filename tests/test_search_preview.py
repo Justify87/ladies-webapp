@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from ladies_v9.errors import ValidationError
 from ladies_v9.search_preview import fetch_search_preview_count
 
 
@@ -52,7 +53,7 @@ class SearchPreviewTests(unittest.TestCase):
     def test_preview_fails_closed_on_widened_radius(self, http_get, parse_config):
         http_get.return_value = _Response()
         parse_config.return_value = {'advert_count': 99, 'distance_searched': 50}
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValidationError):
             fetch_search_preview_count(
                 object(),
                 city_slug='leipzig',
