@@ -35,6 +35,7 @@ PYTHON_REQUIREMENTS = {
     "orjson": ("orjson", (3, 10), (4, 0)),
     "qrcode": ("qrcode", (8, 0), (9, 0)),
     "nodeenv": ("nodeenv", (1, 10), (2, 0)),
+    "imageio-ffmpeg": ("imageio_ffmpeg", (0, 6), (1, 0)),
 }
 
 
