@@ -57,9 +57,13 @@ def install_messaging(app, *, db_path, data_dir) -> MessagingService:
     @app.get("/api/messaging/threads/<int:thread_id>")
     def messaging_thread(thread_id: int):
         try:
-            return jsonify(service.thread(thread_id, request.args.get("limit") or 100))
+            limit = int(request.args.get("limit") or 100)
+            before = int(request.args["before"]) if request.args.get("before") else None
+            return jsonify(service.thread(thread_id, limit, before))
+        except (TypeError, ValueError):
+            return jsonify(error="Ungültige Pagination"), 400
         except KeyError:
-            return jsonify(error="Chat nicht gefunden"), 404
+            return jsonify(error="Chat oder Cursor nicht gefunden"), 404
 
     @app.post("/api/messaging/person/<int:person_id>/thread")
     def messaging_person_thread(person_id: int):
