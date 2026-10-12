@@ -53,9 +53,13 @@ def create_app(
     )
     install_search_preview(app, default_city=default_city, default_radius=default_radius)
 
+    public_config = frontend_config(default_city=default_city, default_radius=default_radius)
+    app.config["APP_VERSION"] = public_config["version"]
+    app.config["FRONTEND_CONFIG"] = public_config
+
     @app.get("/api/config")
     def api_config():
-        return jsonify(frontend_config(default_city=default_city, default_radius=default_radius))
+        return jsonify(public_config)
 
     access = LanAccessManager(data_dir)
     background = BackgroundTasks(max_workers=2)
