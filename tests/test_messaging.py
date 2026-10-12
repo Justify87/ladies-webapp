@@ -15,15 +15,21 @@ from ladies_v9.messaging.models import ChatMessage, ChatThread, ContactEndpoint
 class FakeWorker:
     def __init__(self, worker_dir, auth_dir, event_handler):
         self.event_handler = event_handler
-        self.state = "CONNECTED"
+        self.auth_dir = Path(auth_dir)
+        self.state = "NOT_CONFIGURED"
         self.detail = None
         self.qr = None
         self.account = "491701234567:1@s.whatsapp.net"
         self.last_connected_at = 1
         self.fail_send = False
         self.commands = []
+        self.proc = None
+
+    def dependency_status(self):
+        return True, None
 
     def start(self):
+        self.state = "CONNECTED"
         return None
 
     def stop(self):
@@ -44,6 +50,8 @@ class FakeWorker:
             if self.fail_send:
                 raise RuntimeError("send failed")
             return {"ok": True, "payload": {"provider_message_id": "wa-out-1"}}
+        if command_type == "logout":
+            self.state = "LOGGED_OUT"
         return {"ok": True}
 
 
@@ -51,10 +59,10 @@ class MessagingTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        patcher = patch("ladies_v9.messaging.service.BaileysWorkerManager", FakeWorker)
+        patcher = patch("ladies_v9.messaging.service_v92.BaileysWorkerManager", FakeWorker)
         self.addCleanup(patcher.stop)
         patcher.start()
-        from ladies_v9.messaging.service import MessagingService
+        from ladies_v9.messaging.service_v92 import MessagingService
         self.service = MessagingService(self.root / "test.sqlite3", self.root / "data")
 
     def tearDown(self):
@@ -69,6 +77,12 @@ class MessagingTests(unittest.TestCase):
             if phone:
                 db.add(PersonIdentifier(person_id=person.person_id, kind="PHONE", normalized_value=phone, raw_value=phone))
             return person.person_id
+
+    def test_fresh_install_starts_not_configured(self):
+        self.assertEqual(self.service.status()["state"], "NOT_CONFIGURED")
+
+    def test_connect_changes_fake_worker_to_connected(self):
+        self.assertEqual(self.service.connect()["state"], "CONNECTED")
 
     def test_known_number_maps_to_existing_person(self):
         person_id = self.make_person(phone="+4917611111111")
@@ -128,7 +142,7 @@ class MessagingTests(unittest.TestCase):
             threads = db.scalars(select(ChatThread).where(ChatThread.person_id == person_id)).all()
             count = db.scalar(select(func.count(ChatMessage.message_id)).where(ChatMessage.thread_id == existing))
             self.assertEqual(len(threads), 1)
-            self.assertGreaterEqual(count, 2)  # incoming + local assignment system message
+            self.assertGreaterEqual(count, 2)
 
     def test_duplicate_provider_message_is_idempotent(self):
         payload = {
@@ -172,7 +186,6 @@ class MessagingTests(unittest.TestCase):
             db.flush()
             db.add(ChatMessage(thread_id=source_thread, endpoint_id=None, direction="SYSTEM", message_type="SYSTEM", text="alt", status="RECEIVED"))
             db.add(IdentityEvent(listing_id=listing.listing_id, previous_person_id=source, new_person_id=target, action="MANUAL_MERGE"))
-            # Identity normally deletes source after moving listings; mimic final canonical state.
             listing.person_id = target
             db.delete(db.get(PersonUserState, source))
             db.delete(db.get(Person, source))
