@@ -73,8 +73,7 @@ def create_app(
     def pair_lan_device(token: str):
         session = access.pair(token)
         if session is None:
-            return jsonify(error="Ungültiger oder bereits verwendeter Pairing-Code"), 404
-        app.config["LAN_ACCESS_TOKEN"] = access.pairing_token
+            return jsonify(error="Ungültiger oder abgelaufener Pairing-Code"), 404
         response = redirect("/", code=302)
         response.set_cookie(
             LAN_COOKIE,
@@ -87,10 +86,11 @@ def create_app(
         )
         return response
 
-    messaging = install_messaging(app, db_path=db_path, data_dir=data_dir)
-    pricing = install_pricing(app, db_path=db_path, data_dir=data_dir)
+    database = app.extensions["ladies_database"]
+    messaging = install_messaging(app, database=database, data_dir=data_dir)
+    pricing = install_pricing(app, database=database, data_dir=data_dir)
     try:
-        reconcile_identity_events(messaging.database)
+        reconcile_identity_events(database)
         pricing.reconcile_identity_events()
     except Exception:
         LOGGER.exception("Initial identity reconciliation failed")
@@ -113,10 +113,10 @@ def create_app(
                 person_id = (payload.get("identity") or {}).get("person_id")
                 if person_id:
                     messaging.sync_person(int(person_id))
-                    reconcile_identity_events(messaging.database)
+                    reconcile_identity_events(database)
                     pricing.reconcile_identity_events()
             elif response.status_code < 400 and request.path == "/api/identity/merge":
-                reconcile_identity_events(messaging.database)
+                reconcile_identity_events(database)
                 pricing.reconcile_identity_events()
             elif (
                 response.status_code < 400
