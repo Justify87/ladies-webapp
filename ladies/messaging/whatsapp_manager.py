@@ -55,8 +55,13 @@ class BaileysWorkerManager:
         state = str(state or "ERROR").upper()
         if state not in ALLOWED_STATES:
             state, detail = "ERROR", "Unbekannter Worker-Zustand"
+        previous = self.state
         self.state = state
         self.detail = detail
+        if state in {"ERROR", "LOGGED_OUT"}:
+            LOGGER.warning("WhatsApp state %s -> %s detail=%s", previous, state, detail or "-")
+        elif state == "CONNECTED" and previous != state:
+            LOGGER.info("WhatsApp connected")
         self.event_handler({"type": "connection", "state": state, "detail": detail})
 
     def dependency_status(self) -> tuple[bool, str | None]:
@@ -157,11 +162,29 @@ class BaileysWorkerManager:
     def _safe_worker_log(line: str) -> str:
         return re.sub(r"(?<!\d)(\d{3})\d{4,}(\d{4})(?!\d)", r"\1******\2", line)[:1200]
 
+    @staticmethod
+    def _worker_log_level(line: str) -> tuple[int, str]:
+        """Map Pino's numeric severity instead of promoting every worker line to INFO."""
+        safe = BaileysWorkerManager._safe_worker_log(line)
+        try:
+            payload = json.loads(line)
+            level = int(payload.get("level") or 0)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return logging.WARNING, safe
+        if level >= 60:
+            return logging.CRITICAL, safe
+        if level >= 50:
+            return logging.ERROR, safe
+        if level >= 40:
+            return logging.WARNING, safe
+        return logging.DEBUG, safe
+
     def _read_stderr(self, proc: subprocess.Popen[str]) -> None:
         if not proc.stderr:
             return
         for line in proc.stderr:
-            LOGGER.info("baileys: %s", self._safe_worker_log(line.rstrip()))
+            level, safe = self._worker_log_level(line.rstrip())
+            LOGGER.log(level, "baileys: %s", safe)
 
     def _watch(self, proc: subprocess.Popen[str]) -> None:
         code = proc.wait()
@@ -189,8 +212,13 @@ class BaileysWorkerManager:
         elif event_type == "connection":
             state = str(event.get("state") or "").upper()
             if state in ALLOWED_STATES:
+                previous = self.state
                 self.state = state
                 self.detail = event.get("detail")
+                if state in {"ERROR", "LOGGED_OUT"}:
+                    LOGGER.warning("WhatsApp state %s -> %s detail=%s", previous, state, self.detail or "-")
+                elif state == "CONNECTED" and previous != state:
+                    LOGGER.info("WhatsApp connected")
             if state == "CONNECTED":
                 self._restart_attempt = 0
                 self.qr = None

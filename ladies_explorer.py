@@ -124,8 +124,6 @@ def ensure_python_environment() -> None:
         subprocess.run([str(python), "-m", "pip", "install", "-e", str(SCRIPT_DIR)], check=True)
         _reexec(python, [str(Path(__file__).resolve()), *sys.argv[1:]])
 
-    # An editable install may add .pth/import mappings that only become visible
-    # to a newly started interpreter. Always re-exec after an actual repair.
     if os.environ.get(BOOTSTRAP_MARKER) == "1":
         raise RuntimeError("Python-Abhängigkeiten sind nach der automatischen Reparatur weiterhin unvollständig")
 
@@ -250,16 +248,18 @@ def migrate_legacy_paths() -> None:
 
 def configure_logging(log_path: Path) -> logging.Logger:
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    requested_level = str(os.environ.get("LADIES_LOG_LEVEL") or "WARNING").upper()
+    file_level = getattr(logging, requested_level, logging.WARNING)
     logger = logging.getLogger("ladies_explorer")
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.DEBUG if file_level <= logging.DEBUG else logging.INFO)
     logger.propagate = False
     if not logger.handlers:
         formatter = logging.Formatter(
             "%(asctime)s %(levelname)-8s %(name)s [%(threadName)s] %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
-        file_handler = RotatingFileHandler(log_path, maxBytes=10_000_000, backupCount=7, encoding="utf-8")
-        file_handler.setLevel(logging.DEBUG)
+        file_handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+        file_handler.setLevel(file_level)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
         console = logging.StreamHandler()
@@ -273,7 +273,12 @@ def configure_logging(log_path: Path) -> logging.Logger:
         logger.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_tb))
 
     sys.excepthook = _uncaught
-    logger.info("Logging initialized file=%s python=%s", log_path.resolve(), sys.version.split()[0])
+    logger.info(
+        "Logging initialized file=%s file_level=%s python=%s",
+        log_path.resolve(),
+        logging.getLevelName(file_level),
+        sys.version.split()[0],
+    )
     return logger
 
 
@@ -318,7 +323,7 @@ def main() -> int:
     parser.add_argument("--profile-delay", type=float, default=2.0, help="Mindestabstand zwischen vollständigen Profilabrufen")
     parser.add_argument("--db", default=str(SCRIPT_DIR / "ladies.sqlite3"))
     parser.add_argument("--data-dir", default=str(SCRIPT_DIR / "ladies_data"))
-    parser.add_argument("--log", default=str(SCRIPT_DIR / "logs" / "ladies_explorer.log"), help="Debug-Logdatei")
+    parser.add_argument("--log", default=str(SCRIPT_DIR / "logs" / "ladies_explorer.log"), help="Warnungs-/Fehler-Logdatei")
     args = parser.parse_args()
 
     logger = configure_logging(Path(args.log))
@@ -341,7 +346,7 @@ def main() -> int:
     print(f"Ladies Explorer V{VERSION}")
     print(f"Datenbank: {Path(args.db).resolve()}")
     print(f"Archiv:    {Path(args.data_dir).resolve()}")
-    print(f"Debug-Log: {Path(args.log).resolve()}")
+    print(f"Log:       {Path(args.log).resolve()} (Standard: WARNING+, Debug via LADIES_LOG_LEVEL=DEBUG)")
     print(f"Lokal:     http://127.0.0.1:{args.port}")
     if args.host in {"0.0.0.0", "::"}:
         token = app.config.get("LAN_ACCESS_TOKEN")

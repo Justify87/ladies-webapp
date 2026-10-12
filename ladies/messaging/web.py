@@ -3,14 +3,17 @@ from __future__ import annotations
 import base64
 import io
 import json
+import logging
 import queue
 
 import qrcode
 from flask import Response, jsonify, request, stream_with_context
 
-from ladies_v9.models import Person, PersonUserState
+from ladies_v9.models import Person, PersonUserState, utcnow
 from .models import ContactEndpoint
 from . import MessagingService
+
+LOGGER = logging.getLogger("ladies_explorer.messaging.web")
 
 
 def _qr_data_uri(value: str) -> str:
@@ -81,6 +84,62 @@ def install_messaging(app, *, db_path, data_dir) -> MessagingService:
             return jsonify(service.person_summary(person_id, listing_id))
         except KeyError:
             return jsonify(error="Person nicht gefunden"), 404
+
+    @app.get("/api/messaging/endpoints/<int:endpoint_id>/probe")
+    def messaging_endpoint_probe(endpoint_id: int):
+        """Check registration and profile picture without turning probe failures into send failures."""
+        with service.database.session() as db:
+            endpoint = db.get(ContactEndpoint, endpoint_id)
+            if endpoint is None:
+                return jsonify(error="Endpoint nicht gefunden"), 404
+            base = {
+                "endpoint_id": endpoint.endpoint_id,
+                "display_phone": endpoint.display_phone,
+                "normalized_phone": endpoint.normalized_phone,
+                "exists": None,
+                "profile_picture_url": None,
+                "detail": "not_connected",
+            }
+            if endpoint.state != "ACTIVE":
+                base["detail"] = "identity_conflict"
+                return jsonify(base)
+            normalized_phone = endpoint.normalized_phone
+
+        if service.worker.state != "CONNECTED":
+            return jsonify(base)
+        if not normalized_phone:
+            base["detail"] = "phone_unknown"
+            return jsonify(base)
+
+        jid = normalized_phone.lstrip("+") + "@s.whatsapp.net"
+        try:
+            event = service.worker.command(
+                "contact_info",
+                jid=jid,
+                include_profile_picture=True,
+                timeout=12,
+            )
+            payload = event.get("payload") or {}
+            base.update({
+                "exists": payload.get("exists"),
+                "profile_picture_url": payload.get("profile_picture_url"),
+                "detail": payload.get("detail") or "unknown",
+            })
+            provider_address = payload.get("jid")
+            if payload.get("exists") is True and provider_address:
+                with service.database.session() as db:
+                    endpoint = db.get(ContactEndpoint, endpoint_id)
+                    if endpoint is not None and endpoint.state == "ACTIVE":
+                        endpoint.provider_address = str(provider_address)
+                        endpoint.last_seen_at = utcnow()
+                        endpoint.updated_at = utcnow()
+            return jsonify(base)
+        except Exception as exc:
+            # A profile/contact query is supplementary. Keep history usable and let
+            # the actual send path report a hard error if sending is impossible.
+            LOGGER.warning("WhatsApp contact probe failed endpoint_id=%s error=%s", endpoint_id, exc)
+            base["detail"] = "probe_failed"
+            return jsonify(base)
 
     @app.post("/api/messaging/threads/<int:thread_id>/messages")
     def messaging_send(thread_id: int):
