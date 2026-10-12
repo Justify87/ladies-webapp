@@ -4,10 +4,10 @@ import logging
 import time
 import uuid
 from pathlib import Path
-from typing import Any
 
 from flask import Flask, Response, g, jsonify, render_template, request, send_from_directory, stream_with_context
 
+from .core.repositories import RepositoryBundle
 from .core.services import ProfileService, SearchService
 from .database import Database
 from .errors import ExternalServiceError, NotFoundError, ValidationError, install_error_handlers
@@ -35,15 +35,17 @@ def create_app(
     install_error_handlers(app)
     database = Database(db_path)
     archive = ArchiveManager(data_dir)
-    repo = Repository(database, archive)
+    store = Repository(database, archive)
+    repos = RepositoryBundle.from_store(store)
     http = build_session()
     limiter = FixedRateLimiter(profile_delay)
     status_limiter = BatchRateLimiter(batch_size=3, pause_seconds=0.8)
-    search_service = SearchService(repo, http, default_city=default_city, default_radius=default_radius)
-    profile_service = ProfileService(repo, http, limiter)
+    search_service = SearchService(repos.search, http, default_city=default_city, default_radius=default_radius)
+    profile_service = ProfileService(repos.persons, http, limiter)
     app.extensions["ladies_database"] = database
     app.extensions["ladies_archive"] = archive
-    app.extensions["ladies_repository"] = repo
+    app.extensions["ladies_repositories"] = repos
+    app.extensions["ladies_repository_store"] = store
     app.extensions["ladies_http"] = http
     LOGGER.info(
         "Web app initialized db=%s data_dir=%s default_city=%s default_radius=%s",
@@ -57,7 +59,6 @@ def create_app(
     def log_request_start():
         g.request_started = time.monotonic()
         g.request_id = uuid.uuid4().hex[:10]
-        # Query strings may contain remote media URLs or other personal data.
         LOGGER.debug("REQ id=%s method=%s path=%s", g.request_id, request.method, request.path)
 
     @app.after_request
@@ -67,11 +68,7 @@ def create_app(
         LOGGER.log(
             level,
             "RESP id=%s method=%s path=%s status=%s elapsed_ms=%.1f",
-            getattr(g, "request_id", "-"),
-            request.method,
-            request.path,
-            response.status_code,
-            elapsed_ms,
+            getattr(g, "request_id", "-"), request.method, request.path, response.status_code, elapsed_ms,
         )
         response.headers.setdefault("X-Request-ID", getattr(g, "request_id", "-"))
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -83,12 +80,7 @@ def create_app(
     @app.teardown_request
     def log_request_teardown(exc):
         if exc is not None:
-            LOGGER.exception(
-                "REQUEST exception id=%s path=%s",
-                getattr(g, "request_id", "-"),
-                request.path,
-                exc_info=exc,
-            )
+            LOGGER.exception("REQUEST exception id=%s path=%s", getattr(g, "request_id", "-"), request.path, exc_info=exc)
 
     @app.get("/")
     def index():
@@ -100,26 +92,26 @@ def create_app(
 
     @app.get("/api/dashboard")
     def api_dashboard():
-        return jsonify(repo.dashboard())
+        return jsonify(repos.history.dashboard())
 
     @app.get("/api/history/relistings")
     def api_history_relistings():
         limit = read_int(request.args, "limit", default=100, minimum=1, maximum=500)
-        return jsonify(items=repo.history_relistings(limit))
+        return jsonify(items=repos.history.relistings(limit))
 
     @app.get("/api/history/changes")
     def api_history_changes():
         limit = read_int(request.args, "limit", default=100, minimum=1, maximum=500)
-        return jsonify(items=repo.history_changes(limit))
+        return jsonify(items=repos.history.changes(limit))
 
     @app.get("/api/recent-searches")
     def api_recent_searches():
         limit = read_int(request.args, "limit", default=8, minimum=1, maximum=100)
-        return jsonify(items=repo.recent_searches(limit))
+        return jsonify(items=repos.search.recent_searches(limit))
 
     @app.get("/api/storage")
     def api_storage():
-        return jsonify(repo.storage_info())
+        return jsonify(repos.archive.storage_info())
 
     @app.get("/api/archive/media")
     def api_archive_media():
@@ -127,11 +119,11 @@ def create_app(
         if kind not in {None, "IMAGE", "VIDEO"}:
             raise ValidationError("kind muss IMAGE oder VIDEO sein")
         limit = read_int(request.args, "limit", default=80, minimum=1, maximum=500)
-        return jsonify(items=repo.archive_items(kind=kind, limit=limit))
+        return jsonify(items=repos.archive.items(kind=kind, limit=limit))
 
     @app.delete("/api/visual-analysis")
     def api_clear_visual_analysis():
-        return jsonify(deleted=repo.clear_visual_analyses())
+        return jsonify(deleted=repos.archive.clear_visual_analyses())
 
     @app.route("/api/settings", methods=["GET", "POST"])
     def api_settings():
@@ -141,10 +133,10 @@ def create_app(
             if not key:
                 raise ValidationError("key fehlt")
             try:
-                return jsonify(settings=repo.set_setting(key, payload.get("value")))
+                return jsonify(settings=repos.settings.set(key, payload.get("value")))
             except ValueError as exc:
                 raise ValidationError(str(exc)) from exc
-        return jsonify(settings=repo.settings())
+        return jsonify(settings=repos.settings.get_all())
 
     @app.post("/api/search")
     def api_search():
@@ -157,28 +149,28 @@ def create_app(
     @app.get("/api/snapshot/<int:snapshot_id>")
     def api_snapshot(snapshot_id: int):
         try:
-            return jsonify(repo.snapshot_detail(snapshot_id))
+            return jsonify(repos.history.snapshot_detail(snapshot_id))
         except KeyError as exc:
             raise NotFoundError("Snapshot nicht gefunden") from exc
 
     @app.get("/api/listing/<advert_id>")
     def api_listing(advert_id: str):
         try:
-            return jsonify(repo.listing_detail(advert_id))
+            return jsonify(repos.persons.listing_detail(advert_id))
         except KeyError as exc:
             raise NotFoundError("Anzeige nicht gefunden") from exc
 
     @app.get("/api/person/<int:person_id>")
     def api_person(person_id: int):
         try:
-            return jsonify(repo.person_detail(person_id))
+            return jsonify(repos.persons.person_detail(person_id))
         except KeyError as exc:
             raise NotFoundError("Person nicht gefunden") from exc
 
     @app.post("/api/person/<int:person_id>/state")
     def api_person_state(person_id: int):
         try:
-            return jsonify(user_state=repo.set_user_state(person_id, request.get_json(silent=True) or {}))
+            return jsonify(user_state=repos.persons.set_user_state(person_id, request.get_json(silent=True) or {}))
         except KeyError as exc:
             raise NotFoundError("Person nicht gefunden") from exc
         except ValueError as exc:
@@ -187,7 +179,7 @@ def create_app(
     @app.post("/api/person/<int:person_id>/prices")
     def api_person_prices(person_id: int):
         try:
-            return jsonify(price_list=repo.add_price_list(person_id, request.get_json(silent=True) or {}))
+            return jsonify(price_list=repos.persons.add_price_list(person_id, request.get_json(silent=True) or {}))
         except KeyError as exc:
             raise NotFoundError("Person nicht gefunden") from exc
         except (ValueError, TypeError) as exc:
@@ -196,7 +188,7 @@ def create_app(
     @app.post("/api/person/<int:person_id>/encounters")
     def api_person_encounters(person_id: int):
         try:
-            return jsonify(encounter=repo.add_encounter(person_id, request.get_json(silent=True) or {}))
+            return jsonify(encounter=repos.persons.add_encounter(person_id, request.get_json(silent=True) or {}))
         except KeyError as exc:
             raise NotFoundError("Person nicht gefunden") from exc
         except (ValueError, TypeError) as exc:
@@ -205,7 +197,7 @@ def create_app(
     @app.put("/api/person/<int:person_id>/encounters/<int:encounter_id>")
     def api_person_encounter_update(person_id: int, encounter_id: int):
         try:
-            return jsonify(encounter=repo.update_encounter(person_id, encounter_id, request.get_json(silent=True) or {}))
+            return jsonify(encounter=repos.persons.update_encounter(person_id, encounter_id, request.get_json(silent=True) or {}))
         except KeyError as exc:
             raise NotFoundError("Treffen nicht gefunden") from exc
         except (ValueError, TypeError) as exc:
@@ -213,15 +205,15 @@ def create_app(
 
     @app.get("/api/lists/<tab>")
     def api_lists(tab: str):
-        return jsonify(items=repo.lists(tab))
+        return jsonify(items=repos.persons.lists(tab))
 
     @app.get("/api/status-targets")
     def api_status_targets():
-        return jsonify(items=repo.status_targets())
+        return jsonify(items=repos.persons.status_targets())
 
     @app.post("/api/profile-status/<advert_id>")
     def api_profile_status(advert_id: str):
-        target = repo.listing_target(advert_id)
+        target = repos.persons.listing_target(advert_id)
         if not target:
             raise NotFoundError("Anzeige nicht gefunden")
         url = safe_profile_url(target.get("current_url") or "")
@@ -230,27 +222,17 @@ def create_app(
         try:
             LOGGER.info("Status check start advert_id=%s", advert_id)
             status_limiter.wait()
-            upstream = http_get(
-                http,
-                url,
-                context=f"status-{advert_id}",
-                expected_statuses=(200, 404, 410),
-            )
+            upstream = http_get(http, url, context=f"status-{advert_id}", expected_statuses=(200, 404, 410))
             if upstream.status_code in {404, 410}:
-                return jsonify(repo.update_listing_status(advert_id, status="UNAVAILABLE", http_status=upstream.status_code))
+                return jsonify(repos.persons.update_listing_status(advert_id, status="UNAVAILABLE", http_status=upstream.status_code))
             upstream.raise_for_status()
             match = ADVERT_ID_RE.search(upstream.text)
             returned_id = match.group(1) if match else None
             if returned_id == advert_id:
-                return jsonify(repo.update_listing_status(advert_id, status="ACTIVE", http_status=200))
-            return jsonify(
-                repo.update_listing_status(
-                    advert_id,
-                    status="UNKNOWN",
-                    http_status=200,
-                    details={"returned_id": returned_id},
-                )
-            )
+                return jsonify(repos.persons.update_listing_status(advert_id, status="ACTIVE", http_status=200))
+            return jsonify(repos.persons.update_listing_status(
+                advert_id, status="UNKNOWN", http_status=200, details={"returned_id": returned_id}
+            ))
         except Exception as exc:
             LOGGER.exception("Status check failed advert_id=%s", advert_id)
             raise ExternalServiceError("Profilstatus konnte nicht geprüft werden.") from exc
@@ -261,7 +243,7 @@ def create_app(
         try:
             source_person_id = read_int(data, "source_person_id", minimum=1)
             target_person_id = read_int(data, "target_person_id", minimum=1)
-            return jsonify(repo.merge_persons(source_person_id, target_person_id))
+            return jsonify(repos.persons.merge_persons(source_person_id, target_person_id))
         except ValidationError:
             raise
         except (ValueError, KeyError) as exc:
@@ -271,14 +253,14 @@ def create_app(
     @app.post("/api/listing-id/<int:listing_id>/split")
     def api_listing_split(listing_id: int):
         try:
-            return jsonify(repo.split_listing(listing_id))
+            return jsonify(repos.persons.split_listing(listing_id))
         except KeyError as exc:
             raise NotFoundError("Listing nicht gefunden") from exc
 
     @app.post("/api/media/<int:media_asset_id>/visual-analysis")
     def api_visual_analysis(media_asset_id: int):
         try:
-            return jsonify(result=repo.save_visual_analysis(media_asset_id, request.get_json(silent=True) or {}))
+            return jsonify(result=repos.archive.save_visual_analysis(media_asset_id, request.get_json(silent=True) or {}))
         except KeyError as exc:
             raise NotFoundError("Media asset nicht gefunden") from exc
 
