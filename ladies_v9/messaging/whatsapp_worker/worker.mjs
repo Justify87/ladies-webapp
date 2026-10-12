@@ -26,6 +26,7 @@ let connecting = null
 
 const emit = (event) => process.stdout.write(`${JSON.stringify(event)}\n`)
 const reply = (id, ok, payload = null, message = null) => emit({ type: 'response', id, ok, payload, message })
+const isPhoneJid = jid => typeof jid === 'string' && jid.endsWith('@s.whatsapp.net')
 
 function statusCode(error) {
   try { return new Boom(error).output.statusCode } catch { return undefined }
@@ -82,6 +83,25 @@ function mapReceiptStatus(value) {
   return null
 }
 
+async function resolveTargetJid(current, jid) {
+  if (!isPhoneJid(jid)) return jid
+  try {
+    const mapping = current.signalRepository?.lidMapping
+    const lid = mapping?.getLIDForPN ? await mapping.getLIDForPN(jid) : null
+    return lid || jid
+  } catch (error) {
+    logger.debug({ err: error?.message || String(error) }, 'PN to LID lookup failed')
+    return jid
+  }
+}
+
+function directMessageAddresses(key) {
+  const primary = key?.remoteJid || null
+  const alternate = key?.remoteJidAlt || null
+  const phoneJid = isPhoneJid(primary) ? primary : (isPhoneJid(alternate) ? alternate : null)
+  return { primary, phoneJid }
+}
+
 async function connect() {
   if (stopped) return
   if (connecting) return connecting
@@ -135,7 +155,7 @@ async function connect() {
     current.ev.on('messages.upsert', async event => {
       if (event.type !== 'notify') return
       for (const msg of event.messages || []) {
-        const jid = msg.key?.remoteJid
+        const { primary: jid, phoneJid } = directMessageAddresses(msg.key)
         if (!jid || jid === 'status@broadcast' || jid.endsWith('@g.us')) continue
         const media = await messageMediaWithBytes(current, msg)
         emit({
@@ -143,6 +163,7 @@ async function connect() {
           payload: {
             provider_message_id: msg.key?.id || null,
             jid,
+            phone_jid: phoneJid,
             from_me: Boolean(msg.key?.fromMe),
             timestamp: Number(msg.messageTimestamp || Math.floor(Date.now() / 1000)),
             message_type: messageType(msg.message),
@@ -193,20 +214,25 @@ async function handle(command) {
       case 'send_text': {
         if (!sock) await connect()
         if (!sock) throw new Error('WhatsApp ist nicht verbunden')
-        const sent = await sock.sendMessage(command.jid, { text: String(command.text || '') })
-        reply(id, true, { provider_message_id: sent?.key?.id || null })
+        const target = await resolveTargetJid(sock, command.jid)
+        const sent = await sock.sendMessage(target, { text: String(command.text || '') })
+        reply(id, true, { provider_message_id: sent?.key?.id || null, provider_address: target })
         break
       }
-      case 'presence':
+      case 'presence': {
         if (!sock) throw new Error('WhatsApp ist nicht verbunden')
-        await sock.sendPresenceUpdate(command.state, command.jid)
-        reply(id, true)
+        const target = await resolveTargetJid(sock, command.jid)
+        await sock.sendPresenceUpdate(command.state, target)
+        reply(id, true, { provider_address: target })
         break
-      case 'subscribe_presence':
+      }
+      case 'subscribe_presence': {
         if (!sock) throw new Error('WhatsApp ist nicht verbunden')
-        await sock.presenceSubscribe(command.jid)
-        reply(id, true)
+        const target = await resolveTargetJid(sock, command.jid)
+        await sock.presenceSubscribe(target)
+        reply(id, true, { provider_address: target })
         break
+      }
       case 'disconnect':
         manualDisconnect = true
         if (sock) sock.end(new Error('Ladies disconnect'))
