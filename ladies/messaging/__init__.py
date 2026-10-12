@@ -1,20 +1,18 @@
 from __future__ import annotations
 
-import json
 import logging
-import os
 import sys
-import threading
-from pathlib import Path
 
 from sqlalchemy import desc, func, select
 
 from ladies_v9.models import PersonUserState
+from .history_cache import RecentHistoryCache
 from .models import ChatMessage, ChatThread, ContactEndpoint
 from .service import jid_phone
 from . import service_runtime as _service_runtime
 
-# Keep legacy import paths working while all physical source paths remain neutral.
+# Temporary compatibility until the canonical messaging service replaces the
+# historical runtime/complete/reviewfix stack later in this refactor.
 sys.modules.setdefault(__name__ + ".service_v92", _service_runtime)
 
 from . import service_reviewfix as _service_reviewfix
@@ -25,15 +23,10 @@ REHYDRATE_LIMIT = 10
 
 
 class MessagingService(_service_reviewfix.MessagingService):
-    """Current messaging service plus user-facing thread visibility rules."""
+    """Current messaging service plus thread visibility and recent rehydration."""
 
     def __init__(self, db_path, data_dir):
-        # The small sidecar deliberately lives with the WhatsApp session rather
-        # than inside the replaceable application DB.  It only retains the last
-        # ten already-observed messages per address and therefore lets a fresh DB
-        # recover a little conversation context after a profile is liked.
-        self._rehydrate_cache_path = Path(data_dir) / "whatsapp" / "recent-history.json"
-        self._rehydrate_cache_lock = threading.RLock()
+        self.history_cache = RecentHistoryCache(data_dir, limit=REHYDRATE_LIMIT)
         super().__init__(db_path, data_dir)
 
     def subscribe_presence(self, thread_id: int) -> None:
@@ -44,123 +37,13 @@ class MessagingService(_service_reviewfix.MessagingService):
             return
         return super().subscribe_presence(thread_id)
 
-    @staticmethod
-    def _history_payload_keys(payload: dict) -> list[str]:
-        provider_key = payload.get("provider_key") if isinstance(payload.get("provider_key"), dict) else {}
-        candidates = [
-            payload.get("phone_jid"),
-            payload.get("jid"),
-            provider_key.get("remoteJidAlt"),
-            provider_key.get("remoteJid"),
-        ]
-        keys: list[str] = []
-        for raw in candidates:
-            value = str(raw or "").strip()
-            if not value:
-                continue
-            if value.endswith("@s.whatsapp.net"):
-                phone = jid_phone(value)
-                if phone:
-                    key = f"phone:{phone}"
-                    if key not in keys:
-                        keys.append(key)
-            key = f"jid:{value}"
-            if key not in keys:
-                keys.append(key)
-        return keys
-
-    @staticmethod
-    def _history_endpoint_keys(endpoint: ContactEndpoint) -> list[str]:
-        keys: list[str] = []
-        if endpoint.normalized_phone:
-            keys.append(f"phone:{endpoint.normalized_phone}")
-            keys.append(f"jid:{endpoint.normalized_phone.lstrip('+')}@s.whatsapp.net")
-        if endpoint.provider_address:
-            keys.append(f"jid:{endpoint.provider_address}")
-            if endpoint.provider_address.endswith("@s.whatsapp.net"):
-                phone = jid_phone(endpoint.provider_address)
-                if phone:
-                    keys.append(f"phone:{phone}")
-        return list(dict.fromkeys(keys))
-
-    def _read_history_cache_unlocked(self) -> dict:
-        try:
-            data = json.loads(self._rehydrate_cache_path.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and isinstance(data.get("conversations"), dict):
-                return data
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            pass
-        return {"version": 1, "conversations": {}}
-
-    def _write_history_cache_unlocked(self, data: dict) -> None:
-        self._rehydrate_cache_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self._rehydrate_cache_path.with_name(
-            f".{self._rehydrate_cache_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
-        )
-        temporary.write_text(
-            json.dumps(data, ensure_ascii=False, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        try:
-            os.chmod(temporary, 0o600)
-        except OSError:
-            pass
-        os.replace(temporary, self._rehydrate_cache_path)
-        try:
-            os.chmod(self._rehydrate_cache_path, 0o600)
-        except OSError:
-            pass
-
-    @staticmethod
-    def _clean_history_payload(payload: dict) -> dict:
-        clean = dict(payload)
-        clean.pop("rehydrated", None)
-        media = clean.get("media")
-        if isinstance(media, dict):
-            clean["media"] = {key: value for key, value in media.items() if key != "data_base64"}
-        return clean
-
+    # Keep these tiny adapters during the staged refactor so callers/tests that
+    # exercise message ingest do not need to know how the cache is persisted.
     def _cache_history_payloads(self, payloads) -> None:
-        usable = [
-            self._clean_history_payload(payload)
-            for payload in payloads
-            if isinstance(payload, dict) and payload.get("provider_message_id")
-        ]
-        if not usable:
-            return
-        with self._rehydrate_cache_lock:
-            data = self._read_history_cache_unlocked()
-            conversations = data.setdefault("conversations", {})
-            changed = False
-            for payload in usable:
-                provider_id = str(payload["provider_message_id"])
-                for key in self._history_payload_keys(payload):
-                    rows = conversations.get(key)
-                    if not isinstance(rows, list):
-                        rows = []
-                    rows = [row for row in rows if isinstance(row, dict) and str(row.get("provider_message_id")) != provider_id]
-                    rows.append(payload)
-                    rows.sort(key=lambda row: (float(row.get("timestamp") or 0), str(row.get("provider_message_id") or "")))
-                    conversations[key] = rows[-REHYDRATE_LIMIT:]
-                    changed = True
-            if changed:
-                self._write_history_cache_unlocked(data)
+        self.history_cache.store(payloads)
 
     def _cached_history_for_endpoint(self, endpoint: ContactEndpoint) -> list[dict]:
-        with self._rehydrate_cache_lock:
-            data = self._read_history_cache_unlocked()
-        conversations = data.get("conversations") or {}
-        by_id: dict[str, dict] = {}
-        for key in self._history_endpoint_keys(endpoint):
-            for payload in conversations.get(key) or []:
-                if not isinstance(payload, dict) or not payload.get("provider_message_id"):
-                    continue
-                by_id[str(payload["provider_message_id"])] = payload
-        return sorted(
-            by_id.values(),
-            key=lambda row: (float(row.get("timestamp") or 0), str(row.get("provider_message_id") or "")),
-            reverse=True,
-        )
+        return self.history_cache.for_endpoint(endpoint)
 
     def _person_message_count(self, person_id: int) -> int:
         with self.database.session() as db:
@@ -185,7 +68,7 @@ class MessagingService(_service_reviewfix.MessagingService):
         self._cache_history_payloads([payload])
         super()._ingest_message(payload)
 
-        # Restored history is context, not unread activity.  The runtime ingest
+        # Restored history is context, not unread activity. The runtime ingest
         # path intentionally remains shared with live messages, so correct the
         # unread counter only for a genuinely inserted historical inbound item.
         if payload.get("rehydrated") and not payload.get("from_me") and provider_id and not existed:
@@ -211,9 +94,9 @@ class MessagingService(_service_reviewfix.MessagingService):
     def rehydrate_recent_history(self, person_id: int, limit: int = REHYDRATE_LIMIT) -> dict:
         """Best-effort recovery of recent context after the replaceable DB was reset.
 
-        The persisted WhatsApp sidecar is replayed first.  If fewer than ``limit``
+        The persisted WhatsApp sidecar is replayed first. If fewer than ``limit``
         messages are available and an anchor exists, Baileys is asked for a small
-        ON_DEMAND history sync.  ``syncFullHistory`` stays disabled.
+        ON_DEMAND history sync. ``syncFullHistory`` stays disabled.
         """
         person_id = int(person_id)
         limit = max(1, min(REHYDRATE_LIMIT, int(limit)))
@@ -252,7 +135,11 @@ class MessagingService(_service_reviewfix.MessagingService):
             if not missing or self.worker.state != "CONNECTED":
                 continue
 
-            anchor = next((row for row in reversed(cached) if isinstance(row.get("provider_key"), dict) and row["provider_key"].get("id")), None)
+            anchor = next((
+                row for row in reversed(cached)
+                if isinstance(row.get("provider_key"), dict)
+                and row["provider_key"].get("id")
+            ), None)
             if anchor is None:
                 continue
             jid = endpoint.provider_address
@@ -274,10 +161,14 @@ class MessagingService(_service_reviewfix.MessagingService):
                 )
                 requested += missing
             except Exception as exc:
-                # WhatsApp currently does not guarantee an ON_DEMAND response for
-                # every linked-device session.  A failed request must never make
-                # liking a profile fail or remove the cached messages already restored.
-                LOGGER.info("Recent WhatsApp history request skipped person_id=%s endpoint_id=%s: %s", person_id, endpoint.endpoint_id, exc)
+                # WhatsApp does not guarantee an ON_DEMAND response for every
+                # linked-device session. Cached restoration remains successful.
+                LOGGER.info(
+                    "Recent WhatsApp history request skipped person_id=%s endpoint_id=%s: %s",
+                    person_id,
+                    endpoint.endpoint_id,
+                    exc,
+                )
 
         return {
             "person_id": person_id,
@@ -308,9 +199,6 @@ class MessagingService(_service_reviewfix.MessagingService):
                     .order_by(desc(ChatMessage.timestamp), desc(ChatMessage.message_id))
                     .limit(1)
                 )
-                # Only empty placeholder threads stay hidden. Any real 1:1
-                # conversation belongs in the inbox, including a neutral person
-                # who has written first and has not yet been liked/favorited.
                 if last is None:
                     continue
                 if filter_name == "UNREAD" and not thread.unread_count:
@@ -322,8 +210,6 @@ class MessagingService(_service_reviewfix.MessagingService):
                 payload["preference"] = state.preference if state else None
                 out.append(payload)
 
-            # Keep newest-message order inside each stable group while pinning
-            # favorites first, then likes, then neutral conversations.
             out.sort(key=lambda item: (
                 0 if item.get("favorite") else 1,
                 0 if item.get("preference") == "LIKE" else 1,
