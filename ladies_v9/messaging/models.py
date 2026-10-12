@@ -10,6 +10,7 @@ class ContactEndpoint(Base):
     __tablename__ = "contact_endpoints"
     __table_args__ = (
         UniqueConstraint("provider", "normalized_phone", name="uq_contact_endpoint_provider_phone"),
+        UniqueConstraint("provider", "provider_address", name="uq_contact_endpoint_provider_address"),
         Index("idx_contact_endpoint_person", "person_id"),
     )
     endpoint_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -18,7 +19,9 @@ class ContactEndpoint(Base):
     # messaging move endpoints/threads losslessly to the canonical target person.
     person_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     provider: Mapped[str] = mapped_column(String(24), default="WHATSAPP", nullable=False)
-    normalized_phone: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Baileys 7 may deliver a LID without exposing a phone-number JID. A concrete
+    # WhatsApp endpoint can therefore exist before normalized_phone is known.
+    normalized_phone: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     display_phone: Mapped[Optional[str]] = mapped_column(String(128))
     provider_address: Mapped[Optional[str]] = mapped_column(String(256))
     source_listing_id: Mapped[Optional[int]] = mapped_column(ForeignKey("listings.listing_id", ondelete="SET NULL"))
