@@ -175,6 +175,9 @@ class CompleteMessagingTests(unittest.TestCase):
         self.assertEqual(payload["media_type"], "IMAGE")
 
     def test_view_once_incoming_can_only_be_revealed_once(self):
+        # Legacy V9.3-preview view-once files may still live in the normal media
+        # directory. The hardened path must consume them once, return a private
+        # file handle, and delete the original file immediately afterwards.
         media = self.service.media_dir / "once.jpg"
         media.write_bytes(b"once")
         message_id = self._incoming(
@@ -184,14 +187,19 @@ class CompleteMessagingTests(unittest.TestCase):
             media={"archive_name": media.name, "mime_type": "image/jpeg", "local_url": "/archive/whatsapp/media/once.jpg"},
             view_once=True,
         )
-        path, mime = self.service.view_once_path(message_id)
-        self.assertEqual(path, media.resolve())
+        handle, mime = self.service.view_once_path(message_id)
+        try:
+            self.assertEqual(handle.read(), b"once")
+        finally:
+            handle.close()
         self.assertEqual(mime, "image/jpeg")
+        self.assertFalse(media.exists())
         with self.assertRaises(RuntimeError):
             self.service.view_once_path(message_id)
         payload = self.service.message(message_id)
         self.assertTrue(payload["view_once_consumed"])
         self.assertNotIn("local_url", payload.get("media") or {})
+        self.assertNotIn("archive_name", payload.get("media") or {})
 
     def test_edit_and_delete_own_text_message(self):
         sent = self.service.send_text(self.thread_id, "Alt")
