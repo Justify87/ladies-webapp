@@ -28,6 +28,16 @@ SAFE_INLINE_MIMES = {
     "audio/mpeg",
     "audio/mp4",
 }
+LEGACY_MEDIA_PREFIX = "/archive/whatsapp/media/"
+
+
+def _archive_name(media: dict[str, Any]) -> str:
+    raw = str(media.get("archive_name") or "")
+    if not raw:
+        local_url = str(media.get("local_url") or "")
+        if local_url.startswith(LEGACY_MEDIA_PREFIX):
+            raw = local_url[len(LEGACY_MEDIA_PREFIX):]
+    return Path(raw).name if raw else ""
 
 
 class MessagingService(CompleteMessagingService):
@@ -172,7 +182,7 @@ class MessagingService(CompleteMessagingService):
         )
 
     def _stored_media_path(self, message: ChatMessage, media: dict[str, Any]) -> Path:
-        name = Path(str(media.get("archive_name") or "")).name
+        name = _archive_name(media)
         if not name:
             raise FileNotFoundError(name)
         meta = message.extra
@@ -301,11 +311,11 @@ class MessagingService(CompleteMessagingService):
         payload.pop("provider_key", None)
         media = payload.get("media")
         if isinstance(media, dict):
-            had_archive = bool(media.get("archive_name"))
+            has_stored_file = bool(_archive_name(media))
             clean = dict(media)
             for key in ("archive_name", "sha256", "private_view_once", "local_url"):
                 clean.pop(key, None)
-            if not payload.get("view_once") and had_archive and not payload.get("deleted_at"):
+            if not payload.get("view_once") and has_stored_file and not payload.get("deleted_at"):
                 clean["local_url"] = f"/api/messaging/messages/{message.message_id}/media"
             payload["media"] = clean or None
         return payload
