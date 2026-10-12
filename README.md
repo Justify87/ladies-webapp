@@ -1,204 +1,122 @@
-# Ladies Explorer V9.2
+# Ladies Explorer
 
-Ladies Explorer ist eine lokale, mobile-first Web-App zur personenzentrierten Verwaltung von Ladies-Anzeigen, Identity-Evidence, Historie, Medien, Listen, Preisen und Treffen. V9.2 erweitert die bestehende V9.1-Anwendung additiv um einen integrierten personenbezogenen WhatsApp-Chat über Baileys.
+Lokale, mobile-first Web-App zum Durchsuchen, Wiedererkennen und Verwalten von Ladies-Profilen. Die Anwendung speichert Personen, Anzeigenhistorie, Medien, Likes/Favoriten und einen integrierten personenbezogenen WhatsApp-Chat lokal.
 
 ## Start
 
-Die Anwendung hat weiterhin genau **einen** normalen Startpunkt:
+Mit `uv`:
 
 ```bash
-pip install -r requirements_v9_1.txt
-python ladies_explorer_v9_1.py
+uv run python ladies_explorer.py --host 0.0.0.0
 ```
 
-Danach öffnest du `http://127.0.0.1:8765`.
-
-Für WhatsApp wird **Node.js 20 oder neuer** benötigt. Fehlt Node, startet Ladies Explorer trotzdem vollständig; nur **WhatsApp & Chat** ist nicht verfügbar. Die Worker-Abhängigkeiten werden intern aus dem committed `package-lock.json` reproduzierbar mit `npm ci` installiert. Es ist kein zweites Terminal und kein zweiter Server nötig.
-
-## Smartphone im Heimnetz
-
-Soll die lokale Web-App von einem Smartphone erreichbar sein, starte sie z. B. mit:
+Oder direkt mit Python:
 
 ```bash
-python ladies_explorer_v9_1.py --host 0.0.0.0
+python ladies_explorer.py --host 0.0.0.0
 ```
 
-Der Launcher zeigt dann eine **Heimnetz-Pairing-URL** an. Diese URL wird auf dem Smartphone einmal geöffnet; danach speichert der Browser ein lokales `HttpOnly`-/`SameSite=Strict`-Cookie. Nicht gekoppelte LAN-Geräte erhalten keinen Zugriff auf `/api/*` oder `/archive/*`. Localhost auf dem Rechner bleibt ohne Pairing nutzbar.
+Der Start ist selbstheilend ausgelegt. Die Anwendung prüft die verwendete Python-Umgebung sowie Node.js/npm und richtet fehlende Projekt-Abhängigkeiten automatisch ein.
 
-Das lokale Pairing-Secret liegt im Data-Directory unter `ladies_v9_data/lan_access_token` und wird nicht ins Repository eingecheckt.
+- `uv run` synchronisiert die Python-Abhängigkeiten aus `pyproject.toml`.
+- Bei direktem Start innerhalb einer Virtualenv werden fehlende Pakete genau in diese Python-Umgebung installiert.
+- Bei direktem Start mit einem System-Python wird das System nicht ungefragt verändert: vorhandenes `uv` wird benutzt, andernfalls wird lokal `.venv/` angelegt.
+- Eine kompatible vorhandene Node.js-/npm-Installation wird verwendet.
+- Fehlt Node.js oder ist die Version ungeeignet, wird eine projektlokale Node-Runtime unter `.runtime/` eingerichtet.
+- Die WhatsApp-Abhängigkeiten werden reproduzierbar mit `npm ci` aus dem committed `package-lock.json` installiert und nur bei geändertem Lockfile erneut synchronisiert.
 
-## WhatsApp einrichten
+Für den Zugriff vom Smartphone im selben WLAN gibt der Start mit `--host 0.0.0.0` eine einmalige Pairing-URL aus. Diese zuerst auf dem Smartphone öffnen.
 
-1. Ladies Explorer normal starten.
-2. **Mehr → Einstellungen → WhatsApp & Chat** öffnen.
-3. **WhatsApp verbinden** wählen.
-4. In WhatsApp **Verknüpfte Geräte → Gerät hinzufügen** öffnen und den QR-Code scannen.
-5. Bei späteren Starts wird eine vorhandene Session automatisch wieder verbunden.
+## Lokale Dateien
 
-Die WhatsApp-Session liegt ausschließlich lokal unter:
+Standardmäßig verwendet die App versionsneutrale Pfade:
+
+- Datenbank: `ladies.sqlite3`
+- Archiv und Laufzeitdaten: `ladies_data/`
+- Debug-Log: `logs/ladies_explorer.log`
+- lokale Python-Umgebung, falls benötigt: `.venv/`
+- lokale Node-Runtime, falls benötigt: `.runtime/`
+
+Beim ersten Start nach der Umstellung werden bestehende Standarddaten automatisch übernommen:
+
+- `ladies_v9.sqlite3` → `ladies.sqlite3`
+- `ladies_v9_data/` → `ladies_data/`
+
+Eigene Pfade über `--db` oder `--data-dir` bleiben möglich.
+
+## Projektstruktur
 
 ```text
-ladies_v9_data/whatsapp/auth/
+ladies_explorer.py            Startpunkt und Runtime-Bootstrap
+pyproject.toml                Python-Projekt und Abhängigkeiten
+requirements.txt              kompatible einfache Dependency-Liste
+ladies/                       Anwendung
+  app.py                      Flask-App-Integration
+  web.py                      Kern-Web/API
+  static/                     Frontend
+  templates/                  HTML
+  messaging/                  personenbezogener Chat
+    service.py                Messaging-Basis
+    service_runtime.py        WhatsApp-/Identity-Härtung
+    whatsapp_manager.py       Node-Worker-Verwaltung
+    whatsapp_worker/          Baileys-Worker + package-lock.json
+tests/                        Unit- und Regressionstests
 ```
 
-**Verbindung entfernen** invalidiert die WhatsApp-Session. Die lokale Ladies-Chat-Historie bleibt erhalten.
+Versionsnummern gehören zur Release-/UI-Version und nicht mehr in Datei- oder Ordnernamen.
 
-## Fachliches Chatmodell
+## Nachrichten
 
-WhatsApp ist nur der Transport. Die fachliche Identität bleibt die bestehende `Person`.
+Der normale Tab **Nachrichten** ist bewusst eine persönliche Kontaktliste und keine automatische Liste aller bekannten Telefonnummern.
+
+Eine bekannte Person erscheint dort nur, wenn:
+
+1. mindestens eine eigene ausgehende Nachricht für diese Person existiert und
+2. die Person Favorit oder Like ist.
+
+Favoriten werden zuerst angezeigt, danach kontaktierte Likes. Ein bloßes Like/Favorisieren oder das automatische Erkennen einer Telefonnummer erzeugt keinen sichtbaren Eintrag im normalen Nachrichten-Tab.
+
+Unbekannte eingehende WhatsApp-Kontakte werden weiterhin verlustfrei gespeichert und können intern einer Person zugeordnet werden; sie werden nicht mit der normalen persönlichen Nachrichtenliste vermischt.
+
+## Profilkontakt
+
+In der Profilübersicht gibt es nur noch die Hauptaktionen:
+
+- **Chat öffnen** – öffnet den integrierten personenbezogenen Chat; die aktuelle Telefonnummer wird im Klartext direkt an der Aktion angezeigt.
+- **Like**
+- **Favorit**
+
+Ein zusätzlicher Kontakt-/WhatsApp-Block am Ende des Profils wird nicht mehr sichtbar angezeigt. Der separate externe WhatsApp-Button entfällt.
+
+## WhatsApp-Integration
+
+WhatsApp läuft über einen internen Node-/Baileys-Worker. Der normale Startpunkt bleibt ausschließlich `ladies_explorer.py`; ein zweites Terminal oder ein zweiter HTTP-Server ist nicht nötig.
+
+Direkte Baileys-Abhängigkeit:
 
 ```text
-Person
-  ├─ Listings / Anzeigenhistorie
-  ├─ PersonIdentifier / Identity-Evidence
-  ├─ ContactEndpoint A (WhatsApp-Endpunkt)
-  ├─ ContactEndpoint B (spätere Nummer/LID)
-  └─ genau ein personenbezogener ChatThread
-       └─ ChatMessage ...
+@whiskeysockets/baileys@7.0.0-rc14
 ```
 
-Eine neue Telefonnummer erzeugt deshalb **keinen neuen Personenchat**, wenn die vorhandene V9-Identity-Logik sie derselben Person zuordnet. Alte Nachrichten behalten ihren ursprünglichen Endpunktbezug, solange Endpunkte nicht technisch als derselbe LID/PN-Kontakt zusammengeführt werden.
+Die Integration ist LID/PN-aware. `Person` bleibt die kanonische fachliche Identität; Telefonnummern/JIDs/LIDs sind Endpunkte bzw. Evidenz. Lokale Chat-Historie bleibt auch nach Logout erhalten.
 
-Unbekannte Nummern und LID-only-Kontakte werden in einem unassigned Thread gespeichert und gehen nicht verloren. Eine manuelle Zuordnung verschiebt ihre Nachrichten in den vorhandenen Person-Thread. Ist eine Telefonnummer bereits einer anderen Person zugeordnet, wird die widersprüchliche Zuordnung abgelehnt statt stillschweigend gelernt.
+## Sicherheit im Heimnetz
 
-Wenn Baileys bei einem zunächst LID-only bekannten Kontakt später die Telefonnummer offenlegt, wird sie nur bei konsistenter Identity-Evidence übernommen und als `PersonIdentifier(PHONE)` gespiegelt. Konflikte erhalten den Zustand `IDENTITY_CONFLICT`.
+Localhost bleibt ohne zusätzliche Anmeldung nutzbar. Bei Bindung an `0.0.0.0` schützt die App `/api/*` und `/archive/*` für andere Geräte über ein lokales Pairing-Cookie. Das Pairing-Secret liegt ausschließlich im lokalen Datenverzeichnis.
 
-## V9.2 Messaging-Architektur
+## Tests
 
-```text
-Ladies Python App
-  ├─ Flask / bestehende V9 API
-  ├─ SQLite / bestehende V9 Datenbank
-  ├─ bestehende Identity-Logik
-  ├─ MessagingService
-  ├─ browser-sicherer SSE Event Bridge
-  └─ BaileysWorkerManager
-       └─ Node ESM Worker + @whiskeysockets/baileys
-```
-
-Der Worker kommuniziert ausschließlich über **JSON Lines auf stdin/stdout** mit Python. Er eröffnet keinen eigenen HTTP-Port und wird nicht direkt vom Browser angesprochen. `stdout` ist Maschinenprotokoll; Worker-Logs laufen über `stderr` in das vorhandene Ladies-Logging.
-
-### Baileys
-
-V9.2 pinnt exakt:
-
-```text
-@whiskeysockets/baileys = 7.0.0-rc14
-```
-
-Zusätzlich ist `package-lock.json` committed. CI und Runtime verwenden denselben deterministischen Installationspfad:
-
-```text
-npm ci --omit=dev --no-audit --no-fund
-```
-
-Der Worker ist Baileys-7/LID-aware: `@lid` bleibt Provider-Adresse, `remoteJidAlt`/PN ist Telefonnummer-Evidence und eine LID wird niemals als Telefonnummer gespeichert.
-
-### Ausgehende Nachrichten
-
-Eine Nachricht wird zuerst lokal als `PENDING` gespeichert. Der Worker korreliert den lokalen Message-Identifier mit der WhatsApp-Provider-ID. Eigene `messages.upsert`-Echos werden für lokal initiierte Sends unterdrückt; Nachrichten, die auf einem anderen verknüpften Gerät geschrieben wurden, werden weiterhin importiert.
-
-Frühe `SENT`/`DELIVERED`/`READ`-Receipts werden über die lokale Message-ID zurückgeführt, sodass auch ungünstige Event-Reihenfolgen weder Duplikate erzeugen noch einen bereits höheren Status zurückstufen. **Erneut senden** verwendet dieselbe lokale Nachricht statt eine zweite Bubble anzulegen.
-
-### Realtime / Datenschutzgrenze
-
-Browser-Updates laufen per `EventSource` / Server-Sent Events. Der Browser erhält ausschließlich minimale Domain-Events, z. B.:
-
-```text
-message        -> thread_id + message_id
-message_update -> thread_id + message_id + status
-presence       -> thread_id + endpoint_id + state
-qr_available   -> nur das Signal, dass ein QR verfügbar ist
-```
-
-Rohe Baileys-Daten wie JIDs, Telefonnummern, Nachrichtentexte, QR-Inhalte, IPC-Request-IDs oder Base64-Medien werden **nicht** durch den SSE-Bus gereicht. Den QR-Code ruft die gekoppelte UI gezielt über den QR-Endpunkt ab.
-
-### Presence
-
-Der optionale Schalter **Tippstatus senden** ist standardmäßig aktiv und wird lokal persistent gespeichert. Beim echten Tippen wird `composing` gesendet; nach ungefähr 2,5 Sekunden Inaktivität sowie vor dem Senden folgt `paused`.
-
-Eingehende Presence wird serverseitig auf `endpoint_id` und `thread_id` gemappt. Ein Presence-Event kann dadurch nicht versehentlich als „tippt …“ im gerade geöffneten Chat einer anderen Person erscheinen.
-
-### Historie und Pagination
-
-Die lokale SQLite-Historie bleibt vollständig erhalten. Der Chat lädt die jüngsten Nachrichten zuerst und holt beim Hochscrollen ältere Nachrichten cursor-basiert nach. Die UI ist damit nicht mehr auf die ersten 150/200 Nachrichten eines Threads begrenzt.
-
-### Medien
-
-V9.2 zeigt eingehende Bilder an. Baileys lädt ein Bild im Worker, Python archiviert es unter:
-
-```text
-ladies_v9_data/whatsapp/media/
-```
-
-Das Base64-Transportpayload bleibt ausschließlich auf der internen Worker-Python-Grenze. In SQLite und Browser werden nur die lokalen Medienmetadaten bzw. die lokale URL verwendet. Videos/Audio werden als Nachrichtentyp erkannt, aber in V9.2 noch nicht vollständig als Medienverwaltung ausgebaut.
-
-## Datenschutz und Logging
-
-Nicht in normale Logs gehören:
-
-- Nachrichtentexte;
-- vollständige Telefonnummern;
-- QR-Inhalte;
-- Auth-Schlüssel oder Session-Credentials.
-
-Worker-Diagnostik wird beim Übergang in das Python-Logging zusätzlich auf lange Ziffernfolgen maskiert. IPC-Antworten und rohe Transportereignisse bleiben intern.
-
-Lokale Daten und installierte Worker-Pakete sind per `.gitignore` ausgeschlossen:
-
-```text
-ladies_v9_data/
-ladies_v9_data/whatsapp/
-ladies_v9/messaging/whatsapp_worker/node_modules/
-```
-
-## Entwicklerhinweise
-
-Wichtige Dateien:
-
-```text
-ladies_v9/messaging/models.py              Messaging-Tabellen
-ladies_v9/messaging/service.py             gemeinsame Chat-/Endpoint-Fachlogik
-ladies_v9/messaging/service_v92.py         V9.2 Identity, Send, Events, Pagination
-ladies_v9/messaging/integration.py         Person-Merge-Reconciliation
-ladies_v9/messaging/web.py                 Flask Messaging API + SSE + QR
-ladies_v9/messaging/whatsapp_manager.py    Node-Lifecycle + threadsicheres JSONL IPC
-ladies_v9/messaging/whatsapp_worker/       Baileys-7-Worker + Lockfile
-ladies_v9/static/messaging.js              integrierte mobile Chat-UI
-ladies_v9/static/messaging.css             V9.x Messaging-Design
-```
-
-### Tests
-
-Ohne echten WhatsApp-Account:
+Lokal:
 
 ```bash
-python -m unittest discover -s tests -p 'test_*.py' -v
-python -m compileall ladies_v9 ladies_explorer_v9_1.py
-node --check ladies_v9/messaging/whatsapp_worker/worker.mjs
-node --check ladies_v9/static/messaging.js
-node --check ladies_v9/static/messaging_bridge.js
+uv run python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-Aktuell laufen **29 automatisierte Python-Tests**. Die Regressionstests decken insbesondere ab:
+GitHub Actions prüft zusätzlich Python-Compile, Flask-Smoke-Test, Node-/Frontend-Syntax, reproduzierbares `npm ci` und die erwartete Baileys-Version.
 
-- bekannte und neue Nummern sowie LID-only-Kontakte;
-- LID→PN-Lernen und Identity-Konflikte;
-- Zusammenführung von LID- und PN-Endpunkten;
-- Person-/Thread-Merges;
-- idempotente Provider-Nachrichten;
-- PENDING/SENT/FAILED sowie frühe READ-Receipts;
-- Retry ohne zweite Nachricht;
-- browser-sichere SSE-Events ohne JID/QR/Text/Base64-Leak;
-- Presence-Zuordnung zum richtigen Thread;
-- Cursor-Pagination;
-- LAN-Pairing und Schutz von API/Archiv;
-- Erhalt der lokalen Historie nach WhatsApp-Logout.
+## Bewusste Grenzen
 
-Die GitHub-Actions-Prüfung umfasst Python-Compile, 29 Unit-/Regressionstests, Flask-Smoke, deterministisches `npm ci`, Worker-/Frontend-JavaScript-Syntax und den exakten Baileys-`7.0.0-rc14`-Pin.
-
-Automatisierte Tests benötigen keinen echten WhatsApp-Account. Eine reale QR-Kopplung, echte Nachrichten mit einem Testkonto und der Soft-Keyboard-Test auf einem Smartphone bleiben bewusst manuelle E2E-Schritte.
-
-### Session zurücksetzen
-
-Im normalen Betrieb immer **Mehr → Einstellungen → WhatsApp & Chat → Verbindung entfernen** verwenden. Für lokale Entwicklung kann bei beendeter App alternativ `ladies_v9_data/whatsapp/auth/` gelöscht werden. Die SQLite-Chat-Historie darf dafür nicht gelöscht werden.
+- reale WhatsApp-QR-Kopplung und echte E2E-Nachrichten benötigen ein reales WhatsApp-Konto für den manuellen Test;
+- Textversand ist integriert; eingehende Bilder werden lokal archiviert und angezeigt;
+- kein WhatsApp-History-Import, keine Gruppen, Calls, Broadcasts oder automatisches Outreach;
+- Smartphone-Keyboard/Viewport bleibt ein realer Gerätetest.
