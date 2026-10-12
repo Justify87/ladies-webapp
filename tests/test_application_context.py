@@ -27,6 +27,23 @@ class ApplicationContextTests(unittest.TestCase):
             self.assertEqual(len(calls), 1)
             self.assertEqual(database.schema_version(), 1)
 
+    def test_same_path_handles_share_engine_and_schema_state(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "app.sqlite3"
+            core = Database(path)
+            messaging = Database(path)
+            pricing = Database(path)
+
+            self.assertIs(core.engine, messaging.engine)
+            self.assertIs(core.engine, pricing.engine)
+            self.assertIs(core.Session, messaging.Session)
+            self.assertIs(core.Session, pricing.Session)
+
+            core.create_schema()
+            with patch.object(messaging, "_create_schema") as duplicate_schema_init:
+                messaging.create_schema()
+            duplicate_schema_init.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
