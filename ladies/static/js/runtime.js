@@ -74,6 +74,7 @@
     closeProfile,
     renderProfile,
     latestSnapshot,
+    openContactSheet,
     fetchPersonDetail,
     loadDashboard,
     loadRecentSearches,
