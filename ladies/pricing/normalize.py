@@ -10,6 +10,10 @@ DURATION_PATTERNS = [
     (re.compile(r"(?<!\d)(\d+(?:[\.,]\d+)?)\s*(?:h|std\.?|stunde[n]?)\b", re.I), lambda m: round(float(m.group(1).replace(",", ".")) * 60)),
     (re.compile(r"\b(?:eine\s+)?halbe\s+stunde\b|½\s*(?:h|std\.?)", re.I), lambda m: 30),
 ]
+DURATION_RANGE_RE = re.compile(
+    r"(?<!\d)\d{1,3}\s*[-–]\s*\d{1,3}\s*(?:min(?:ute[n]?)?|mins?|h|std\.?|stunde[n]?)\b",
+    re.I,
+)
 MONEY_RE = re.compile(
     r"(?<!\d)(?P<prefix>\+|ab\s+|bis\s+|ca\.?\s*)?"
     r"(?P<amount>\d{2,4}(?:[\.,]\d{1,2})?)"
@@ -55,8 +59,10 @@ def extract_durations(text: str) -> list[dict[str, Any]]:
 
 def extract_money(text: str) -> list[dict[str, Any]]:
     ranges = []
-    occupied: list[tuple[int, int]] = []
+    occupied: list[tuple[int, int]] = [(m.start(), m.end()) for m in DURATION_RANGE_RE.finditer(text)]
     for match in RANGE_RE.finditer(text):
+        if any(a <= match.start() < b or a < match.end() <= b for a, b in occupied):
+            continue
         low, high = int(match.group(1)), int(match.group(2))
         if 0 < low <= high <= 5000:
             ranges.append({
@@ -85,10 +91,7 @@ def extract_money(text: str) -> list[dict[str, Any]]:
         prefix = fold(match.group("prefix") or "")
         amount_type = "FROM" if "ab" in prefix else "UP_TO" if "bis" in prefix else "EXACT"
         currency = match.group("currency")
-        if not currency and not price_context and not prefix.strip().startswith("+"):
-            explicit = False
-        else:
-            explicit = True
+        explicit = bool(currency or price_context or prefix.strip().startswith("+"))
         out.append({
             "amount_cents": int(round(amount * 100)),
             "amount_max_cents": None,
