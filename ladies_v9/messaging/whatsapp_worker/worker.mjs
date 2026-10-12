@@ -1,5 +1,6 @@
 import makeWASocket, {
   DisconnectReason,
+  downloadMediaMessage,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
@@ -52,6 +53,25 @@ function messageMedia(message) {
   if (message?.videoMessage) return { mime_type: message.videoMessage.mimetype, caption: message.videoMessage.caption || null }
   if (message?.audioMessage) return { mime_type: message.audioMessage.mimetype, seconds: message.audioMessage.seconds || null }
   return null
+}
+
+async function messageMediaWithBytes(current, msg) {
+  const media = messageMedia(msg.message)
+  if (!media || !msg.message?.imageMessage) return media
+  try {
+    const buffer = await downloadMediaMessage(
+      msg,
+      'buffer',
+      {},
+      { logger, reuploadRequest: current.updateMediaMessage },
+    )
+    if (Buffer.isBuffer(buffer) && buffer.length <= 15 * 1024 * 1024) {
+      media.data_base64 = buffer.toString('base64')
+    }
+  } catch (error) {
+    logger.warn({ err: error?.message || String(error) }, 'incoming image download failed')
+  }
+  return media
 }
 
 function mapReceiptStatus(value) {
@@ -112,11 +132,12 @@ async function connect() {
         }, delay)
       }
     })
-    current.ev.on('messages.upsert', event => {
+    current.ev.on('messages.upsert', async event => {
       if (event.type !== 'notify') return
       for (const msg of event.messages || []) {
         const jid = msg.key?.remoteJid
         if (!jid || jid === 'status@broadcast' || jid.endsWith('@g.us')) continue
+        const media = await messageMediaWithBytes(current, msg)
         emit({
           type: 'message',
           payload: {
@@ -126,7 +147,7 @@ async function connect() {
             timestamp: Number(msg.messageTimestamp || Math.floor(Date.now() / 1000)),
             message_type: messageType(msg.message),
             text: messageText(msg.message),
-            media: messageMedia(msg.message),
+            media,
           },
         })
       }
