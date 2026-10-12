@@ -1,7 +1,8 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ladies_v9.pricing.context import ContextMessage, build_context
+from ladies_v9.pricing.normalize import extract_money
 from ladies_v9.pricing.rules import extract_with_rules, merge_partial
 from ladies_v9.pricing.signal import detect_price_signal
 
@@ -55,6 +56,21 @@ class PricingRulesTests(unittest.TestCase):
         self.assertEqual(proposal["offers"][0]["duration_minutes"], 30)
         self.assertEqual(proposal["offers"][0]["amount_cents"], 10000)
         self.assertEqual({x["message_id"] for x in proposal["offers"][0]["evidence"]}, {1, 2})
+
+    def test_duration_range_is_not_misread_as_money_range(self):
+        self.assertEqual(extract_money("30-60 min"), [])
+        proposal = extract_with_rules(_ctx(("IN", "30-60 min")))
+        self.assertEqual(proposal["offers"], [])
+
+    def test_old_price_question_cannot_cross_question_gap(self):
+        start = datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc)
+        rows = [
+            ContextMessage(1, "OUT", "TEXT", "Was kosten 30 Minuten?", start),
+            ContextMessage(2, "IN", "TEXT", "100", start + timedelta(hours=2)),
+        ]
+        context = build_context(thread_id=1, person_id=1, rows=rows, seed_message_id=2)
+        self.assertEqual([x.message_id for x in context.messages], [2])
+        self.assertEqual(extract_with_rules(context)["offers"], [])
 
 
 if __name__ == "__main__":
