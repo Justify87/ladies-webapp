@@ -1,12 +1,17 @@
 import makeWASocket, {
   DisconnectReason,
   downloadMediaMessage,
+  extractMessageContent,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   proto,
   useMultiFileAuthState,
+  WAMessageStubType,
 } from '@whiskeysockets/baileys'
 import { Boom } from '@hapi/boom'
+import crypto from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 import pino from 'pino'
 import readline from 'node:readline'
 import process from 'node:process'
@@ -16,9 +21,14 @@ if (!authDir) {
   process.stderr.write('LADIES_WHATSAPP_AUTH_DIR is missing\n')
   process.exit(2)
 }
+const mediaDir = path.resolve(authDir, '..', 'media')
+const viewOnceDir = path.resolve(authDir, '..', 'view-once')
+fs.mkdirSync(mediaDir, { recursive: true })
+fs.mkdirSync(viewOnceDir, { recursive: true })
 
 const logger = pino({ level: process.env.LADIES_BAILEYS_LOG_LEVEL || 'warn' }, pino.destination(2))
 const reconnectDelays = [1000, 2000, 5000, 10000, 30000]
+const MAX_INCOMING_MEDIA = 96 * 1024 * 1024
 let reconnectAttempt = 0
 let sock = null
 let stopped = false
@@ -53,12 +63,60 @@ function errorText(error) {
   return error?.message || String(error || 'unknown error')
 }
 
+function providerKey(key) {
+  if (!key) return null
+  return {
+    remoteJid: key.remoteJid || null,
+    remoteJidAlt: key.remoteJidAlt || null,
+    participant: key.participant || null,
+    participantAlt: key.participantAlt || null,
+    id: key.id || null,
+    fromMe: Boolean(key.fromMe),
+  }
+}
+
+function asProviderKey(value) {
+  if (!value?.id) throw new Error('Provider-Nachrichten-Key fehlt')
+  return {
+    remoteJid: value.remoteJid || value.remote_jid || null,
+    remoteJidAlt: value.remoteJidAlt || value.remote_jid_alt || null,
+    participant: value.participant || null,
+    participantAlt: value.participantAlt || value.participant_alt || null,
+    id: value.id,
+    fromMe: Boolean(value.fromMe ?? value.from_me),
+  }
+}
+
+function isViewOnceMessage(message, key = null) {
+  return Boolean(
+    key?.isViewOnce ||
+    message?.viewOnceMessage ||
+    message?.viewOnceMessageV2 ||
+    message?.viewOnceMessageV2Extension
+  )
+}
+
+function contentOf(message) {
+  return extractMessageContent(message) || message || null
+}
+
+function contextInfo(message) {
+  if (!message) return null
+  return message.extendedTextMessage?.contextInfo
+    ?? message.imageMessage?.contextInfo
+    ?? message.videoMessage?.contextInfo
+    ?? message.documentMessage?.contextInfo
+    ?? message.audioMessage?.contextInfo
+    ?? null
+}
+
 function messageText(message) {
   if (!message) return null
   return message.conversation
     ?? message.extendedTextMessage?.text
     ?? message.imageMessage?.caption
     ?? message.videoMessage?.caption
+    ?? message.documentMessage?.caption
     ?? null
 }
 
@@ -66,38 +124,141 @@ function messageType(message) {
   if (!message) return 'SYSTEM'
   if (message.imageMessage) return 'IMAGE'
   if (message.videoMessage) return 'VIDEO'
-  if (message.audioMessage) return 'AUDIO'
+  if (message.audioMessage) return message.audioMessage.ptt ? 'VOICE' : 'AUDIO'
+  if (message.documentMessage) return 'DOCUMENT'
   return 'TEXT'
 }
 
 function messageMedia(message) {
-  if (message?.imageMessage) return { mime_type: message.imageMessage.mimetype, caption: message.imageMessage.caption || null }
-  if (message?.videoMessage) return { mime_type: message.videoMessage.mimetype, caption: message.videoMessage.caption || null }
-  if (message?.audioMessage) return { mime_type: message.audioMessage.mimetype, seconds: message.audioMessage.seconds || null }
+  if (message?.imageMessage) return {
+    mime_type: message.imageMessage.mimetype || 'image/jpeg',
+    caption: message.imageMessage.caption || null,
+    width: Number(message.imageMessage.width || 0) || null,
+    height: Number(message.imageMessage.height || 0) || null,
+  }
+  if (message?.videoMessage) return {
+    mime_type: message.videoMessage.mimetype || 'video/mp4',
+    caption: message.videoMessage.caption || null,
+    width: Number(message.videoMessage.width || 0) || null,
+    height: Number(message.videoMessage.height || 0) || null,
+    seconds: Number(message.videoMessage.seconds || 0) || null,
+  }
+  if (message?.audioMessage) return {
+    mime_type: message.audioMessage.mimetype || 'audio/ogg; codecs=opus',
+    seconds: Number(message.audioMessage.seconds || 0) || null,
+    voice_note: Boolean(message.audioMessage.ptt),
+  }
+  if (message?.documentMessage) return {
+    mime_type: message.documentMessage.mimetype || 'application/octet-stream',
+    file_name: message.documentMessage.fileName || null,
+    caption: message.documentMessage.caption || null,
+    byte_size: Number(message.documentMessage.fileLength || 0) || null,
+  }
   return null
 }
 
-async function messageMediaWithBytes(current, msg) {
-  const media = messageMedia(msg.message)
-  if (!media || !msg.message?.imageMessage) return media
+function mediaExtension(mime, type) {
+  const m = String(mime || '').toLowerCase()
+  if (m.includes('jpeg') || m.includes('jpg')) return '.jpg'
+  if (m.includes('png')) return '.png'
+  if (m.includes('webp')) return '.webp'
+  if (m.includes('mp4')) return '.mp4'
+  if (m.includes('webm')) return '.webm'
+  if (m.includes('ogg') || m.includes('opus')) return '.ogg'
+  if (m.includes('mpeg')) return type === 'AUDIO' ? '.mp3' : '.mpeg'
+  if (m.includes('pdf')) return '.pdf'
+  const subtype = m.split('/')[1]?.split(';')[0]?.replace(/[^a-z0-9.+-]/g, '')
+  return subtype ? `.${subtype.slice(0, 12)}` : '.bin'
+}
+
+async function messageMediaWithFile(current, msg, content, viewOnce = false) {
+  const media = messageMedia(content)
+  if (!media) return null
+  const root = viewOnce ? viewOnceDir : mediaDir
+  const temporary = path.join(root, `.incoming-${crypto.randomUUID()}.part`)
+  let handle = null
+  let total = 0
   try {
-    const buffer = await downloadMediaMessage(
+    const stream = await downloadMediaMessage(
       msg,
-      'buffer',
+      'stream',
       {},
       { logger, reuploadRequest: current.updateMediaMessage },
     )
-    if (Buffer.isBuffer(buffer) && buffer.length <= 15 * 1024 * 1024) {
-      media.data_base64 = buffer.toString('base64')
+    handle = await fs.promises.open(temporary, 'wx')
+    const digest = crypto.createHash('sha256')
+    for await (const chunk of stream) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      total += buffer.length
+      if (total > MAX_INCOMING_MEDIA) {
+        const error = new Error('media_too_large')
+        error.code = 'MEDIA_TOO_LARGE'
+        throw error
+      }
+      digest.update(buffer)
+      await handle.write(buffer)
     }
+    await handle.close()
+    handle = null
+    if (!total) {
+      await fs.promises.unlink(temporary).catch(() => {})
+      return media
+    }
+    const hash = digest.digest('hex')
+    const filename = `${hash}${mediaExtension(media.mime_type, messageType(content))}`
+    const target = path.join(root, filename)
+    if (fs.existsSync(target)) await fs.promises.unlink(temporary)
+    else await fs.promises.rename(temporary, target)
+    media.archive_name = filename
+    media.byte_size = total
+    media.sha256 = hash
+    if (viewOnce) media.private_view_once = true
   } catch (error) {
-    logger.warn({ err: errorText(error) }, 'incoming image download failed')
+    if (handle) await handle.close().catch(() => {})
+    await fs.promises.unlink(temporary).catch(() => {})
+    media.byte_size = total || media.byte_size || null
+    if (error?.code === 'MEDIA_TOO_LARGE') {
+      media.download_error = 'media_too_large'
+      logger.warn({ bytes: total, type: messageType(content) }, 'incoming media exceeded local size limit')
+    } else {
+      logger.warn({ err: errorText(error), type: messageType(content) }, 'incoming media download failed')
+      media.download_error = 'download_failed'
+    }
   }
   return media
 }
 
+function quoteInfo(content) {
+  const info = contextInfo(content)
+  if (!info?.stanzaId) return null
+  const quoted = info.quotedMessage ? contentOf(info.quotedMessage) : null
+  return {
+    provider_message_id: info.stanzaId,
+    participant: info.participant || null,
+    remote_jid: info.remoteJid || null,
+    snapshot: quoted ? {
+      message_type: messageType(quoted),
+      text: messageText(quoted),
+      media: messageMedia(quoted),
+    } : null,
+  }
+}
+
+function minimalQuotedMessage(quote) {
+  if (!quote?.key?.id) return null
+  const type = String(quote.message_type || 'TEXT').toUpperCase()
+  let message
+  if (type === 'IMAGE') message = { imageMessage: { caption: quote.text || quote.caption || '' } }
+  else if (type === 'VIDEO') message = { videoMessage: { caption: quote.text || quote.caption || '' } }
+  else if (type === 'VOICE' || type === 'AUDIO') message = { audioMessage: { ptt: type === 'VOICE' } }
+  else if (type === 'DOCUMENT') message = { documentMessage: { fileName: quote.file_name || 'Dokument' } }
+  else message = { conversation: String(quote.text || '') }
+  return { key: asProviderKey(quote.key), message }
+}
+
 function mapReceiptStatus(value) {
   const n = Number(value)
+  if (n >= 5) return 'PLAYED'
   if (n >= 4) return 'READ'
   if (n >= 3) return 'DELIVERED'
   if (n >= 2) return 'SENT'
@@ -133,7 +294,6 @@ async function inspectContact(current, jid, includePicture = false) {
   if (!phoneJid) {
     return { exists: null, jid, phone_jid: null, profile_picture_url: null, detail: 'phone_jid_unknown' }
   }
-
   let result = null
   try {
     const rows = await current.onWhatsApp(phoneJid)
@@ -142,7 +302,6 @@ async function inspectContact(current, jid, includePicture = false) {
     logger.warn({ err: errorText(error) }, 'WhatsApp availability lookup failed')
     return { exists: null, jid, phone_jid: phoneJid, profile_picture_url: null, detail: 'availability_lookup_failed' }
   }
-
   const exists = Boolean(result?.exists)
   const registeredJid = result?.jid || phoneJid
   const target = exists ? await resolveTargetJid(current, registeredJid) : registeredJid
@@ -171,20 +330,27 @@ function directMessageAddresses(key) {
 }
 
 async function emitMessage(current, msg) {
+  const raw = msg.message
+  const content = contentOf(raw)
+  if (!content || content.reactionMessage || content.protocolMessage) return
   const { primary: jid, phoneJid } = directMessageAddresses(msg.key)
   if (!jid || jid === 'status@broadcast' || jid.endsWith('@g.us')) return
-  const media = await messageMediaWithBytes(current, msg)
+  const viewOnce = isViewOnceMessage(raw, msg.key)
+  const media = await messageMediaWithFile(current, msg, content, viewOnce)
   emit({
     type: 'message',
     payload: {
       provider_message_id: msg.key?.id || null,
+      provider_key: providerKey(msg.key),
       jid,
       phone_jid: phoneJid,
       from_me: Boolean(msg.key?.fromMe),
       timestamp: Number(msg.messageTimestamp || Math.floor(Date.now() / 1000)),
-      message_type: messageType(msg.message),
-      text: messageText(msg.message),
+      message_type: messageType(content),
+      text: messageText(content),
       media,
+      quote: quoteInfo(content),
+      view_once: viewOnce,
     },
   })
 }
@@ -201,9 +367,37 @@ async function flushBufferedOwnMessages() {
 }
 
 function emitMessageUpdate(item) {
-  const mapped = mapReceiptStatus(item.update?.status)
   const providerId = item.key?.id || null
-  if (!mapped || !providerId) return
+  if (!providerId) return
+
+  const editedRaw = item.update?.message?.editedMessage?.message
+  const edited = editedRaw ? contentOf(editedRaw) : null
+  if (edited) {
+    emit({
+      type: 'message_content_update',
+      payload: {
+        provider_message_id: providerId,
+        action: 'EDIT',
+        text: messageText(edited),
+        message_type: messageType(edited),
+      },
+    })
+  }
+
+  const revoked = item.update?.message === null
+    && Number(item.update?.messageStubType) === Number(WAMessageStubType.REVOKE)
+  if (revoked) {
+    emit({
+      type: 'message_content_update',
+      payload: {
+        provider_message_id: providerId,
+        action: 'DELETE',
+      },
+    })
+  }
+
+  const mapped = mapReceiptStatus(item.update?.status)
+  if (!mapped) return
   emit({
     type: 'message_update',
     payload: {
@@ -218,6 +412,60 @@ function flushBufferedUpdates() {
   if (localSendsInFlight > 0) return
   const items = pendingMessageUpdates.splice(0, pendingMessageUpdates.length)
   for (const item of items) emitMessageUpdate(item)
+}
+
+async function connectedTarget(command) {
+  if (!sock) await connect()
+  if (!sock) throw new Error('WhatsApp ist nicht verbunden')
+  const info = await inspectContact(sock, command.jid, false)
+  if (info.exists === false) throw new Error('Diese Nummer ist nicht bei WhatsApp registriert')
+  return resolveTargetJid(sock, info.jid || command.jid)
+}
+
+async function sendAndReply(id, command, content, options = {}) {
+  const target = await connectedTarget(command)
+  localSendsInFlight += 1
+  try {
+    const quoted = minimalQuotedMessage(command.quote)
+    const sent = await sock.sendMessage(target, content, quoted ? { ...options, quoted } : options)
+    const providerId = sent?.key?.id || null
+    rememberLocalSend(providerId, command.client_message_id)
+    reply(id, true, {
+      provider_message_id: providerId,
+      provider_key: providerKey(sent?.key),
+      provider_address: target,
+    })
+  } finally {
+    localSendsInFlight = Math.max(0, localSendsInFlight - 1)
+    if (localSendsInFlight === 0) {
+      await flushBufferedOwnMessages()
+      flushBufferedUpdates()
+    }
+  }
+}
+
+function mediaContent(command) {
+  const filePath = path.resolve(String(command.file_path || ''))
+  if (!filePath || !fs.existsSync(filePath)) throw new Error('Mediendatei nicht gefunden')
+  const mediaType = String(command.media_type || '').toUpperCase()
+  const source = { url: filePath }
+  const caption = command.caption ? String(command.caption) : undefined
+  const mimetype = command.mime_type ? String(command.mime_type) : undefined
+  const viewOnce = Boolean(command.view_once)
+  if (mediaType === 'IMAGE') return { image: source, caption, mimetype, viewOnce }
+  if (mediaType === 'VIDEO') return { video: source, caption, mimetype, viewOnce }
+  if (mediaType === 'AUDIO' || mediaType === 'VOICE') {
+    return { audio: source, mimetype: mimetype || 'audio/ogg; codecs=opus', ptt: mediaType === 'VOICE', viewOnce }
+  }
+  if (mediaType === 'DOCUMENT') {
+    return {
+      document: source,
+      mimetype: mimetype || 'application/octet-stream',
+      fileName: String(command.file_name || 'Dokument'),
+      caption,
+    }
+  }
+  throw new Error(`Nicht unterstützter Medientyp: ${mediaType}`)
 }
 
 async function connect() {
@@ -237,9 +485,7 @@ async function connect() {
       printQRInTerminal: false,
       markOnlineOnConnect: false,
       syncFullHistory: false,
-      // Baileys 7 needs INITIAL_BOOTSTRAP / mapping-related history records for
-      // stable PN<->LID resolution. Only the large FULL chat-history import is
-      // intentionally skipped by Ladies Explorer.
+      // Keep bootstrap/mapping records required by Baileys 7 PN<->LID resolution.
       shouldSyncHistoryMessage: ({ syncType }) => syncType !== proto.HistorySync.HistorySyncType.FULL,
       generateHighQualityLinkPreview: false,
     })
@@ -294,6 +540,20 @@ async function connect() {
         else emitMessageUpdate(item)
       }
     })
+    current.ev.on('messages.reaction', reactions => {
+      for (const item of reactions || []) {
+        emit({
+          type: 'reaction',
+          payload: {
+            target_key: providerKey(item.key),
+            reaction_key: providerKey(item.reaction?.key),
+            emoji: item.reaction?.text || '',
+            from_me: Boolean(item.reaction?.key?.fromMe),
+            timestamp_ms: Number(item.reaction?.senderTimestampMs || Date.now()),
+          },
+        })
+      }
+    })
     current.ev.on('presence.update', update => {
       const jid = update.id
       for (const [participant, presence] of Object.entries(update.presences || {})) {
@@ -333,25 +593,42 @@ async function handle(command) {
         reply(id, true, info)
         break
       }
-      case 'send_text': {
+      case 'send_text':
+        await sendAndReply(id, command, { text: String(command.text || '') })
+        break
+      case 'send_media':
+        await sendAndReply(id, command, mediaContent(command))
+        break
+      case 'mark_read': {
         if (!sock) await connect()
         if (!sock) throw new Error('WhatsApp ist nicht verbunden')
-        const info = await inspectContact(sock, command.jid, false)
-        if (info.exists === false) throw new Error('Diese Nummer ist nicht bei WhatsApp registriert')
-        const target = await resolveTargetJid(sock, info.jid || command.jid)
-        localSendsInFlight += 1
-        try {
-          const sent = await sock.sendMessage(target, { text: String(command.text || '') })
-          const providerId = sent?.key?.id || null
-          rememberLocalSend(providerId, command.client_message_id)
-          reply(id, true, { provider_message_id: providerId, provider_address: target })
-        } finally {
-          localSendsInFlight = Math.max(0, localSendsInFlight - 1)
-          if (localSendsInFlight === 0) {
-            await flushBufferedOwnMessages()
-            flushBufferedUpdates()
-          }
-        }
+        const keys = (command.keys || []).map(asProviderKey).filter(key => key.id)
+        if (keys.length) await sock.readMessages(keys)
+        reply(id, true, { count: keys.length })
+        break
+      }
+      case 'send_reaction': {
+        const target = await connectedTarget(command)
+        const key = asProviderKey(command.target_key)
+        const sent = await sock.sendMessage(target, { react: { text: String(command.emoji || ''), key } })
+        rememberLocalSend(sent?.key?.id || null, null)
+        reply(id, true, { provider_key: providerKey(sent?.key), provider_address: target })
+        break
+      }
+      case 'edit_message': {
+        const target = await connectedTarget(command)
+        const key = asProviderKey(command.target_key)
+        const sent = await sock.sendMessage(target, { text: String(command.text || ''), edit: key })
+        rememberLocalSend(sent?.key?.id || null, null)
+        reply(id, true, { provider_key: providerKey(sent?.key), provider_address: target })
+        break
+      }
+      case 'delete_message': {
+        const target = await connectedTarget(command)
+        const key = asProviderKey(command.target_key)
+        const sent = await sock.sendMessage(target, { delete: key })
+        rememberLocalSend(sent?.key?.id || null, null)
+        reply(id, true, { provider_key: providerKey(sent?.key), provider_address: target })
         break
       }
       case 'presence': {

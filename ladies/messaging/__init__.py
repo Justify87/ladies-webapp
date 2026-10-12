@@ -11,8 +11,10 @@ from . import service_runtime as _service_runtime
 # Keep legacy import paths working while all physical source paths remain neutral.
 sys.modules.setdefault(__name__ + ".service_v92", _service_runtime)
 
+from . import service_reviewfix as _service_reviewfix
 
-class MessagingService(_service_runtime.MessagingService):
+
+class MessagingService(_service_reviewfix.MessagingService):
     """Current messaging service plus user-facing thread visibility rules."""
 
     def subscribe_presence(self, thread_id: int) -> None:
@@ -45,27 +47,15 @@ class MessagingService(_service_runtime.MessagingService):
                     .order_by(desc(ChatMessage.timestamp), desc(ChatMessage.message_id))
                     .limit(1)
                 )
-                # Empty placeholder threads should stay out of the inbox. Once a
-                # real message exists, however, the conversation is user data and
-                # must remain visible regardless of Like/Favorite/neutral state.
+                # Only empty placeholder threads stay hidden. Any real 1:1
+                # conversation belongs in the inbox, including a neutral person
+                # who has written first and has not yet been liked/favorited.
                 if last is None:
-                    continue
-
-                state = db.get(PersonUserState, int(thread.person_id))
-                has_outgoing = db.scalar(
-                    select(ChatMessage.message_id)
-                    .where(
-                        ChatMessage.thread_id == thread.thread_id,
-                        ChatMessage.direction == "OUT",
-                    )
-                    .limit(1)
-                ) is not None
-                liked_or_favorite = bool(state and (state.favorite or state.preference == "LIKE"))
-                if not (has_outgoing or liked_or_favorite):
                     continue
                 if filter_name == "UNREAD" and not thread.unread_count:
                     continue
 
+                state = db.get(PersonUserState, int(thread.person_id))
                 payload = self._thread_payload(db, thread, last)
                 payload["favorite"] = bool(state.favorite) if state else False
                 payload["preference"] = state.preference if state else None
@@ -80,6 +70,6 @@ class MessagingService(_service_runtime.MessagingService):
             return out
 
 
-from .web import install_messaging
+from .web_reviewfix import install_messaging
 
 __all__ = ["MessagingService", "install_messaging"]

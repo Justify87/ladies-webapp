@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from ladies_v9.models import Base, utcnow
 
 
@@ -72,3 +75,48 @@ class ChatMessage(Base):
     reply_to_message_id: Mapped[Optional[int]] = mapped_column(ForeignKey("chat_messages.message_id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     thread: Mapped[ChatThread] = relationship(back_populates="messages")
+    extra: Mapped[Optional["ChatMessageMeta"]] = relationship(
+        back_populates="message", uselist=False, cascade="all, delete-orphan"
+    )
+    reactions: Mapped[list["ChatReaction"]] = relationship(
+        back_populates="message", cascade="all, delete-orphan"
+    )
+
+
+class ChatMessageMeta(Base):
+    """Provider details kept outside chat_messages so existing DBs need no ALTER TABLE."""
+
+    __tablename__ = "chat_message_meta"
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_messages.message_id", ondelete="CASCADE"), primary_key=True
+    )
+    provider_key_json: Mapped[Optional[str]] = mapped_column(Text)
+    quote_provider_message_id: Mapped[Optional[str]] = mapped_column(String(256), index=True)
+    quote_snapshot_json: Mapped[Optional[str]] = mapped_column(Text)
+    read_by_me_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    read_receipt_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    view_once: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    view_once_consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    message: Mapped[ChatMessage] = relationship(back_populates="extra")
+
+
+class ChatReaction(Base):
+    __tablename__ = "chat_reactions"
+    __table_args__ = (
+        UniqueConstraint("message_id", "actor", name="uq_chat_reaction_message_actor"),
+        Index("idx_chat_reaction_message", "message_id"),
+    )
+    reaction_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_messages.message_id", ondelete="CASCADE"), nullable=False
+    )
+    actor: Mapped[str] = mapped_column(String(16), nullable=False)  # ME / REMOTE
+    emoji: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_key_json: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    message: Mapped[ChatMessage] = relationship(back_populates="reactions")
