@@ -1,0 +1,717 @@
+'use strict';
+
+const $ = (s, root=document) => root.querySelector(s);
+const $$ = (s, root=document) => [...root.querySelectorAll(s)];
+const esc = value => String(value ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
+const ico = (name, cls='') => `<svg${cls?` class="${esc(cls)}"`:''} aria-hidden="true"><use href="/static/icons.svg#${esc(name)}"/></svg>`;
+const fmtDate = (value, withTime=true) => {
+  if (!value) return '—';
+  try { return new Intl.DateTimeFormat('de-DE', withTime ? {dateStyle:'short', timeStyle:'short'} : {dateStyle:'medium'}).format(new Date(value)); }
+  catch { return String(value); }
+};
+const fmtShortDate = value => {
+  if (!value) return '—';
+  try { return new Intl.DateTimeFormat('de-DE',{day:'2-digit',month:'2-digit',year:'numeric'}).format(new Date(value)); }
+  catch { return String(value); }
+};
+const fmtTime = value => {
+  if (!value) return '';
+  try { return new Intl.DateTimeFormat('de-DE',{hour:'2-digit',minute:'2-digit'}).format(new Date(value)); }
+  catch { return ''; }
+};
+const fmtBytes = value => {
+  let n = Number(value || 0); if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units=['B','KB','MB','GB','TB']; let i=0; while(n>=1024&&i<units.length-1){n/=1024;i++;}
+  return `${new Intl.NumberFormat('de-DE',{maximumFractionDigits:i>1?1:0}).format(n)} ${units[i]}`;
+};
+const euro = value => value==null||value===''?'—':new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(Number(value));
+const todayish = value => value && (Date.now()-new Date(value).getTime()) < 36*60*60*1000;
+const recentish = value => value && (Date.now()-new Date(value).getTime()) < 72*60*60*1000;
+const clamp = (n,min,max) => Math.max(min,Math.min(max,n));
+const flatten = obj => Object.values(obj || {}).flatMap(v => Array.isArray(v) ? v : [v]).filter(Boolean);
+const firstValue = (obj, keys) => { for(const key of keys){const val=obj?.[key]; if(Array.isArray(val)&&val.length)return val[0]; if(val!=null&&val!=='')return val;} return null; };
+const toLocalInput = value => { if(!value)return ''; const d=new Date(value); if(Number.isNaN(d.getTime()))return ''; const z=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}T${z(d.getHours())}:${z(d.getMinutes())}`; };
+const relativeAge = value => {
+  if(!value) return '';
+  const t=new Date(value).getTime(); if(!Number.isFinite(t)) return '';
+  const mins=Math.max(0,Math.floor((Date.now()-t)/60000));
+  if(mins<2) return 'gerade eben';
+  if(mins<60) return `vor ${mins} Min.`;
+  const hours=Math.floor(mins/60); if(hours<24) return `vor ${hours} Std.`;
+  const days=Math.max(1,Math.floor(hours/24)); if(days<31) return `seit ${days} ${days===1?'Tag':'Tagen'}`;
+  const months=Math.max(1,Math.floor(days/30)); if(months<12) return `seit ${months} ${months===1?'Monat':'Monaten'}`;
+  const years=Math.max(1,Math.floor(days/365)); return `seit ${years} ${years===1?'Jahr':'Jahren'}`;
+};
+const listingAgeBadge = (publishedAt, firstSeenAt) => {
+  const source=publishedAt||firstSeenAt; if(!source)return null;
+  const rel=relativeAge(source); if(!rel)return null;
+  const fresh=(Date.now()-new Date(source).getTime())<24*60*60*1000;
+  if(publishedAt) return {text:`Anzeige ${fresh?'neu · ': '· '}${rel}`, kind:fresh?'pink':''};
+  return {text:`Anzeige erstmals erfasst · ${rel}`, kind:''};
+};
+const personAgeBadge = (firstSeenAt, count=1) => {
+  if(count>1)return {text:`Person bekannt · ${count} Anzeigen`,kind:'purple'};
+  const rel=relativeAge(firstSeenAt);if(!rel)return null;
+  const fresh=(Date.now()-new Date(firstSeenAt).getTime())<24*60*60*1000;
+  return {text:`Person ${fresh?'neu erkannt':'bekannt'} · ${rel}`,kind:fresh?'blue':''};
+};
+const BUILTIN_FILTERS={city:'Leipzig',radius:20,category:'',ageMin:18,ageMax:45,heightMin:null,heightMax:null,selected:{geschlecht:['weiblich']},local:{photosOnly:true,videoOnly:false,likesOnly:false,imageMode:'ALL'}};
+const deepCopy = value => JSON.parse(JSON.stringify(value));
+function cloneFilters(value){
+  const base=deepCopy(BUILTIN_FILTERS);
+  const source=value&&typeof value==='object'?deepCopy(value):{};
+  return {...base,...source,selected:{...base.selected,...(source.selected||{})},local:{...base.local,...(source.local||{})}};
+}
+
+let toastTimer;
+function toast(message){ const el=$('#toast'); el.textContent=message; el.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove('show'),2400); }
+function clientLog(level,scope,message,extra={}){fetch('/api/client-log',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({level,scope,message:String(message||''),extra})}).catch(()=>{});}
+window.addEventListener('error',e=>clientLog('error','window',e.message,{source:e.filename,line:e.lineno,column:e.colno}));
+window.addEventListener('unhandledrejection',e=>clientLog('error','promise',e.reason?.message||String(e.reason||'Unhandled rejection')));
+
+async function api(url, options={}){
+  const opts={...options,headers:{...(options.headers||{})}};
+  if(options.body && typeof options.body !== 'string'){
+    opts.headers['Content-Type']='application/json'; opts.body=JSON.stringify(options.body);
+  }
+  const response=await fetch(url,opts); let data={};
+  try{ data=await response.json(); }catch{}
+  if(!response.ok){
+    const message=data.error || `HTTP ${response.status}`;
+    fetch('/api/client-log',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({level:'error',scope:'api',message,extra:{url,status:response.status}})}).catch(()=>{});
+    throw new Error(message);
+  }
+  return data;
+}
+
+const SERVER_FILTERS = {
+  geschlecht:['weiblich','männlich','trans','Paar/Duo'],
+  busen:['klein','mittel','groß','riesig','Naturbusen'],
+  treff:['besuchbar','Hausbesuche','Hotelbesuche','Bürobesuche'],
+  service:['ZK','Franz.','AV','GV','Girlfriend-Sex','69','Body-to-Body M.','erotische Massage','Ganzkörperm.','Tantra-Massage','Outdoor-Erotik','Begleitservice'],
+  figur:['sehr schlank','schlank','mittel','mollig','sehr mollig'],
+  haarfarbe:['blond','dunkelblond','brünett','rotbraun','dunkelbraun','schwarz','rot','grau'],
+  zeiten:['jetzt geöffnet','vor 10 Uhr','auch Samstag','heute geöffnet','nach 22 Uhr','auch Sonntag']
+};
+const CATEGORIES = [
+  ['', 'Alle'], ['huren-hostessen','Ladies'], ['escort','Escort'], ['erotische-massage','Massage'],
+  ['transen-shemale','Trans'], ['domina-sm','Bizarr / SM'], ['fkk-saunaclubs','FKK'], ['swinger','Swinger']
+];
+
+const state = {
+  screen:'home', discoverMode:'swipe', gridFilter:'ALL', listTab:'LIKE',
+  results:[], visibleResults:[], queue:[], index:0, actionHistory:[], searchMeta:null,
+  profiles:new Map(), profileLoads:new Map(), mediaIndex:new Map(),
+  dashboard:{counts:{},recent_changes:[]}, recentSearches:[], settings:{}, storage:{},
+  filters:cloneFilters(BUILTIN_FILTERS),
+  detail:null, detailTab:'overview', detailPreviousTab:'overview', detailMediaIndex:0, detailAdvertId:null,
+  profileInitialPositionPending:false, profileVideoObserver:null, visualDone:new Set(), visualQueue:[], visualQueueBusy:false,
+  statusCheck:{running:false,done:0,total:0,checkedAt:null}
+};
+
+function syncReducedMotion(){ document.documentElement.style.scrollBehavior=state.settings.reduced_motion?'auto':''; }
+
+function setHeaderForScreen(screen){
+  const action=$('#headerAction'); const menu=$('#menuBtn');
+  action.classList.remove('hidden','notify-dot'); menu.classList.remove('hidden');
+  if(screen==='home'){ action.innerHTML=ico('bell'); action.classList.add('notify-dot'); action.onclick=()=>openInfoSheet(); }
+  if(screen==='lists'){ action.innerHTML=ico('refresh'); action.onclick=()=>loadPeople(true); }
+  if(screen==='history'){ action.innerHTML=ico('refresh'); action.onclick=()=>loadDashboard(true); }
+  if(screen==='settings'){ action.innerHTML=ico('more'); action.onclick=()=>openSettingsInfo(); }
+}
+
+function setScreen(screen){
+  state.screen=screen;
+  const app=$('#app'); app.className=`app-frame view-${screen}`;
+  $$('.screen').forEach(el=>el.classList.toggle('active',el.dataset.screen===screen));
+  $$('[data-nav]').forEach(btn=>btn.classList.toggle('active',btn.dataset.nav===screen));
+  setHeaderForScreen(screen);
+  if(screen==='home') renderHome();
+  if(screen==='discover') renderDiscover();
+  if(screen==='lists') loadPeople();
+  if(screen==='history') renderHistory();
+  if(screen==='settings') renderSettings();
+}
+
+function renderHome(){
+  const c=state.dashboard?.counts||{};
+  $('#countPersons').textContent=c.persons||0; $('#countFavorites').textContent=c.favorites||0;
+  $('#countLikes').textContent=c.likes||0; $('#countDislikes').textContent=c.dislikes||0;
+  $('#homeCity').value=state.filters.city; $('#homeRadius').value=state.filters.radius; $('#homeRadiusValue').textContent=`${state.filters.radius} km`;
+  const list=state.recentSearches.length?state.recentSearches:[{city:'Leipzig',radius_km:20},{city:'Berlin',radius_km:20},{city:'Dresden',radius_km:20}];
+  $('#recentSearches').innerHTML=list.slice(0,6).map((x,i)=>`<button type="button" class="recent-chip ${i===0?'active':''}" data-recent-index="${i}">${ico('map-pin')}${esc(x.city||x.city_slug||'Suche')}${x.radius_km?` · ${esc(x.radius_km)} km`:''}</button>`).join('');
+  const preview=state.results.find(x=>x.thumbnail_url)?.thumbnail_url;
+  $('#swipePreview').innerHTML=preview?`<img src="${esc(preview)}" alt="">`:ico('image');
+}
+
+function applyRecentSearch(index){
+  const item=(state.recentSearches.length?state.recentSearches:[{city:'Leipzig',radius_km:20},{city:'Berlin',radius_km:20},{city:'Dresden',radius_km:20}])[index];
+  if(!item)return;
+  state.filters.city=item.city||item.city_slug||state.filters.city; state.filters.radius=Number(item.radius_km||20);
+  const f=item.filters||{}; if(f.category!==undefined)state.filters.category=f.category||''; if(f.age_min)state.filters.ageMin=f.age_min; if(f.age_max)state.filters.ageMax=f.age_max; if(f.height_min)state.filters.heightMin=f.height_min; if(f.height_max)state.filters.heightMax=f.height_max; if(f.selected)state.filters.selected=structuredClone(f.selected);
+  renderHome(); openFilter();
+}
+
+function localFilterResult(row){
+  const lf=state.filters.local;
+  if(lf.photosOnly && !row.thumbnail_url) return false;
+  if(lf.videoOnly && !row.has_video) return false;
+  if(lf.likesOnly && row.preference!=='LIKE') return false;
+  if(lf.imageMode==='NATURAL' && row.has_ai_content) return false;
+  if(lf.imageMode==='AI' && !row.has_ai_content) return false;
+  if(lf.imageMode==='STUDIO' && !String(row.markers||'').toLowerCase().includes('studio')) return false;
+  if(lf.imageMode==='FACEAPP' && !String(row.markers||'').toLowerCase().includes('face')) return false;
+  return true;
+}
+
+function rebuildVisible(){
+  state.visibleResults=state.results.filter(localFilterResult);
+  const replay=state.settings.replay_likes!==false;
+  state.queue=state.visibleResults.filter(x=>x.preference!=='DISLIKE' && (replay || x.preference!=='LIKE'));
+  if(state.index>=state.queue.length) state.index=Math.max(0,state.queue.length-1);
+  updateFilterCount();
+}
+
+async function performSearch({goDiscover=true}={}){
+  const payload={
+    city:state.filters.city||'Leipzig', radius:Number(state.filters.radius||20), category:state.filters.category||'',
+    age_min:Number(state.filters.ageMin||18), age_max:Number(state.filters.ageMax||60),
+    height_min:Number(state.filters.heightMin||140), height_max:Number(state.filters.heightMax||200),
+    selected:Object.fromEntries(Object.entries(state.filters.selected||{}).filter(([,v])=>Array.isArray(v)&&v.length))
+  };
+  const original=$('#homeSearchBtn')?.innerHTML; if($('#homeSearchBtn')){$('#homeSearchBtn').disabled=true;$('#homeSearchBtn').innerHTML=`<span class="spinner"></span><span>Suche läuft …</span>`;}
+  try{
+    const data=await api('/api/search',{method:'POST',body:payload});
+    state.results=data.results||[]; state.searchMeta=data.meta||{}; state.index=0; state.profiles.clear(); state.profileLoads.clear(); state.mediaIndex.clear(); state.actionHistory=[];
+    rebuildVisible();
+    loadRecentSearches(); loadDashboard();
+    if(goDiscover){ closeLayer('filterLayer'); state.discoverMode='swipe'; setScreen('discover'); }
+    toast(`${state.visibleResults.length} Treffer geladen`);
+  }catch(err){ toast(err.message); }
+  finally{ if($('#homeSearchBtn')){$('#homeSearchBtn').disabled=false;$('#homeSearchBtn').innerHTML=original;} }
+}
+
+function filterChip(group,value,label=value){
+  const active=(state.filters.selected[group]||[]).includes(value);
+  return `<button type="button" class="mini-chip ${active?'active':''}" data-filter-group="${esc(group)}" data-filter-value="${esc(value)}">${esc(label)}</button>`;
+}
+function categoryChip(value,label){return `<button type="button" class="mini-chip ${state.filters.category===value?'active':''}" data-category="${esc(value)}">${esc(label)}</button>`;}
+function localSwitch(key,label,icon){const on=!!state.filters.local[key];return `<button type="button" class="small-toggle-label" data-local-toggle="${esc(key)}">${icon?ico(icon):''}<span class="small-switch ${on?'on':''}"></span>${esc(label)}</button>`;}
+
+function renderFilter(){
+  const f=state.filters;
+  $('#filterContent').innerHTML=`
+    <div class="filter-search-box">${ico('search')}<input id="filterSearchText" placeholder="Filter durchsuchen (z. B. Service, Kategorie, …)"></div>
+    <div class="filter-grid">
+      <div class="filter-card"><div class="filter-card-head"><b>${ico('map-pin')}Standort</b></div><input id="filterCity" class="compact-input" value="${esc(f.city)}"></div>
+      <div class="filter-card"><div class="filter-card-head"><b>${ico('location')}Umkreis</b><strong id="filterRadiusLabel">${f.radius} km</strong></div><input id="filterRadius" class="filter-range" type="range" min="1" max="100" value="${f.radius}"><div class="range-labels" style="margin-left:0"><span>1 km</span><span>100</span></div></div>
+      <div class="filter-card"><div class="filter-card-head"><b>${ico('calendar')}Alter</b><strong id="ageRangeLabel">${f.ageMin} – ${f.ageMax}</strong></div><div class="dual-range-label"><span>18</span><span>60</span></div><input id="ageMinRange" class="filter-range" type="range" min="18" max="60" value="${f.ageMin}"><input id="ageMaxRange" class="filter-range" type="range" min="18" max="60" value="${f.ageMax}"></div>
+      <div class="filter-card"><div class="filter-card-head"><b>${ico('users')}Geschlecht</b></div><div class="mini-chips">${SERVER_FILTERS.geschlecht.map(v=>filterChip('geschlecht',v,v==='weiblich'?'Frau':v==='männlich'?'Mann':v)).join('')}</div></div>
+      <div class="filter-card"><div class="filter-card-head"><b>${ico('heart')}Brustgröße</b></div><div class="mini-chips">${SERVER_FILTERS.busen.map(v=>filterChip('busen',v,v==='klein'?'A/B':v==='mittel'?'B/C':v==='groß'?'D/E':v==='riesig'?'E+':'Natur')).join('')}</div></div>
+      <div class="filter-card"><div class="filter-card-head"><b>${ico('location')}Treffen / Besuchsart</b></div><div class="mini-chips">${SERVER_FILTERS.treff.map(v=>filterChip('treff',v,v==='besuchbar'?'Incall':v==='Hausbesuche'?'Hausbesuch':v==='Hotelbesuche'?'Hotel':'Büro')).join('')}</div></div>
+      <div class="filter-card"><div class="filter-card-head"><b>${ico('heart')}Beliebte Services</b></div><div class="mini-chips">${SERVER_FILTERS.service.slice(0,10).map(v=>filterChip('service',v)).join('')}</div></div>
+      <div class="filter-card full"><div class="filter-card-head"><b>${ico('sparkles')}KI-Bildfilter</b></div><div class="image-filter-row">${[['ALL','Alle'],['NATURAL','Natürlich'],['STUDIO','Studio'],['FACEAPP','FaceApp'],['AI','KI-optimiert']].map(([v,l])=>`<button type="button" class="image-filter-option ${f.local.imageMode===v?'active':''}" data-image-mode="${v}"><span></span><b>${l}</b></button>`).join('')}</div></div>
+      <div class="filter-card full"><div class="filter-card-head"><b>${ico('tag')}Kategorie</b></div><div class="mini-chips">${CATEGORIES.map(([v,l])=>categoryChip(v,l)).join('')}</div></div>
+      <div class="filter-card full"><div class="filter-card-head"><b>${ico('user')}Weitere Merkmale</b></div><div class="mini-chips">${SERVER_FILTERS.figur.map(v=>filterChip('figur',v)).join('')}${SERVER_FILTERS.haarfarbe.slice(0,5).map(v=>filterChip('haarfarbe',v)).join('')}</div></div>
+      <div class="filter-card"><div class="filter-card-head"><b>${ico('clock')}Öffnungszeiten</b></div><div class="mini-chips">${SERVER_FILTERS.zeiten.slice(0,4).map(v=>filterChip('zeiten',v,v.replace(' geöffnet',''))).join('')}</div></div>
+      <div class="filter-card"><div class="filter-card-head"><b>${ico('home')}Erreichbarkeit</b></div><div class="mini-chips">${filterChip('treff','besuchbar','Eigene Wohnung')}${filterChip('treff','Hotelbesuche','Hotel')}${filterChip('treff','Hausbesuche','Hausbesuch')}</div></div>
+      <div class="filter-toggle-row">${localSwitch('photosOnly','Nur mit Fotos','camera')}${localSwitch('videoOnly','Nur mit Video','video')}${localSwitch('likesOnly','Nur Likes','heart')}</div>
+      <div class="filter-default-actions"><button id="saveDefaultFilters" type="button">${ico('save')}Als Standard speichern</button><button id="deleteDefaultFilters" type="button" ${state.settings.default_filters?'':'disabled'}>${ico('trash')}Standard löschen</button></div>
+    </div>`;
+  bindFilterControls(); updateFilterCount();
+}
+
+function bindFilterControls(){
+  $('#filterCity').oninput=e=>state.filters.city=e.target.value;
+  $('#filterRadius').oninput=e=>{state.filters.radius=Number(e.target.value);$('#filterRadiusLabel').textContent=`${state.filters.radius} km`;};
+  const syncRanges=()=>{state.filters.ageMin=Math.min(Number($('#ageMinRange').value),Number($('#ageMaxRange').value));state.filters.ageMax=Math.max(Number($('#ageMinRange').value),Number($('#ageMaxRange').value));$('#ageMinRange').value=state.filters.ageMin;$('#ageMaxRange').value=state.filters.ageMax;$('#ageRangeLabel').textContent=`${state.filters.ageMin} – ${state.filters.ageMax}`;};
+  ['#ageMinRange','#ageMaxRange'].forEach(sel=>$(sel).oninput=syncRanges);
+  $$('[data-filter-group]',$('#filterContent')).forEach(btn=>btn.onclick=()=>{const group=btn.dataset.filterGroup,value=btn.dataset.filterValue;state.filters.selected[group]??=[];const arr=state.filters.selected[group];const i=arr.indexOf(value);if(i>=0)arr.splice(i,1);else arr.push(value);renderFilter();});
+  $$('[data-category]',$('#filterContent')).forEach(btn=>btn.onclick=()=>{state.filters.category=btn.dataset.category;renderFilter();});
+  $$('[data-image-mode]',$('#filterContent')).forEach(btn=>btn.onclick=()=>{state.filters.local.imageMode=btn.dataset.imageMode;renderFilter();});
+  $$('[data-local-toggle]',$('#filterContent')).forEach(btn=>btn.onclick=()=>{const k=btn.dataset.localToggle;state.filters.local[k]=!state.filters.local[k];renderFilter();});
+  $('#filterSearchText').oninput=e=>{const q=e.target.value.trim().toLowerCase();$$('.filter-card',$('#filterContent')).forEach(card=>card.classList.toggle('hidden',q&&!card.textContent.toLowerCase().includes(q)));};
+  $('#saveDefaultFilters').onclick=saveDefaultFilters;
+  $('#deleteDefaultFilters').onclick=deleteDefaultFilters;
+}
+function updateFilterCount(){ const n=state.results.length?state.results.filter(localFilterResult).length:null; $('#filterResultCount').textContent=n==null?'Treffer anzeigen':`${n} Treffer anzeigen`; }
+function resetFilters(){const city=state.filters.city||BUILTIN_FILTERS.city;state.filters=cloneFilters(state.settings.default_filters||BUILTIN_FILTERS);state.filters.city=city;renderFilter();}
+async function saveDefaultFilters(){try{const d=await api('/api/settings',{method:'POST',body:{key:'default_filters',value:cloneFilters(state.filters)}});state.settings=d.settings||state.settings;renderFilter();toast('Standardfilter gespeichert');}catch(e){toast(e.message)}}
+async function deleteDefaultFilters(){try{const d=await api('/api/settings',{method:'POST',body:{key:'default_filters',value:null}});state.settings=d.settings||state.settings;state.filters=cloneFilters(BUILTIN_FILTERS);renderFilter();renderHome();toast('Standardfilter gelöscht');}catch(e){toast(e.message)}}
+function openFilter(){ renderFilter(); $('#filterLayer').classList.remove('hidden'); }
+function closeLayer(id){ $('#'+id)?.classList.add('hidden'); }
+
+function currentResult(){ return state.queue[state.index]||null; }
+function profileBundle(row){ return row?state.profiles.get(String(row.advert_id)):null; }
+function profileSnapshot(row){ return profileBundle(row)?.profile || null; }
+function mediaFor(row){ const p=profileSnapshot(row); if(p?.media?.length)return p.media; if(row?.thumbnail_url)return [{kind:'IMAGE',url:row.thumbnail_url,local_url:null,position:1}]; return []; }
+function mediaUrl(media){ return media?.local_url || media?.url || ''; }
+function videoPosterUrl(media,{thumb=false}={}){const u=String(media?.url||'');const m=u.match(/^(https?:\/\/video\d+\.ladies-cdn\.de\/.*\/)([^\/?#]+)_high\.(?:webm|mp4)(?:[?#].*)?$/i);return m?`${m[1]}${m[2]}-${thumb?'FK':'X0'}.JPG`:'';}
+function mediaAt(row){ const arr=mediaFor(row); const idx=clamp(state.mediaIndex.get(String(row?.advert_id))||0,0,Math.max(0,arr.length-1)); return arr[idx]||null; }
+function trait(row, ...keys){ return firstValue(profileSnapshot(row)?.traits,keys); }
+function displayAge(row){ const a=trait(row,'Alter','alter','age'); return a?String(a).replace(/\s*Jahre?.*/i,''):''; }
+function displayHeight(row){ return trait(row,'Größe','Groesse','größe','height'); }
+function rowName(row){return profileSnapshot(row)?.name||row?.name||'Unbekannt';}
+function rowCity(row){return profileSnapshot(row)?.city||row?.city||'';}
+
+async function ensureProfile(row,{quiet=true,rerender=true}={}){
+  if(!row)return null; const key=String(row.advert_id);
+  if(state.profiles.has(key))return state.profiles.get(key);
+  if(state.profileLoads.has(key))return state.profileLoads.get(key);
+  const promise=api(`/api/profile/${encodeURIComponent(key)}`).then(data=>{
+    state.profiles.set(key,data);
+    if(data.identity){row.person_id=data.identity.person_id||row.person_id;row.preference=data.identity.preference||row.preference;row.favorite=!!data.identity.favorite;row.known_listing_count=data.identity.known_listing_count||row.known_listing_count;row.reappear_count=data.identity.reappear_count||row.reappear_count;row.match_decision=data.identity.match_decision||row.match_decision;row.person_first_seen_at=data.identity.person_first_seen_at||row.person_first_seen_at;}
+    if(data.listing){row.listing_published_at=data.listing.published_at||row.listing_published_at;row.listing_first_seen_at=data.listing.first_seen_at||row.listing_first_seen_at;row.listing_last_seen_at=data.listing.last_seen_at||row.listing_last_seen_at;row.current_status=data.listing.current_status||row.current_status;}
+    if(rerender&&state.screen==='discover')renderDiscover();
+    return data;
+  }).catch(err=>{ if(!quiet)toast(err.message); return null; }).finally(()=>state.profileLoads.delete(key));
+  state.profileLoads.set(key,promise); return promise;
+}
+function prefetchAround(){const here=currentResult();if(here)ensureProfile(here,{quiet:true});[1,2].forEach(offset=>{const n=state.queue[state.index+offset];if(n)setTimeout(()=>ensureProfile(n,{quiet:true,rerender:false}),offset*450);});}
+
+function renderDiscover(){
+  const mode=state.discoverMode;
+  $('#discoverScreen').classList.toggle('grid-mode',mode==='grid');
+  $('#swipeView').classList.toggle('hidden',mode!=='swipe'); $('#gridView').classList.toggle('hidden',mode!=='grid');
+  $('#discoverModeSwitch').innerHTML=mode==='swipe'?`${ico('list')}<span>Grid</span>`:`${ico('heart')}<span>Swipe</span>`;
+  if(mode==='swipe')renderSwipe();else renderGrid();
+}
+
+function renderSwipe(){
+  const host=$('#swipeView'); const row=currentResult();
+  if(!row){host.innerHTML=`<div class="swipe-empty">${ico('users')}<div><h2>Keine weiteren Profile</h2><p>Der aktuelle Stapel ist durchgesehen.</p><div class="empty-actions"><button id="emptyFilter" class="soft-primary" type="button">${ico('filter')}Filter anpassen</button><button id="emptyReplay" class="soft-primary" type="button">${ico('refresh')}Likes einblenden</button></div></div></div>`;$('#emptyFilter').onclick=openFilter;$('#emptyReplay').onclick=()=>{state.settings.replay_likes=true;rebuildVisible();renderSwipe();};return;}
+  const bundle=profileBundle(row),identity=bundle?.identity; const arr=mediaFor(row); const idx=clamp(state.mediaIndex.get(String(row.advert_id))||0,0,Math.max(0,arr.length-1)); const media=arr[idx];
+  const age=displayAge(row); const count=identity?.known_listing_count||row.known_listing_count||1;
+  const adAge=listingAgeBadge(bundle?.listing?.published_at||row.listing_published_at,bundle?.listing?.first_seen_at||row.listing_first_seen_at);
+  const personAge=personAgeBadge(identity?.person_first_seen_at||row.person_first_seen_at,count);
+  const locationChanged=!!row.recent_location_change||row.recent_change?.field_key==='city';
+  const image=media?.kind==='VIDEO'?`<video src="${esc(mediaUrl(media))}"${videoPosterUrl(media)?` poster="${esc(videoPosterUrl(media))}"`:''} muted autoplay loop playsinline preload="metadata"></video>`:mediaUrl(media)?`<img draggable="false" src="${esc(mediaUrl(media))}" alt="Profilbild von ${esc(rowName(row))}">`:`<div class="media-fallback">${ico('image')}<span>Kein Bild verfügbar</span></div>`;
+  host.innerHTML=`<article id="swipeCard" class="swipe-card">
+    <div class="swipe-media">${image}<div class="media-story">${arr.slice(0,8).map((_,i)=>`<i class="${i===idx?'active':''}"></i>`).join('')}</div><span class="location-pill">${ico('map-pin')}${esc(rowCity(row)||state.filters.city||'Leipzig')}${state.searchMeta?.radius_km?` · ${esc(state.searchMeta.radius_km)} km`:''}</span><span class="media-count">${arr.length?`${idx+1} / ${arr.length}`:'—'}</span><button class="media-tap prev" data-media="-1" aria-label="Vorheriges Bild"></button><button class="media-tap next" data-media="1" aria-label="Nächstes Bild"></button></div>
+    ${!bundle?`<div class="swipe-loading"><span class="spinner"></span> Profil wird geladen</div>`:''}
+    <div class="swipe-details">
+      <button class="swipe-profile-link" data-open-profile type="button">
+        <div class="swipe-title-line"><h2>${esc(rowName(row))}${age?`, ${esc(age)}`:''}</h2>${todayish(row.listing_last_seen_at||row.person_last_seen_at)?'<span class="online-pill">Heute online</span>':''}</div>
+        <div class="swipe-meta-row">${adAge?`<span class="badge ${adAge.kind}">${ico('clock')}${esc(adAge.text)}</span>`:''}${personAge?`<span class="badge ${personAge.kind}">${ico('users')}${esc(personAge.text)}</span>`:''}${locationChanged?`<span class="badge purple">${ico('map-pin')}Standort geändert</span>`:''}${row.has_video?`<span class="badge blue">${ico('play')}Video</span>`:''}</div>
+      </button>
+      <div class="swipe-actions"><button class="swipe-action" data-swipe-action="UNDO" type="button" aria-label="Zurück">${ico('undo')}</button><button class="swipe-action dislike" data-swipe-action="DISLIKE" type="button" aria-label="Dislike">${ico('x')}</button><button class="swipe-action like" data-swipe-action="LIKE" type="button" aria-label="Like">${ico('heart-fill')}</button><button class="swipe-action favorite ${row.favorite?'active':''}" data-swipe-action="FAVORITE" type="button" aria-label="Favorit">${row.favorite?ico('star-fill'):ico('star')}</button></div>
+    </div></article>`;
+  $$('[data-swipe-action]',host).forEach(btn=>btn.onclick=e=>{e.stopPropagation();swipeAction(btn.dataset.swipeAction);});
+  $$('[data-open-profile]',host).forEach(el=>el.onclick=e=>{e.stopPropagation();openPerson(row.person_id,row.advert_id);});
+  setupSwipeGesture(); prefetchAround(); maybeAutoVisual(media);
+}
+function stepMedia(row, delta){ const arr=mediaFor(row); if(!arr.length)return; const key=String(row.advert_id); const next=clamp((state.mediaIndex.get(key)||0)+delta,0,arr.length-1); state.mediaIndex.set(key,next); renderSwipe(); }
+function advance(delta=1){ state.index=clamp(state.index+delta,0,Math.max(0,state.queue.length)); renderSwipe(); }
+async function setPersonState(row, patch){ if(!row?.person_id){await ensureProfile(row,{quiet:false,rerender:false});} if(!row?.person_id)throw new Error('Person konnte nicht aufgelöst werden'); const data=await api(`/api/person/${row.person_id}/state`,{method:'POST',body:patch}); const us=data.user_state||{}; row.preference=us.preference??row.preference;row.favorite=us.favorite??row.favorite; state.results.filter(x=>Number(x.person_id)===Number(row.person_id)).forEach(x=>{x.preference=row.preference;x.favorite=row.favorite;}); return us; }
+async function swipeAction(action){
+  const row=currentResult(); if(!row)return;
+  if(action==='UNDO')return undoLast();
+  if(action==='FAVORITE'){try{await setPersonState(row,{favorite:!row.favorite});renderSwipe();loadDashboard();toast(row.favorite?'Zu Favoriten hinzugefügt':'Favorit entfernt');}catch(e){toast(e.message)}return;}
+  const prev={row,preference:row.preference,favorite:row.favorite,index:state.index};
+  try{await setPersonState(row,{preference:action});state.actionHistory.push(prev);animateAndAdvance(action==='LIKE'?'right':'left');loadDashboard();}catch(e){toast(e.message)}
+}
+function animateAndAdvance(direction){const card=$('#swipeCard');if(card){card.classList.add(direction==='right'?'fly-right':'fly-left');setTimeout(()=>{state.index++;renderSwipe();},180);}else{state.index++;renderSwipe();}}
+async function undoLast(){const last=state.actionHistory.pop();if(!last){if(state.index>0){state.index--;renderSwipe();}return;}try{await setPersonState(last.row,{preference:last.preference,favorite:last.favorite});state.index=Math.max(0,last.index);renderSwipe();toast('Letzte Entscheidung zurückgenommen');}catch(e){toast(e.message)}}
+function setupSwipeGesture(){
+  const card=$('#swipeCard'); if(!card)return; let down=false,startX=0,startY=0,dx=0,dy=0,moved=false,pointerId=null,startedInMedia=false;
+  card.querySelectorAll('img').forEach(img=>{img.draggable=false;img.addEventListener('dragstart',e=>e.preventDefault());});
+  card.addEventListener('pointerdown',e=>{
+    if(e.target.closest('.swipe-actions,[data-open-profile],.discover-tool'))return;
+    down=true;pointerId=e.pointerId;startX=e.clientX;startY=e.clientY;dx=0;dy=0;moved=false;startedInMedia=!!e.target.closest('.swipe-media');card.dataset.gestureMoved='0';
+    card.setPointerCapture?.(e.pointerId);card.classList.add('dragging');
+  });
+  card.addEventListener('pointermove',e=>{
+    if(!down)return;dx=e.clientX-startX;dy=e.clientY-startY;
+    if(Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)){moved=true;card.dataset.gestureMoved='1';e.preventDefault();card.style.transform=`translateX(${dx}px) rotate(${dx/28}deg)`;}
+  },{passive:false});
+  const finish=()=>{
+    if(!down)return;down=false;card.classList.remove('dragging');try{if(pointerId!=null)card.releasePointerCapture?.(pointerId);}catch{}
+    if(moved&&Math.abs(dx)>75){swipeAction(dx>0?'LIKE':'DISLIKE');return;}
+    card.style.transform='';
+    if(!moved&&startedInMedia){
+      const media=card.querySelector('.swipe-media'),row=currentResult();const rect=media?.getBoundingClientRect();
+      if(rect&&row){const x=startX-rect.left;if(x<rect.width*.42)stepMedia(row,-1);else if(x>rect.width*.58)stepMedia(row,1);}
+    }
+    setTimeout(()=>{if(card)card.dataset.gestureMoved='0';},60);
+  };
+  card.addEventListener('pointerup',finish);card.addEventListener('pointercancel',()=>{down=false;card.classList.remove('dragging');card.style.transform='';card.dataset.gestureMoved='0';});
+}
+
+function gridRows(){let rows=state.visibleResults;if(state.gridFilter==='VIDEO')rows=rows.filter(x=>x.has_video);if(state.gridFilter==='LIKE')rows=rows.filter(x=>x.preference==='LIKE');return rows;}
+function renderGrid(){
+  const rows=gridRows(); $('#gridAllCount').textContent=`(${state.visibleResults.length})`; $$('[data-grid-filter]').forEach(b=>b.classList.toggle('active',b.dataset.gridFilter===state.gridFilter));
+  $('#gridCards').innerHTML=rows.length?rows.map(row=>{const url=mediaUrl(mediaFor(row)[0]);const adAge=listingAgeBadge(profileBundle(row)?.listing?.published_at||row.listing_published_at,row.listing_first_seen_at);const badge=row.has_video?`<span class="grid-badge video">${ico('play')} Video</span>`:row.has_ai_content?`<span class="grid-badge ai">${ico('sparkles')} AI</span>`:adAge&&String(adAge.kind)==='pink'?'<span class="grid-badge">Neu</span>':'';const active=row.current_status!=='UNAVAILABLE'&&todayish(row.listing_last_seen_at);return `<article class="grid-card" data-grid-person="${row.person_id}" data-grid-advert="${esc(row.advert_id)}">${url?`<img draggable="false" src="${esc(url)}" alt="">`:`<div class="media-fallback">${ico('image')}</div>`}${badge}<span class="grid-online ${active?'active':'inactive'}" title="${active?'Heute gesehen':'Nicht heute gesehen'}"></span><button class="grid-star ${row.favorite?'active':''}" data-grid-favorite="${row.person_id}" data-grid-advert-id="${esc(row.advert_id)}" type="button" aria-label="Favorit">${row.favorite?ico('star-fill'):ico('star')}</button><button class="grid-heart ${row.preference==='LIKE'?'active':''}" data-grid-like="${row.person_id}" data-grid-advert-id="${esc(row.advert_id)}" type="button" aria-label="Like">${row.preference==='LIKE'?ico('heart-fill'):ico('heart')}</button></article>`;}).join(''):`<div class="list-empty" style="grid-column:1/-1">${ico('users')}Keine Treffer in dieser Ansicht.</div>`;
+  $$('[data-grid-person]').forEach(card=>card.onclick=e=>{if(e.target.closest('[data-grid-favorite],[data-grid-like]'))return;openPerson(Number(card.dataset.gridPerson),card.dataset.gridAdvert);});
+  $$('[data-grid-favorite]').forEach(btn=>btn.onclick=async e=>{e.stopPropagation();const row=state.results.find(x=>String(x.advert_id)===btn.dataset.gridAdvertId);try{await setPersonState(row,{favorite:!row.favorite});renderGrid();loadDashboard();}catch(err){toast(err.message)}});
+  $$('[data-grid-like]').forEach(btn=>btn.onclick=async e=>{e.stopPropagation();const row=state.results.find(x=>String(x.advert_id)===btn.dataset.gridAdvertId);try{await setPersonState(row,{preference:row.preference==='LIKE'?'NONE':'LIKE'});renderGrid();loadDashboard();}catch(err){toast(err.message)}});
+  rows.slice(0,4).forEach((row,i)=>{if(!profileBundle(row))setTimeout(()=>ensureProfile(row,{quiet:true,rerender:false}).then(()=>{if(state.screen==='discover'&&state.discoverMode==='grid')renderGrid();}),i*550);});
+}
+
+async function loadPeople(force=false){
+  if(state.screen!=='lists'&&!force)return;
+  try{const d=await api(`/api/lists/${state.listTab}`);renderPeople(d.items||[]);}catch(e){toast(e.message)}
+}
+function renderPeople(items){
+  $$('[data-list-tab]').forEach(b=>b.classList.toggle('active',b.dataset.listTab===state.listTab));
+  const c=state.dashboard.counts||{};$('#tabLikeCount').textContent=`(${c.likes||0})`;$('#tabFavoriteCount').textContent=`(${c.favorites||0})`;$('#tabDislikeCount').textContent=`(${c.dislikes||0})`;
+  $('#peopleList').innerHTML=items.length?items.map(item=>{
+    const status=item.status==='ACTIVE'?'active':item.status==='UNAVAILABLE'?'unavailable':''; const statusText=item.status==='ACTIVE'?'Anzeige erreichbar':item.status==='UNAVAILABLE'?'nicht mehr verfügbar':'Status unbekannt';
+    const locationChanged=item.recent_change?.field_key==='city';
+    return `<article class="person-row" data-person-row="${item.person_id}" data-advert="${esc(item.latest_advert_id||'')}">${item.thumbnail_url?`<img src="${esc(item.thumbnail_url)}" alt="">`:`<span class="person-thumb-fallback">${ico('user')}</span>`}<div class="person-main"><div class="person-name-line"><b>${esc(item.name||`Person #${item.person_id}`)}</b></div><div class="person-place">${ico('map-pin')}${esc(item.city||'Ort unbekannt')}</div><div class="person-status-row"><span class="status-pill ${status}">${esc(statusText)}</span>${locationChanged?'<span class="status-pill changed">Ort geändert</span>':''}</div>${item.status_checked_at?`<small class="status-checked">geprüft ${fmtDate(item.status_checked_at)}</small>`:''}${item.listing_count>1?`<span class="related-pill">${ico('users')}Weitere Anzeige derselben Person · ${item.listing_count}</span>`:''}</div><div class="row-actions"><button class="row-star ${item.favorite?'active':''}" data-list-favorite="${item.person_id}" type="button" aria-label="Favorit">${item.favorite?ico('star-fill'):ico('star')}</button><button class="row-check" data-list-status="${esc(item.latest_advert_id||'')}" type="button" aria-label="Status dieser Anzeige prüfen">${ico('refresh')}</button><button class="row-open" data-row-open type="button" aria-label="Profil öffnen">${ico('chevron-right')}</button></div></article>`;
+  }).join(''):`<div class="list-empty">${ico('users')}In dieser Liste ist noch niemand gespeichert.</div>`;
+  $$('[data-person-row]').forEach(row=>row.onclick=e=>{if(e.target.closest('[data-list-favorite],[data-list-status]'))return;openPerson(Number(row.dataset.personRow),row.dataset.advert||null);});
+  $$('[data-list-favorite]').forEach(btn=>btn.onclick=async e=>{e.stopPropagation();try{const d=await api(`/api/person/${btn.dataset.listFavorite}/state`,{method:'POST',body:{favorite:!btn.classList.contains('active')}});btn.classList.toggle('active',!!d.user_state.favorite);btn.innerHTML=d.user_state.favorite?ico('star-fill'):ico('star');loadDashboard();}catch(err){toast(err.message)}});
+  $$('[data-list-status]').forEach(btn=>btn.onclick=async e=>{e.stopPropagation();const id=btn.dataset.listStatus;if(!id)return toast('Keine Anzeige zum Prüfen');const old=btn.innerHTML;btn.disabled=true;btn.innerHTML='<span class="spinner"></span>';try{await api(`/api/profile-status/${encodeURIComponent(id)}`,{method:'POST'});toast('Status aktualisiert');await loadPeople(true);}catch(err){toast(err.message)}finally{btn.disabled=false;btn.innerHTML=old;}});
+}
+
+async function runStatusCheck(){
+  if(state.statusCheck.running)return; state.statusCheck.running=true;state.statusCheck.done=0;
+  try{
+    const d=await api('/api/status-targets');const items=d.items||[];state.statusCheck.total=items.length;renderStatusProgress();
+    for(const item of items){try{await api(`/api/profile-status/${encodeURIComponent(item.advert_id)}`,{method:'POST'});}catch{}state.statusCheck.done++;renderStatusProgress();}
+    state.statusCheck.checkedAt=new Date();toast(`${state.statusCheck.done} Anzeigen geprüft`);loadPeople(true);loadDashboard();
+  }catch(e){toast(e.message)}finally{state.statusCheck.running=false;renderStatusProgress();}
+}
+function renderStatusProgress(){const s=state.statusCheck;const pct=s.total?Math.round(s.done/s.total*100):0;$('#statusProgress').style.width=`${pct}%`;$('#statusCheckText').textContent=s.running?`${s.done}/${s.total} Anzeigen geprüft`:s.total?`${s.done}/${s.total} Anzeigen geprüft`:'Statusprüfung bereit';$('#statusCheckedAt').textContent=s.checkedAt?`Letzte Aktualisierung: ${fmtTime(s.checkedAt)}`:'Noch nicht geprüft';$('#runStatusCheck').disabled=s.running;$('#runStatusCheck').innerHTML=s.running?`<span class="spinner"></span>Prüfung läuft`:`${ico('refresh')}Status jetzt prüfen`;}
+
+function eventVisual(event){
+  const key=(event.field_key||event.event_type||'').toLowerCase();
+  if(event.event_type==='LISTING_FIRST_SNAPSHOT')return {icon:'plus',cls:'status',title:'Anzeige erstmals erfasst'};
+  if(event.event_type==='NEW_LISTING_FOR_PERSON')return {icon:'refresh',cls:'status',title:'Neue Anzeige derselben Person'};
+  if(event.event_type==='MEDIA_CHANGED'||key.includes('media'))return {icon:'image',cls:'media',title:'Bilder geändert'};
+  if(event.event_type==='STATUS_CHANGED')return {icon:'refresh',cls:'status',title:event.new==='UNAVAILABLE'?'Anzeige abgelaufen':'Anzeigenstatus geändert'};
+  if(key==='city'||key.includes('location'))return {icon:'map-pin',cls:'location',title:'Ort geändert'};
+  if(key==='services')return {icon:'settings',cls:'',title:'Services geändert'};
+  if(key==='traits')return {icon:'user',cls:'',title:'Merkmale geändert'};
+  if(key==='opening_times')return {icon:'clock',cls:'',title:'Öffnungszeiten geändert'};
+  if(key==='phone')return {icon:'phone',cls:'',title:'Kontakt geändert'};
+  if(key==='description')return {icon:'note',cls:'',title:'Beschreibung geändert'};
+  if(key==='name')return {icon:'user',cls:'',title:'Name geändert'};
+  if(key==='postal_code')return {icon:'map-pin',cls:'location',title:'PLZ geändert'};
+  if(key==='source_profile_id'||key==='canonical_id')return {icon:'shield',cls:'',title:'Profil-Zuordnung geändert'};
+  return {icon:'refresh',cls:'',title:'Profiländerung'};
+}
+function summarizeChange(event){
+  if(event.event_type==='LISTING_FIRST_SNAPSHOT')return `Anzeige #${event.new?.advert_id||'—'} wurde erstmals gespeichert`;
+  if(event.event_type==='NEW_LISTING_FOR_PERSON')return `Neue Anzeige #${event.new?.advert_id||'—'} wurde der bekannten Person zugeordnet`;
+  if(event.event_type==='MEDIA_CHANGED'){const a=event.new?.added?.length||0,r=event.old?.removed?.length||0;return `${a} neu, ${r} entfernt`;}
+  if(event.field_key==='city')return `${event.old??'—'} → ${event.new??'—'}`;
+  if(event.field_key==='services')return 'Service-Angebot wurde aktualisiert';
+  if(event.field_key==='traits')return 'Profilmerkmale wurden aktualisiert';
+  if(event.field_key==='opening_times')return 'Öffnungszeiten wurden aktualisiert';
+  if(event.field_key==='name')return `${event.old??'—'} → ${event.new??'—'}`;
+  if(event.field_key==='phone')return 'Kontaktdaten wurden aktualisiert';
+  if(event.field_key==='description')return 'Beschreibung wurde aktualisiert';
+  if(event.event_type==='STATUS_CHANGED')return event.new==='UNAVAILABLE'?'Anzeige nicht mehr verfügbar':`${event.old||'—'} → ${event.new||'—'}`;
+  return event.field_key?`${event.field_key} geändert`:'Änderung erkannt';
+}
+function renderHistory(){
+  const c=state.dashboard.counts||{},u=state.dashboard.usage||{};
+  $('#historyIntro').innerHTML=`<div class="history-explainer">${ico('info')}<span><b>Was zeigt der Verlauf?</b><small>Gespeichert werden neue bzw. wiederkehrende Anzeigen und echte Änderungen an Medien, Ort, Services, Merkmalen, Kontaktdaten oder Status. Reine erneute Abrufe ohne Änderung erzeugen keinen Änderungseintrag.</small></span></div>`;
+  const stats=[['users','Personen',c.persons||0,''],['refresh','Wiederkehrer',c.people_with_relistings||0,'relistings'],['image','Medien',c.media_assets||0,''],['clock','Änderungen',c.changes||0,'changes']];
+  $('#historySummary').innerHTML=stats.map(([icon,label,val,drill])=>drill?`<button class="stat-card clickable" data-history-drill="${drill}" type="button"><span>${ico(icon)}</span><b>${val}</b><small>${label}</small>${ico('chevron-right','stat-chevron')}</button>`:`<div class="stat-card"><span>${ico(icon)}</span><b>${val}</b><small>${label}</small></div>`).join('');
+  $('#usageSummary').innerHTML=`<div class="section-inline-head"><h2>Deine Nutzung</h2></div><div class="usage-grid"><div><b>${u.searches||0}</b><small>Suchen</small></div><div><b>${u.decisions||0}</b><small>Entscheidungen</small></div><div><b>${u.like_rate==null?'—':`${u.like_rate}%`}</b><small>Like-Quote</small></div><div><b>${u.avg_results==null?'—':Math.round(u.avg_results)}</b><small>Ø Treffer</small></div></div>${u.top_filters?.length?`<div class="usage-filter-line"><small>Häufige Filter</small><div>${u.top_filters.slice(0,6).map(x=>`<span>${esc(x.label)} · ${x.count}</span>`).join('')}</div></div>`:''}`;
+  const events=state.dashboard.recent_changes||[]; $('#globalTimeline').innerHTML=events.length?events.map(e=>{const v=eventVisual(e);return `<button class="global-event" data-history-person="${e.person_id}" type="button"><span class="event-icon ${v.cls}">${ico(v.icon)}</span><span><b>${esc(v.title)}</b><small>${esc(summarizeChange(e))} · ${fmtDate(e.created_at)}</small></span>${ico('chevron-right')}</button>`;}).join(''):`<div class="list-empty">${ico('clock')}Noch keine Änderungen gespeichert.</div>`;
+  $$('[data-history-person]').forEach(btn=>btn.onclick=()=>openPerson(Number(btn.dataset.historyPerson)));$$('[data-history-drill]').forEach(btn=>btn.onclick=()=>openHistoryDrill(btn.dataset.historyDrill));
+}
+async function openHistoryDrill(kind){
+  try{
+    const d=await api(`/api/history/${encodeURIComponent(kind)}?limit=100`);const items=d.items||[];
+    if(kind==='relistings'){
+      openSheet(`<div class="sheet-title"><h2>Wiederkehrer</h2><span>${items.length}</span></div><div class="history-drill-list">${items.map(x=>`<button class="history-drill-row" data-drill-person="${x.person_id}" type="button">${x.thumbnail_url?`<img src="${esc(x.thumbnail_url)}" alt="">`:`<span class="person-thumb-fallback">${ico('user')}</span>`}<span><b>${esc(x.name||`Person #${x.person_id}`)}</b><small>${esc(x.city||'Ort unbekannt')} · ${x.listing_count} Anzeigen · zuletzt ${fmtDate(x.last_seen_at)}</small></span>${ico('chevron-right')}</button>`).join('')||'<p class="about-copy">Noch keine Wiederkehrer erkannt.</p>'}</div>`);
+      $$('[data-drill-person]',$('#sheetContent')).forEach(btn=>btn.onclick=()=>{closeSheet();openPerson(Number(btn.dataset.drillPerson));});
+    }else{
+      openSheet(`<div class="sheet-title"><h2>Änderungen</h2><span>${items.length}</span></div><div class="history-drill-list">${items.map(e=>{const v=eventVisual(e);return `<button class="history-drill-event" data-drill-person="${e.person_id}" type="button"><span class="event-icon ${v.cls}">${ico(v.icon)}</span><span><b>${esc(v.title)}</b><small>${esc(summarizeChange(e))} · ${fmtDate(e.created_at)}</small></span>${ico('chevron-right')}</button>`;}).join('')||'<p class="about-copy">Noch keine Änderungen gespeichert.</p>'}</div>`);$$('[data-drill-person]',$('#sheetContent')).forEach(btn=>btn.onclick=()=>{closeSheet();openPerson(Number(btn.dataset.drillPerson));});
+    }
+  }catch(e){toast(e.message)}
+}
+
+async function loadDashboard(showToast=false){try{state.dashboard=await api('/api/dashboard');renderHome();if(state.screen==='history')renderHistory();if(state.screen==='lists')loadPeople();if(showToast)toast('Aktualisiert');}catch(e){if(showToast)toast(e.message)}}
+async function loadRecentSearches(){try{const d=await api('/api/recent-searches?limit=8');state.recentSearches=d.items||[];if(state.screen==='home')renderHome();}catch{}}
+async function loadStorage(){try{state.storage=await api('/api/storage');if(state.screen==='settings')renderSettings();}catch{}}
+async function loadSettings(){try{const d=await api('/api/settings');state.settings=d.settings||{};if(state.settings.default_filters)state.filters=cloneFilters(state.settings.default_filters);syncReducedMotion();rebuildVisible();if(state.screen==='settings')renderSettings();}catch(e){console.warn(e)}}
+
+function settingToggle(key,label,description,icon){const on=!!state.settings[key];return `<button class="setting-row" data-setting-toggle="${esc(key)}" type="button">${ico(icon)}<span><b>${esc(label)}</b><small>${esc(description)}</small></span><span class="toggle ${on?'on':''}"></span></button>`;}
+function settingDrill(id,label,description,icon,value=''){return `<button class="setting-row" data-setting-drill="${esc(id)}" type="button">${ico(icon)}<span><b>${esc(label)}</b><small>${esc(description)}</small></span><span class="setting-row-value">${esc(value)}</span>${ico('chevron-right','chev')}</button>`;}
+function renderSettings(){
+  const s=state.storage||{}, c=state.dashboard.counts||{};
+  $('#settingsPage').innerHTML=`
+    <section class="settings-group"><div class="settings-group-title"><span class="settings-group-icon">${ico('image')}</span><span><h2>Bildanalyse</h2><p>Automatische Analyse und Verwaltung deiner Bilder</p></span></div>${settingToggle('visual_check_enabled','Automatische Bildprüfung','Neue Bilder automatisch analysieren','sparkles')}${settingDrill('visual-results','Gespeicherte Ergebnisse','Analyse-Ergebnisse auf diesem Gerät','database',String(s.visual_analysis_count??c.visual_analyses??0))}${settingDrill('delete-analysis','Analyse-Ergebnisse löschen','Alle gespeicherten Ergebnisse entfernen','trash')}</section>
+    <section class="settings-group"><div class="settings-group-title"><span class="settings-group-icon">${ico('heart')}</span><span><h2>Swipe</h2><p>Anzeige- und Interaktionsoptionen</p></span></div>${settingToggle('replay_likes','Likes erneut zeigen','Bereits gelikte Profile wieder anzeigen','refresh')}${settingDrill('filter-defaults','Standardfilter','Gespeicherte Sucheinstellungen verwalten','filter',state.settings.default_filters?'Gespeichert':'Standard')}${settingToggle('reduced_motion','Reduzierte Animationen','Dezente Animationen für flüssigere Bedienung','clock')}</section>
+    <section class="settings-group"><div class="settings-group-title"><span class="settings-group-icon purple">${ico('clock')}</span><span><h2>Historie</h2><p>Verwaltung deiner Aktivitäten und gespeicherten Inhalte</p></span></div>${settingToggle('show_description_changes','Freitext-Änderungen','Beschreibungsevents in der Historie anzeigen','edit')}${settingDrill('image-archive','Medien-Archiv','Alle gespeicherten Bilder anzeigen','image',String(s.image_count??0))}${settingDrill('video-archive','Video-Archiv','Alle gespeicherten Videos anzeigen','video',String(s.video_count??0))}${settingToggle('archive_videos','Videos lokal archivieren','Neue Videos zusätzlich herunterladen','archive')}</section>
+    <section class="settings-group"><div class="settings-group-title"><span class="settings-group-icon blue">${ico('database')}</span><span><h2>Daten &amp; Speicher</h2><p>Speicherplatz und Datensicherung</p></span></div>${settingDrill('db-info','Datenbank-Größe','Lokale V9-Datenbank auf diesem Gerät','database',fmtBytes(s.database_bytes))}${settingDrill('media-info','Medien-Cache','Zwischengespeicherte Bilder und Videos','archive',fmtBytes(s.media_bytes))}${settingDrill('backup-info','Export / Import','Daten sichern oder wiederherstellen','external')}${settingToggle('archive_raw_html','Roh-HTML archivieren','Profilquellen revisionssicher speichern','save')}</section>`;
+  $$('[data-setting-toggle]').forEach(btn=>btn.onclick=()=>toggleSetting(btn.dataset.settingToggle));
+  $$('[data-setting-drill]').forEach(btn=>btn.onclick=()=>openSettingDrill(btn.dataset.settingDrill));
+}
+async function toggleSetting(key){try{const next=!state.settings[key];const d=await api('/api/settings',{method:'POST',body:{key,value:next}});state.settings=d.settings||state.settings;syncReducedMotion();rebuildVisible();renderSettings();if(state.screen==='discover')renderDiscover();}catch(e){toast(e.message)}}
+
+async function openSettingDrill(id){
+  if(id==='filter-defaults'){openFilter();return;}
+  if(id==='delete-analysis'){openSheet(`<div class="sheet-title"><h2>Analyse-Ergebnisse löschen?</h2></div><p class="about-copy">Die gespeicherten Bildanalyse-Ergebnisse werden entfernt. Archivierte Bilder, Identity-Daten und Snapshots bleiben erhalten.</p><button id="confirmDeleteAnalysis" class="sheet-submit" type="button">Ergebnisse löschen</button>`);$('#confirmDeleteAnalysis').onclick=async()=>{try{const d=await api('/api/visual-analysis',{method:'DELETE'});closeSheet();await loadStorage();toast(`${d.deleted} Ergebnisse gelöscht`);}catch(e){toast(e.message)}};return;}
+  if(id==='image-archive'||id==='video-archive'||id==='visual-results'){
+    const kind=id==='video-archive'?'VIDEO':id==='image-archive'?'IMAGE':null; if(id==='visual-results'){openSheet(`<div class="sheet-title"><h2>Bildanalyse</h2></div><p class="about-copy">${state.storage.visual_analysis_count||0} lokale Analyse-Ergebnisse sind an archivierten Media-Assets gespeichert. Sie dienen als technischer Hinweis und nicht als Identitäts- oder Echtheitsbeweis.</p>`);return;}
+    try{const d=await api(`/api/archive/media?kind=${kind}&limit=60`);const items=d.items||[];openSheet(`<div class="sheet-title"><h2>${kind==='IMAGE'?'Medien-Archiv':'Video-Archiv'}</h2><span>${items.length}</span></div><div class="archive-grid">${items.map(x=>x.local_url&&kind==='IMAGE'?`<img src="${esc(x.local_url)}" style="width:31%;aspect-ratio:1;object-fit:cover;border-radius:10px;margin:1%">`:`<div class="listing-card"><b>${esc(x.kind)} #${x.media_asset_id}</b><small>${fmtBytes(x.byte_size)} · ${fmtDate(x.last_seen_at)}</small></div>`).join('')||'<p class="about-copy">Noch keine Medien gespeichert.</p>'}</div>`);}catch(e){toast(e.message)}return;
+  }
+  if(id==='db-info'||id==='media-info'){openSheet(`<div class="sheet-title"><h2>Lokaler Speicher</h2></div><div class="listing-card"><b>Datenbank</b><small>${fmtBytes(state.storage.database_bytes)}</small></div><div class="listing-card"><b>Medien</b><small>${fmtBytes(state.storage.media_bytes)}</small></div><div class="listing-card"><b>Roh-HTML</b><small>${fmtBytes(state.storage.raw_html_bytes)}</small></div><div class="listing-card"><b>Gesamtarchiv</b><small>${fmtBytes(state.storage.archive_bytes)}</small></div>`);return;}
+  if(id==='backup-info')openSheet(`<div class="sheet-title"><h2>Export / Import</h2></div><p class="about-copy">Die V9-Daten liegen lokal in <b>ladies_v9.sqlite3</b> und <b>ladies_v9_data/</b>. Für eine vollständige Sicherung beendest du die App und kopierst beide zusammen. Dadurch bleiben Datenmodell, Medienhistorie, Identity, Preislisten und Treffen vollständig erhalten.</p>`);
+}
+
+function latestSnapshot(){return state.detail?.latest_snapshot||null;}
+function detailMedia(){return latestSnapshot()?.media||[];}
+function detailCurrentMedia(){const a=detailMedia();return a[clamp(state.detailMediaIndex,0,Math.max(0,a.length-1))]||null;}
+function detailAge(){return firstValue(latestSnapshot()?.traits,['Alter','alter','age']);}
+function detailHeight(){return firstValue(latestSnapshot()?.traits,['Größe','Groesse','größe','height']);}
+function detailTrait(...keys){return firstValue(latestSnapshot()?.traits,keys);}
+function detailServiceNames(){return flatten(latestSnapshot()?.services);}
+
+async function fetchPersonDetail(personId,advertId=null){
+  if(advertId){const ld=await api(`/api/listing/${encodeURIComponent(advertId)}`);const detail=ld.person;if(ld.profile)detail.latest_snapshot=ld.profile;if(ld.listing){detail.selected_listing=ld.listing;detail.listings=[ld.listing,...(detail.listings||[]).filter(x=>String(x.advert_id)!==String(ld.listing.advert_id))];}return detail;}
+  return api(`/api/person/${personId}`);
+}
+async function openPerson(personId, advertId=null){
+  state.detailAdvertId=advertId||null;
+  try{
+    if(advertId){const row=state.results.find(x=>String(x.advert_id)===String(advertId));if(row&&!profileBundle(row))await ensureProfile(row,{quiet:true,rerender:false}); if(!personId&&row)personId=row.person_id;}
+    if(!personId)throw new Error('Person nicht gefunden');
+    state.detail=await fetchPersonDetail(personId,advertId);state.detailTab='overview';state.detailPreviousTab='overview';state.detailMediaIndex=0;state.profileInitialPositionPending=true;$('#profileLayer').scrollTop=0;renderProfile();$('#profileLayer').classList.remove('hidden');positionProfileAtDetails();
+  }catch(e){toast(e.message)}
+}
+function closeProfile(){state.profileVideoObserver?.disconnect();state.profileVideoObserver=null;$('#profileLayer').classList.add('hidden');$('#profileLayer').scrollTop=0;state.detail=null;state.detailAdvertId=null;state.profileInitialPositionPending=false; }
+function profileHeroMedia(){const m=detailCurrentMedia();if(!m)return `<div class="media-fallback">${ico('image')}</div>`;const poster=m.kind==='VIDEO'?videoPosterUrl(m):'';return m.kind==='VIDEO'?`<video src="${esc(mediaUrl(m))}"${poster?` poster="${esc(poster)}"`:''} muted autoplay loop playsinline preload="metadata"></video>`:`<img draggable="false" src="${esc(mediaUrl(m))}" alt="">`;}
+function profileBadges(){
+  const d=state.detail,list=d?.listings?.[0];const adAge=listingAgeBadge(list?.published_at||latestSnapshot()?.published_at,list?.first_seen_at);const personAge=personAgeBadge(d?.person?.first_seen_at,d?.person?.listing_count||1);
+  return `${adAge?`<span class="badge ${adAge.kind}">${ico('clock')}${esc(adAge.text)}</span>`:''}${personAge?`<span class="badge ${personAge.kind}">${ico('users')}${esc(personAge.text)}</span>`:''}${list?.match_decision&&list.match_decision!=='NO_MATCH'?'<span class="badge blue">Identity geprüft</span>':''}`;
+}
+function profileTabsMarkup(){
+  return `<nav class="profile-tabs"><button class="${state.detailTab==='overview'?'active':''}" data-detail-tab="overview">Übersicht</button><button class="${state.detailTab==='offer'?'active':''}" data-detail-tab="offer">Angebot</button><button class="${state.detailTab==='analysis'?'active':''}" data-detail-tab="analysis">Analyse</button><button class="${state.detailTab==='data'?'active':''}" data-detail-tab="data">Meine Daten</button><button class="${state.detailTab==='history'?'active':''}" data-detail-tab="history">Verlauf</button></nav>`;
+}
+function setDetailTab(tab){if(tab===state.detailTab)return;state.detailPreviousTab=state.detailTab;state.detailTab=tab;if(tab==='history')$('#profileLayer').scrollTop=0;else if(state.detailPreviousTab==='history')state.profileInitialPositionPending=true;renderProfile();if(tab!=='history'&&state.profileInitialPositionPending)positionProfileAtDetails();}
+function profileCompactOffset(){
+  const layer=$('#profileLayer'),hero=$('.profile-hero',layer);if(!hero)return 0;
+  const compact=Math.min(370,Math.max(300,layer.clientHeight*.43));return Math.max(0,hero.offsetHeight-compact);
+}
+function positionProfileAtDetails(){
+  requestAnimationFrame(()=>{const layer=$('#profileLayer');if(!layer||state.detailTab==='history')return;layer.scrollTop=profileCompactOffset();state.profileInitialPositionPending=false;});
+}
+function stepDetailMedia(delta,{focus=false}={}){const media=detailMedia();if(!media.length)return;state.detailMediaIndex=clamp(state.detailMediaIndex+delta,0,media.length-1);const top=$('#profileLayer').scrollTop;renderProfile();requestAnimationFrame(()=>{$('#profileLayer').scrollTop=focus?0:top;});}
+function selectDetailMedia(index,{focus=false}={}){const media=detailMedia();if(!media.length)return;state.detailMediaIndex=clamp(Number(index)||0,0,media.length-1);const top=$('#profileLayer').scrollTop;renderProfile();requestAnimationFrame(()=>{$('#profileLayer').scrollTop=focus?0:top;});}
+function setupProfileVideoVisibility(){
+  state.profileVideoObserver?.disconnect();state.profileVideoObserver=null;const video=$('.profile-hero video');if(!video)return;
+  const layer=$('#profileLayer');if(!('IntersectionObserver' in window)){video.play().catch(()=>{});return;}
+  state.profileVideoObserver=new IntersectionObserver(entries=>{for(const entry of entries){if(entry.intersectionRatio>=.35){video.muted=true;video.play().catch(()=>{});}else if(entry.intersectionRatio<.15)video.pause();}},{root:layer,threshold:[0,.15,.35,.7]});state.profileVideoObserver.observe(video);
+}
+function setupProfileMediaGesture(){
+  const hero=$('.profile-hero');if(!hero)return;let down=false,startX=0,startY=0,dx=0,dy=0,pid=null;
+  hero.querySelectorAll('img').forEach(img=>{img.draggable=false;img.addEventListener('dragstart',e=>e.preventDefault());});
+  hero.addEventListener('pointerdown',e=>{if(e.target.closest('.thumb-strip,.profile-media-analysis,.profile-overlay-action'))return;down=true;pid=e.pointerId;startX=e.clientX;startY=e.clientY;dx=0;dy=0;hero.setPointerCapture?.(pid);});
+  hero.addEventListener('pointermove',e=>{if(!down)return;dx=e.clientX-startX;dy=e.clientY-startY;if(Math.abs(dx)>12&&Math.abs(dx)>Math.abs(dy)){e.preventDefault();hero.classList.add('media-dragging');}}, {passive:false});
+  hero.addEventListener('pointerup',()=>{if(!down)return;down=false;hero.classList.remove('media-dragging');try{hero.releasePointerCapture?.(pid)}catch{};if(Math.abs(dx)>48&&Math.abs(dx)>Math.abs(dy)){stepDetailMedia(dx<0?1:-1);return;}if(Math.abs(dx)<10&&Math.abs(dy)<10){const r=hero.getBoundingClientRect(),x=startX-r.left;if(x<r.width*.40)stepDetailMedia(-1);else if(x>r.width*.60)stepDetailMedia(1);}});
+  hero.addEventListener('pointercancel',()=>{down=false;hero.classList.remove('media-dragging');});
+}
+function mediaAnalysisMarkup(media){
+  if(!media||media.kind!=='IMAGE')return '';
+  const a=media.visual_analysis;if(!a)return `<button class="profile-media-analysis pending" data-media-analysis type="button">${ico('sparkles')}Bildcheck noch offen</button>`;
+  const score=Number(a.score||0),cls=score>=30?'alert':score>=12?'notice':'ok';return `<button class="profile-media-analysis ${cls}" data-media-analysis type="button">${ico('sparkles')}${esc(a.label||'Bildcheck')} · ${score}/100</button>`;
+}
+function openMediaAnalysisSheet(media=detailCurrentMedia()){
+  if(!media||media.kind!=='IMAGE')return;const a=media.visual_analysis;
+  if(!a){openSheet(`<div class="sheet-title"><h2>Bildanalyse</h2></div><p class="about-copy">Für dieses Bild liegt noch kein Ergebnis vor.</p><button id="runSheetVisual" class="sheet-submit" type="button">Bild jetzt prüfen</button>`);$('#runSheetVisual').onclick=()=>{closeSheet();runVisual(media,true,true)};return;}
+  openSheet(`<div class="sheet-title"><h2>Dieses Bild</h2><span>${Number(a.score||0)}/100</span></div><p class="analysis-label">${esc(a.label||'Ergebnis')}</p><div class="analysis-reason-list">${(a.reasons||[]).map(x=>`<div>${ico('info')}<span>${esc(x)}</span></div>`).join('')||'<p class="about-copy">Keine technische Auffälligkeit erkannt.</p>'}</div><p class="analysis-caveat">Technischer Hinweis aus sichtbarer Geometrie (z. B. Gesichter/Posen/Hände). Kein Echtheitsbeweis und keine verlässliche Aussage zu Alter oder Körpermerkmalen.</p>`);
+}
+function renderProfile(){
+  const d=state.detail;if(!d)return;const snap=latestSnapshot();const media=detailMedia(),idx=state.detailMediaIndex;const age=detailAge();const layer=$('#profileLayer');const priorScroll=layer.scrollTop;layer.classList.remove('data-mode');
+  if(state.detailTab==='history'){
+    $('#profileContent').innerHTML=`<header class="compact-profile-header"><button class="header-icon light" data-profile-close type="button">${ico('chevron-left')}</button><h1>${esc(snap?.name||d.person.display_name||`Person #${d.person.person_id}`)}${age?`, ${esc(String(age).replace(/\s*Jahre?.*/i,''))}`:''}</h1><button class="header-icon light" data-detail-more type="button">${ico('more')}</button></header>${profileTabsMarkup()}<div id="profileTabBody" class="profile-tab-body history-compact-body">${renderProfileHistory()}</div>`;
+  }else{
+    $('#profileContent').innerHTML=`<div class="profile-sticky-actions"><button class="profile-overlay-action back" data-profile-close type="button">${ico('chevron-left')}</button><button class="profile-overlay-action more" data-detail-more type="button">${ico('more')}</button></div><div class="profile-hero">${profileHeroMedia()}<span class="profile-counter">${media.length?`${idx+1} / ${media.length}`:'—'}</span>${mediaAnalysisMarkup(detailCurrentMedia())}<div class="thumb-strip">${media.slice(0,20).map((m,i)=>{const vp=m.kind==='VIDEO'?videoPosterUrl(m,{thumb:true}):'';return `<button class="${i===idx?'active':''}" data-detail-media="${i}" type="button">${m.kind==='IMAGE'?`<img src="${esc(mediaUrl(m))}" alt="">`:vp?`<span class="video-thumb"><img src="${esc(vp)}" alt="Video"><i>${ico('play')}</i></span>`:`<span class="media-fallback">${ico('play')}</span>`}</button>`;}).join('')}</div></div><div class="profile-sheet"><div class="profile-identity"><div class="profile-name-row"><h1>${esc(snap?.name||d.person.display_name||`Person #${d.person.person_id}`)}${age?`, ${esc(String(age).replace(/\s*Jahre?.*/i,''))}`:''}</h1>${todayish(d.person.last_seen_at)?'<span class="online-pill">Heute online</span>':''}</div><div class="profile-meta-place">${ico('map-pin')}${esc(snap?.city||'Ort unbekannt')}</div><div class="badge-row">${profileBadges()}</div></div>${profileTabsMarkup()}<div id="profileTabBody" class="profile-tab-body ${state.detailTab==='data'?'mydata-inline-body':''}">${renderProfileTab()}</div></div>`;
+  }
+  $('[data-profile-close]').onclick=closeProfile;$('[data-detail-more]').onclick=()=>openDetailMenu();$$('[data-detail-media]').forEach(btn=>btn.onclick=e=>{e.stopPropagation();selectDetailMedia(Number(btn.dataset.detailMedia));});$$('[data-detail-tab]').forEach(btn=>btn.onclick=()=>setDetailTab(btn.dataset.detailTab));$('[data-media-analysis]')?.addEventListener('click',e=>{e.stopPropagation();openMediaAnalysisSheet();});bindProfileTab();if(state.detailTab!=='history'){setupProfileMediaGesture();setupProfileVideoVisibility();}maybeAutoVisual(detailCurrentMedia(),true);
+  if(!state.profileInitialPositionPending&&state.detailTab!=='history')requestAnimationFrame(()=>{layer.scrollTop=priorScroll;});
+}
+function renderProfileTab(){if(state.detailTab==='offer')return renderOffer();if(state.detailTab==='analysis')return renderAnalysis();if(state.detailTab==='data')return renderMyData();if(state.detailTab==='history')return renderProfileHistory();return renderOverview();}
+
+function serviceFlag(...aliases){const names=detailServiceNames().map(x=>String(x).toLowerCase());return names.some(n=>aliases.some(a=>n===a.toLowerCase()||n.includes(a.toLowerCase())))?'Ja':'—';}
+function renderOverview(){
+  const d=state.detail,age=detailAge();const bust=detailTrait('Busen','Oberweite','Brustgröße','Brustgroesse','Brust','busen');
+  const important=[['calendar','Alter',age||'—'],['heart','Busen',bust||'—'],['heart','GV',serviceFlag('GV','Geschlechtsverkehr')],['heart','AV',serviceFlag('AV','Anal')],['message','Küssen',serviceFlag('ZK','Küssen','Kuss')],['star','Girlfriend',serviceFlag('Girlfriend-Sex','Girlfriend Sex','GFS')]];
+  return `<section class="profile-card"><div class="profile-card-head"><h2>${ico('info')}Wichtige Informationen</h2><button data-tab-offer type="button">Mehr ${ico('chevron-right')}</button></div><div class="info-grid">${important.map(([icon,label,val])=>`<div class="info-item"><span>${ico(icon)}</span><span><small>${esc(label)}</small><b>${esc(val)}</b></span></div>`).join('')}</div></section><section class="profile-card"><div class="profile-big-actions"><button class="profile-big-action" data-contact type="button"><span>${ico('message')}</span>Kontakt</button><button class="profile-big-action like ${d.user_state.preference==='LIKE'?'active':''}" data-detail-like type="button"><span>${ico('heart-fill')}</span>${d.user_state.preference==='LIKE'?'Gelikt':'Like'}</button><button class="profile-big-action favorite ${d.user_state.favorite?'active':''}" data-detail-favorite type="button"><span>${d.user_state.favorite?ico('star-fill'):ico('star')}</span>Favorit</button></div></section><section class="profile-card"><div class="profile-card-head"><h2>${ico('note')}Über mich</h2><button data-toggle-about type="button">${ico('chevron-down')}</button></div><p id="aboutText" class="about-copy collapsed">${esc(latestSnapshot()?.description||'Keine Beschreibung gespeichert.')}</p></section>${d.person.listing_count>1?`<button class="identity-card" data-tab-history type="button"><span class="id-icon">${ico('shield')}</span><span><b>Wiedererkannt · ${d.person.listing_count} Anzeigen</b><small>${d.person.reappear_count} weitere Anzeige(n) dieser Person verknüpft</small></span>${ico('chevron-right')}</button>`:''}`;
+}
+
+function normalizeMatchText(value){return String(value??'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/ß/g,'ss').replace(/[^a-z0-9]+/g,' ').trim();}
+function selectedFilterValues(){return Object.entries(state.filters.selected||{}).flatMap(([group,values])=>(values||[]).map(value=>({group,value,normalized:normalizeMatchText(value)})));}
+function filterMatch(name){const n=normalizeMatchText(name);if(!n)return false;return selectedFilterValues().some(x=>n===x.normalized||n.includes(x.normalized)||x.normalized.includes(n));}
+function traitFilterMatch(key,value){
+  const text=`${key}: ${value}`;if(filterMatch(text)||filterMatch(value))return true;const nk=normalizeMatchText(key),nv=normalizeMatchText(value);const aliases={busen:['busen','oberweite','brustgrosse','brust'],figur:['figur'],haarfarbe:['haarfarbe','haare'],geschlecht:['geschlecht','sex'],treff:['treffen','besuchsart','besuch']};
+  const derived=new Set();if((aliases.busen||[]).some(a=>nk.includes(a))){const cup=(String(value).match(/\b([A-H])\b/i)||[])[1]?.toUpperCase();if(cup){if(['A','B'].includes(cup))derived.add('klein');else if(cup==='C')derived.add('mittel');else if(['D','E'].includes(cup))derived.add('gross');else derived.add('riesig');}if(nv.includes('natur'))derived.add('naturbusen');}if((aliases.geschlecht||[]).some(a=>nk.includes(a))&&(nv.includes('frau')||nv.includes('weiblich')))derived.add('weiblich');
+  return selectedFilterValues().some(x=>(aliases[x.group]||[]).some(a=>nk.includes(a))&&(nv.includes(x.normalized)||x.normalized.includes(nv)||derived.has(x.normalized)));
+}
+function renderOffer(){
+  const s=latestSnapshot(),d=state.detail;const services=detailServiceNames();const times=flatten(s?.opening_times);const traits=Object.entries(s?.traits||{}).flatMap(([k,v])=>(Array.isArray(v)?v:[v]).map(x=>({key:k,value:x,label:`${k}: ${x}`})));
+  const chip=(label,match)=>`<span class="offer-chip ${match?'match':''}">${match?ico('check'):''}${esc(label)}</span>`;
+  return `<section class="profile-card offer-section"><div class="profile-card-head"><h2>${ico('heart')}Services</h2><small class="filter-match-legend">${ico('check')} entspricht Filter</small></div><div class="offer-chip-wrap">${services.length?services.map(x=>chip(x,filterMatch(x))).join(''):'<span class="about-copy">Keine Services gespeichert.</span>'}</div></section><section class="profile-card offer-section"><div class="profile-card-head"><h2>${ico('clock')}Öffnungszeiten</h2></div><div class="offer-chip-wrap">${times.length?times.map(x=>chip(x,filterMatch(x))).join(''):'<span class="about-copy">Keine Öffnungszeiten gespeichert.</span>'}</div></section><section class="profile-card offer-section"><div class="profile-card-head"><h2>${ico('user')}Merkmale</h2></div><div class="offer-chip-wrap">${traits.slice(0,30).map(x=>chip(x.label,traitFilterMatch(x.key,x.value))).join('')}</div></section><section class="profile-card"><div class="profile-card-head"><h2>${ico('euro')}Preislisten</h2><button data-add-price type="button">${ico('plus')} Neu</button></div>${renderPriceLists(d.price_lists||[])}</section><section class="profile-card"><div class="profile-card-head"><h2>${ico('list')}Anzeigen</h2></div>${(d.listings||[]).map(l=>{const ad=listingAgeBadge(l.published_at,l.first_seen_at);return `<div class="listing-card"><div class="listing-card-head"><b>Anzeige #${esc(l.advert_id)}</b><span class="status-pill ${l.current_status==='ACTIVE'?'active':l.current_status==='UNAVAILABLE'?'unavailable':''}">${esc(l.current_status)}</span></div><small>${esc(l.city||s?.city||'')} · ${ad?esc(ad.text):`zuletzt ${fmtDate(l.last_seen_at)}`}</small><button class="add-outline" data-open-original="${esc(l.current_url||'')}" type="button">${ico('external')}Originalprofil öffnen</button></div>`;}).join('')}</section>`;
+}
+function renderPriceLists(rows){return rows.length?rows.slice(0,6).map(p=>`<div class="price-list-card"><div class="listing-card-head"><b>${fmtShortDate(p.observed_at)}</b><span class="price-source">${esc(p.source)}</span></div>${p.items.map(i=>`<div class="price-row"><span>${i.duration_minutes?`${i.duration_minutes} Min. · `:''}${esc(i.label||i.service||i.item_type)}</span><b>${euro(i.amount_eur)}</b></div>`).join('')}${p.note?`<small>${esc(p.note)}</small>`:''}</div>`).join(''):'<p class="about-copy">Noch keine Preisliste gespeichert.</p>';}
+
+function profileCriterionMatch(filter,snap){
+  const n=filter.normalized,group=filter.group;
+  if(group==='service'||group==='treff')return detailServiceNames().some(x=>{const v=normalizeMatchText(x);return v===n||v.includes(n)||n.includes(v);});
+  if(group==='zeiten')return flatten(snap?.opening_times).some(x=>{const v=normalizeMatchText(x);return v.includes(n)||n.includes(v);});
+  const aliases={busen:['busen','oberweite','brustgrosse','brust'],figur:['figur'],haarfarbe:['haarfarbe','haare','haar'],geschlecht:['geschlecht','sex']};
+  return Object.entries(snap?.traits||{}).some(([key,values])=>{
+    const nk=normalizeMatchText(key);if(aliases[group]&&!aliases[group].some(a=>nk.includes(a)))return false;
+    return (Array.isArray(values)?values:[values]).some(value=>{
+      const nv=normalizeMatchText(value);if(nv===n||nv.includes(n)||n.includes(nv))return true;
+      if(group==='geschlecht'&&n==='weiblich'&&(nv.includes('weiblich')||nv.includes('frau')))return true;
+      if(group==='busen'){
+        const cup=(String(value).match(/\b([A-H])\b/i)||[])[1]?.toUpperCase();if(n==='naturbusen'&&nv.includes('natur'))return true;
+        if(cup){const derived=['A','B'].includes(cup)?'klein':cup==='C'?'mittel':['D','E'].includes(cup)?'gross':'riesig';return derived===n;}
+      }
+      return false;
+    });
+  });
+}
+function profileFilterFit(){
+  const selected=selectedFilterValues(),snap=latestSnapshot();const ageNum=parseInt(String(detailAge()||'').match(/\d+/)?.[0]||'',10);let total=0,matched=0;const hits=[],miss=[];
+  for(const f of selected){total++;const ok=profileCriterionMatch(f,snap);(ok?hits:miss).push(f.value);if(ok)matched++;}
+  if(Number.isFinite(ageNum)){total++;const ok=ageNum>=Number(state.filters.ageMin||18)&&ageNum<=Number(state.filters.ageMax||99);(ok?hits:miss).push(`Alter ${ageNum}`);if(ok)matched++;}
+  return {total,matched,score:total?Math.round(matched/total*100):null,hits:[...new Set(hits)],miss:[...new Set(miss)]};
+}
+function analysisMetric(icon,label,value,note,cls=''){return `<div class="analysis-metric ${cls}"><span>${ico(icon)}</span><b>${esc(value)}</b><small>${esc(label)}</small>${note?`<p>${esc(note)}</p>`:''}</div>`;}
+function renderAnalysis(){
+  const d=state.detail,a=d.analytics||{},m=a.media||{},cons=a.consistency||{},aff=a.affinity||{},fit=profileFilterFit(),media=detailMedia();
+  const currentAlerts=[];if((m.shared_with_other_people||0)>0)currentAlerts.push(`${m.shared_with_other_people} identische Bilddatei(en) wurden auch bei anderen Personen gespeichert.`);if((cons.city_count||0)>1)currentAlerts.push(`Im Verlauf wurden ${cons.city_count} verschiedene Orte gespeichert.`);if((cons.name_count||0)>1)currentAlerts.push(`Im Verlauf wurden ${cons.name_count} verschiedene Namen gespeichert.`);if((m.multi_face_images||0)>0&&!String(detailTrait('Geschlecht','geschlecht')||'').toLowerCase().includes('paar'))currentAlerts.push(`${m.multi_face_images} analysierte(s) Bild(er) enthalten mehrere erkannte Gesichter.`);
+  const affinityValue=aff.score==null?'—':`${aff.score}%`;const affinityNote=aff.score==null?(aff.note||'Noch zu wenig Likes/Dislikes'):`${aff.like_samples||0} Likes · ${aff.dislike_samples||0} Dislikes als Vergleich`;
+  return `<section class="analysis-hero-card"><div><small>Persönliche Einordnung</small><h2>${aff.score!=null&&aff.score>=65?'Könnte gut zu dir passen':aff.score!=null&&aff.score<40?'Eher geringe Ähnlichkeit':'Noch offen'}</h2><p>Aus deinen Filtern, Interaktionen und den gespeicherten Profildaten – ohne externe KI-Bewertung.</p></div><span class="analysis-score">${affinityValue}</span></section>
+  <div class="analysis-metrics">${analysisMetric('filter','Filter-Passung',fit.score==null?'—':`${fit.score}%`,fit.total?`${fit.matched} von ${fit.total} Kriterien`:'Keine aktiven Kriterien')}${analysisMetric('heart','Like-Ähnlichkeit',affinityValue,affinityNote)}${analysisMetric('image','Bildchecks',`${m.analyzed_images||0}/${m.image_count||media.filter(x=>x.kind==='IMAGE').length}`,`${m.flagged_images||0} mit Hinweis`)}${analysisMetric('refresh','Anzeigen',String(d.person.listing_count||1),d.person.reappear_count?`${d.person.reappear_count} Wiederkehr(er)`: 'bisher eine Anzeige')}</div>
+  ${aff.positive?.length?`<section class="profile-card"><div class="profile-card-head"><h2>${ico('sparkles')}Warum passend?</h2></div><div class="offer-chip-wrap">${aff.positive.map(x=>`<span class="offer-chip match">${ico('check')}${esc(x.label||x)}</span>`).join('')}</div></section>`:''}
+  <section class="profile-card"><div class="profile-card-head"><h2>${ico('image')}Bilder &amp; Medien</h2><small>${m.unique_media||media.length} eindeutig</small></div><div class="analysis-media-grid">${media.map((x,i)=>{const va=x.visual_analysis,score=Number(va?.score||0),cls=!va?'pending':score>=30?'alert':score>=12?'notice':'ok';return `<button data-analysis-media="${i}" class="analysis-media-item ${cls}" type="button">${x.kind==='IMAGE'?`<img src="${esc(mediaUrl(x))}" alt="">`:`<span class="media-fallback">${ico('play')}</span>`}<span>${x.kind==='VIDEO'?'Video':va?`${esc(va.label||'Check')} · ${score}`:'nicht geprüft'}</span></button>`;}).join('')}</div>${m.reused_across_listings?`<p class="analysis-note">${ico('refresh')}${m.reused_across_listings} Bilddatei(en) wurden in mehreren Anzeigen derselben Person wiederverwendet.</p>`:''}</section>
+  <section class="profile-card"><div class="profile-card-head"><h2>${ico('info')}Auffälligkeiten &amp; Konsistenz</h2></div>${currentAlerts.length?`<div class="analysis-alerts">${currentAlerts.map(x=>`<div>${ico('info')}<span>${esc(x)}</span></div>`).join('')}</div>`:'<p class="about-copy">Aus den gespeicherten Daten ergibt sich aktuell keine konkrete profilübergreifende Auffälligkeit.</p>'}<p class="analysis-caveat">Bildchecks sind technische Hinweise. Die App leitet daraus keine verlässlichen Aussagen zu Alter, Echtheit oder Körpermerkmalen ab.</p></section>
+  ${fit.hits.length||fit.miss.length?`<section class="profile-card"><div class="profile-card-head"><h2>${ico('filter')}Aktuelle Filter</h2></div>${fit.hits.length?`<small class="analysis-subhead">Treffer</small><div class="offer-chip-wrap">${fit.hits.map(x=>`<span class="offer-chip match">${ico('check')}${esc(x)}</span>`).join('')}</div>`:''}${fit.miss.length?`<small class="analysis-subhead">Nicht belegt / abweichend</small><div class="offer-chip-wrap">${fit.miss.map(x=>`<span class="offer-chip">${esc(x)}</span>`).join('')}</div>`:''}</section>`:''}`;
+}
+function ratingButtons(name,value){return `<div class="rating-stars" data-rating-name="${esc(name)}" data-value="${esc(value||'')}">${[1,2,3,4,5].map(n=>`<button type="button" data-rating-value="${n}">${Number(value||0)>=n?ico('star-fill'):ico('star')}</button>`).join('')}<strong>${value?Number(value).toFixed(1).replace('.',','):'—'}</strong></div>`;}
+function choice(name,value,options,blue=false){return `<div class="seg-choice" data-choice-name="${esc(name)}">${options.map(([v,l])=>`<button type="button" class="${String(value)===v?`active ${blue?'blue':''}`:''}" data-choice-value="${esc(v)}">${esc(l)}</button>`).join('')}</div>`;}
+function latestBasePrice(){const p=state.detail?.price_lists?.[0];if(!p)return null;return p.items?.find(i=>i.item_type==='BASE')||p.items?.[0]||null;}
+function renderMyData(){
+  const d=state.detail,enc=(d.encounters||[])[0]||null,base=latestBasePrice(),us=d.user_state||{};
+  return `<form id="myDataForm">
+    <section class="profile-card data-form-section"><div class="profile-card-head"><h2>${ico('star')}Bewertungen</h2></div><div class="ratings-grid"><div class="rating-box"><small>Gesamtbewertung</small>${ratingButtons('overall_rating',enc?.overall_rating)}</div><div class="rating-box"><small>Freundlichkeit &amp; Umgang</small>${ratingButtons('sympathy_rating',enc?.sympathy_rating)}</div></div></section>
+    <section class="profile-card data-form-section"><h3>${ico('image')} Fotos</h3>${choice('photo_status',enc?.photo_status||'UNKNOWN',[['AS_AD','Wie auf Anzeige'],['BETTER','Besser'],['WORSE','Schlechter']],true)}</section>
+    <section class="profile-card data-form-section"><h3>${ico('refresh')} Wiederholungsinteresse</h3>${choice('repeat_interest',us.repeat_interest||'UNKNOWN',[['YES','Ja'],['MAYBE','Vielleicht'],['NO','Nein']])}</section>
+    <section class="profile-card data-form-section"><h3>${ico('euro')} Preis &amp; Dauer</h3><div class="form-two"><div class="data-input"><label>Preis (€)</label><input id="dataPrice" type="number" min="0" step="1" value="${esc(enc?.total_price_eur??base?.amount_eur??'')}"></div><div class="data-input"><label>Dauer (Min.)</label><input id="dataDuration" type="number" min="0" value="${esc(enc?.duration_minutes??base?.duration_minutes??'')}"></div></div><div class="data-input" style="margin-top:7px"><label>Preisnotiz</label><input id="dataPriceNote" value="${esc(state.detail.price_lists?.[0]?.note||'')}"></div></section>
+    <section class="profile-card data-form-section"><h3>${ico('list')} Erfahrung &amp; Service</h3><div class="form-two"><div><small>Service wie besprochen</small>${choice('service_accuracy',enc?.service_accuracy||'UNKNOWN',[['GOOD','Ja'],['PARTLY','Teilweise'],['BAD','Nein']])}</div><div><small>Hygiene</small>${choice('hygiene',enc?.hygiene||'UNKNOWN',[['GOOD','Sehr gut'],['OK','Okay'],['BAD','Schlecht']])}</div><div><small>Küssen</small>${choice('kissing',enc?.kissing||'UNKNOWN',[['YES','Ja'],['ON_REQUEST','Auf Wunsch'],['NO','Nein']])}</div><div><small>Verhandlungsbereit</small>${choice('negotiable',enc?.negotiable||'UNKNOWN',[['YES','Ja'],['PARTLY','Teilweise'],['NO','Nein']],true)}</div></div></section>
+    <section class="profile-card data-form-section"><h3>${ico('note')} Privatnotiz</h3><div class="data-input"><textarea id="dataPrivateNote" maxlength="10000">${esc(us.private_note||'')}</textarea><small class="encounter-note">Die Privatnotiz hängt an der Person. Besuchsdaten bleiben als einzelne Treffen erhalten.</small></div></section>
+    <input type="hidden" id="currentEncounterId" value="${enc?.encounter_id||''}"><input type="hidden" id="currentEncounterDate" value="${esc(toLocalInput(enc?.occurred_at))}">
+    <div class="save-bar"><button class="save-cta" type="submit">${ico('save')}Speichern</button></div></form>`;
+}
+
+function eventTimelineItems(){
+  const changes=(state.detail?.timeline||[]).map(x=>({...x,_kind:'change',_time:x.created_at}));
+  const prices=(state.detail?.price_lists||[]).map(x=>({_kind:'price',_time:x.observed_at,price:x}));
+  const encounters=(state.detail?.encounters||[]).map(x=>({_kind:'encounter',_time:x.occurred_at,encounter:x}));
+  const listings=(state.detail?.listings||[]).map(x=>({_kind:'listing',_time:x.first_seen_at,listing:x}));
+  return [...changes,...prices,...encounters,...listings].sort((a,b)=>new Date(b._time)-new Date(a._time)).slice(0,80);
+}
+function renderProfileHistory(){
+  const rows=eventTimelineItems();const mediaEvent=(state.detail?.timeline||[]).find(e=>e.event_type==='MEDIA_CHANGED'&&e.from_snapshot_id&&e.to_snapshot_id);
+  return `<div class="profile-timeline">${rows.map(item=>{
+    if(item._kind==='price'){return `<div class="profile-event"><span class="profile-event-icon price">${ico('euro')}</span><b>${(state.detail?.price_lists||[]).length>1?'Preis geändert':'Preis gespeichert'}</b><small>${fmtDate(item._time)} · ${item.price.items?.map(i=>`${i.duration_minutes||''}${i.duration_minutes?' Min · ':''}${euro(i.amount_eur)}`).join(', ')||'Preisliste'}</small></div>`;}
+    if(item._kind==='encounter'){return `<div class="profile-event"><span class="profile-event-icon status">${ico('star')}</span><b>Treffen erfasst</b><small>${fmtDate(item._time)}${item.encounter.total_price_eur?` · ${euro(item.encounter.total_price_eur)}`:''}${item.encounter.overall_rating?` · ${item.encounter.overall_rating}/5`:''}</small></div>`;}
+    if(item._kind==='listing'){return `<div class="profile-event"><span class="profile-event-icon status">${ico('plus')}</span><b>Neue Anzeige</b><small>${fmtDate(item._time)} · Anzeige #${esc(item.listing.advert_id)}</small></div>`;}
+    const v=eventVisual(item);return `<button class="profile-event" data-event-compare="${item.from_snapshot_id||''}:${item.to_snapshot_id||''}" type="button"><span class="profile-event-icon ${v.cls}">${ico(v.icon)}</span><b>${esc(v.title)}</b><small>${fmtDate(item.created_at)}<br>${esc(summarizeChange(item))}</small></button>`;
+  }).join('')}</div>${mediaEvent?`<section class="profile-card"><div class="profile-card-head"><h2>${ico('image')}Bilder-Historie</h2><button data-compare-media="${mediaEvent.from_snapshot_id}:${mediaEvent.to_snapshot_id}" type="button">Öffnen ${ico('chevron-right')}</button></div><div id="inlineBeforeAfter"><p class="about-copy">Vorher-/Nachher-Vergleich der letzten erkannten Bildänderung.</p></div></section>`:''}`;
+}
+
+function bindProfileTab(){
+  $('[data-tab-offer]')?.addEventListener('click',()=>setDetailTab('offer'));$('[data-tab-history]')?.addEventListener('click',()=>setDetailTab('history'));
+  $('[data-toggle-about]')?.addEventListener('click',()=>$('#aboutText')?.classList.toggle('collapsed'));
+  $('[data-detail-like]')?.addEventListener('click',()=>updateDetailState({preference:state.detail.user_state.preference==='LIKE'?'NONE':'LIKE'}));
+  $('[data-detail-favorite]')?.addEventListener('click',()=>updateDetailState({favorite:!state.detail.user_state.favorite}));
+  $('[data-contact]')?.addEventListener('click',openContactSheet);
+  $('[data-focus-note]')?.addEventListener('click',()=>$('#dataPrivateNote')?.focus());
+  $('[data-share-profile]')?.addEventListener('click',async()=>{const url=latestSnapshot()?.source_url||location.href;try{if(navigator.share)await navigator.share({title:latestSnapshot()?.name||'Ladies Explorer',url});else{await navigator.clipboard?.writeText(url);toast('Link kopiert');}}catch{}});
+  $$('[data-open-original]').forEach(btn=>btn.onclick=()=>{if(btn.dataset.openOriginal)window.open(btn.dataset.openOriginal,'_blank','noopener');});
+  $('[data-add-price]')?.addEventListener('click',openPriceSheet);
+  $$('[data-analysis-media]').forEach(btn=>btn.onclick=()=>selectDetailMedia(Number(btn.dataset.analysisMedia),{focus:true}));
+  if($('#myDataForm'))bindMyDataForm();
+  $$('[data-event-compare]').forEach(btn=>btn.onclick=()=>{const [a,b]=btn.dataset.eventCompare.split(':').map(Number);if(a&&b)openSnapshotCompare(a,b);});
+  $('[data-compare-media]')?.addEventListener('click',e=>{const [a,b]=e.currentTarget.dataset.compareMedia.split(':').map(Number);openSnapshotCompare(a,b);});
+}
+async function updateDetailState(patch){try{const d=await api(`/api/person/${state.detail.person.person_id}/state`,{method:'POST',body:patch});state.detail.user_state=d.user_state;state.results.filter(x=>Number(x.person_id)===Number(state.detail.person.person_id)).forEach(x=>{x.preference=d.user_state.preference;x.favorite=d.user_state.favorite;});renderProfile();loadDashboard();}catch(e){toast(e.message)}}
+
+function bindMyDataForm(){
+  $$('[data-rating-name]').forEach(group=>$$('[data-rating-value]',group).forEach(btn=>btn.onclick=()=>{group.dataset.value=btn.dataset.ratingValue;const val=Number(btn.dataset.ratingValue);$$('[data-rating-value]',group).forEach(x=>x.innerHTML=Number(x.dataset.ratingValue)<=val?ico('star-fill'):ico('star'));$('strong',group).textContent=val.toFixed(1).replace('.',',');}));
+  $$('[data-choice-name]').forEach(group=>$$('[data-choice-value]',group).forEach(btn=>btn.onclick=()=>{group.dataset.value=btn.dataset.choiceValue;$$('[data-choice-value]',group).forEach(x=>x.classList.toggle('active',x===btn));}));
+  $('#myDataForm').onsubmit=saveMyData;
+}
+function readChoice(name,fallback='UNKNOWN'){const el=$(`[data-choice-name="${name}"]`);return el?.dataset.value||$('.active',el)?.dataset.choiceValue||fallback;}
+function readRating(name){const el=$(`[data-rating-name="${name}"]`);return el?.dataset.value||null;}
+async function saveMyData(e){
+  e.preventDefault();const personId=state.detail.person.person_id;const price=$('#dataPrice').value,duration=$('#dataDuration').value,note=$('#dataPrivateNote').value,repeat=readChoice('repeat_interest','UNKNOWN');
+  try{
+    const st=await api(`/api/person/${personId}/state`,{method:'POST',body:{repeat_interest:repeat,private_note:note}});state.detail.user_state=st.user_state;
+    const encounterPayload={duration_minutes:duration||null,total_price_eur:price||null,overall_rating:readRating('overall_rating'),sympathy_rating:readRating('sympathy_rating'),photo_status:readChoice('photo_status'),service_accuracy:readChoice('service_accuracy'),hygiene:readChoice('hygiene'),kissing:readChoice('kissing'),negotiable:readChoice('negotiable')};
+    const encounterId=Number($('#currentEncounterId').value||0); if(encounterId)await api(`/api/person/${personId}/encounters/${encounterId}`,{method:'PUT',body:encounterPayload}); else if(Object.values(encounterPayload).some(v=>v&&v!=='UNKNOWN'))await api(`/api/person/${personId}/encounters`,{method:'POST',body:encounterPayload});
+    const old=latestBasePrice();const newPrice=price?Number(price):null,newDur=duration?Number(duration):null;if(newPrice!=null&&(Number(old?.amount_eur)!==newPrice||Number(old?.duration_minutes)!==newDur||String(state.detail.price_lists?.[0]?.note||'')!==$('#dataPriceNote').value)){await api(`/api/person/${personId}/prices`,{method:'POST',body:{source:'USER_ENTERED',note:$('#dataPriceNote').value,items:[{item_type:'BASE',duration_minutes:newDur,amount_eur:newPrice,label:newDur?`${newDur} Minuten`:'Preis'}]}});}
+    state.detail=await fetchPersonDetail(personId,state.detailAdvertId);renderProfile();loadDashboard();toast('Meine Daten gespeichert');
+  }catch(err){toast(err.message)}
+}
+
+function openContactSheet(){
+  const s=latestSnapshot();const actions=[];if(s?.whatsapp_url)actions.push(['message','WhatsApp','Chat öffnen',s.whatsapp_url]);if(s?.tel_url)actions.push(['phone','Anrufen',s.phone_display||'Telefon',s.tel_url]);if(s?.sms_url)actions.push(['message','SMS','Nachricht senden',s.sms_url]);if(s?.source_url)actions.push(['external','Originalprofil','Ladies-Profil öffnen',s.source_url]);
+  openSheet(`<div class="sheet-title"><h2>Kontakt</h2></div><div class="sheet-actions">${actions.map(([i,l,d,u])=>`<button class="sheet-action" data-contact-url="${esc(u)}" type="button">${ico(i)}<span><b>${esc(l)}</b><small>${esc(d)}</small></span>${ico('chevron-right')}</button>`).join('')||'<p class="about-copy">Keine Kontaktwege gespeichert.</p>'}</div>`);$$('[data-contact-url]',$('#sheetContent')).forEach(btn=>btn.onclick=()=>window.open(btn.dataset.contactUrl,'_blank','noopener'));
+}
+function openProfileMenu(row){openSheet(`<div class="sheet-title"><h2>${esc(rowName(row))}</h2></div><div class="sheet-actions"><button class="sheet-action" id="menuOpenProfile" type="button">${ico('user')}<span><b>Profil öffnen</b><small>Übersicht, Daten und Verlauf</small></span>${ico('chevron-right')}</button><button class="sheet-action" id="menuFilter" type="button">${ico('filter')}<span><b>Filter anpassen</b><small>Suche & Filter öffnen</small></span>${ico('chevron-right')}</button>${row.profile_url?`<button class="sheet-action" data-contact-url="${esc(row.profile_url)}" type="button">${ico('external')}<span><b>Originalprofil</b><small>Auf Ladies öffnen</small></span>${ico('chevron-right')}</button>`:''}</div>`);$('#menuOpenProfile').onclick=()=>{closeSheet();openPerson(row.person_id,row.advert_id)};$('#menuFilter').onclick=()=>{closeSheet();openFilter()};$('[data-contact-url]',$('#sheetContent'))?.addEventListener('click',e=>window.open(e.currentTarget.dataset.contactUrl,'_blank','noopener'));
+}
+function openDetailMenu(){
+  const d=state.detail,listing=d.listings?.[0],media=detailCurrentMedia();openSheet(`<div class="sheet-title"><h2>Mehr</h2></div><div class="sheet-actions">${listing?.current_url?`<button class="sheet-action" data-contact-url="${esc(listing.current_url)}">${ico('external')}<span><b>Originalprofil öffnen</b><small>Aktuelle Anzeige #${esc(listing.advert_id)}</small></span>${ico('chevron-right')}</button>`:''}${media?.media_asset_id?`<button class="sheet-action" id="analyzeCurrent">${ico('sparkles')}<span><b>Bildanalyse starten</b><small>${media.visual_analysis?'Ergebnis vorhanden – erneut analysieren':'Technischen Bildcheck ausführen'}</small></span>${ico('chevron-right')}</button>`:''}<button class="sheet-action" id="mergePerson">${ico('users')}<span><b>Personen zusammenführen</b><small>Manuelle Identity-Korrektur</small></span>${ico('chevron-right')}</button>${listing?`<button class="sheet-action danger" id="splitListing">${ico('user')}<span><b>Anzeige abtrennen</b><small>Aus dieser Person lösen</small></span>${ico('chevron-right')}</button>`:''}</div>`);$('[data-contact-url]',$('#sheetContent'))?.addEventListener('click',e=>window.open(e.currentTarget.dataset.contactUrl,'_blank','noopener'));$('#analyzeCurrent')?.addEventListener('click',()=>{closeSheet();runVisual(media,true)});$('#mergePerson').onclick=openMergeSheet;$('#splitListing')?.addEventListener('click',()=>confirmSplit(listing.listing_id));
+}
+function openMergeSheet(){openSheet(`<div class="sheet-title"><h2>Personen zusammenführen</h2></div><p class="about-copy">Gib die Ziel-Person-ID ein. Alle V9-Anzeigen, Historien- und Statusdaten werden nach der vorhandenen Merge-Logik zusammengeführt.</p><input id="mergeTarget" class="sheet-input" type="number" min="1" placeholder="Ziel-Person-ID"><button id="mergeSubmit" class="sheet-submit" type="button">Zusammenführen</button>`);$('#mergeSubmit').onclick=async()=>{const target=Number($('#mergeTarget').value);if(!target||target===state.detail.person.person_id)return toast('Andere gültige Person-ID eingeben');try{state.detail=await api('/api/identity/merge',{method:'POST',body:{source_person_id:state.detail.person.person_id,target_person_id:target}});closeSheet();renderProfile();toast('Personen zusammengeführt');}catch(e){toast(e.message)}};}
+function confirmSplit(listingId){openSheet(`<div class="sheet-title"><h2>Anzeige abtrennen?</h2></div><p class="about-copy">Die ausgewählte Anzeige wird zu einer neuen lokalen Person. Der manuelle Split bleibt als Identity-Override erhalten.</p><button id="splitConfirm" class="sheet-submit" type="button">Anzeige abtrennen</button>`);$('#splitConfirm').onclick=async()=>{try{const d=await api(`/api/listing-id/${listingId}/split`,{method:'POST'});closeSheet();toast(`Neue Person #${d.new_person_id}`);state.detail=await api(`/api/person/${state.detail.person.person_id}`);renderProfile();}catch(e){toast(e.message)}};}
+
+function openPriceSheet(){openSheet(`<div class="sheet-title"><h2>Preisliste hinzufügen</h2></div><form id="priceSheetForm"><div class="sheet-form-grid"><label class="data-input"><span>Minuten</span><input id="newPriceMinutes" type="number" min="0"></label><label class="data-input"><span>Preis €</span><input id="newPriceAmount" type="number" min="0" step="1" required></label><label class="data-input full"><span>Label / Notiz</span><input id="newPriceLabel" placeholder="z. B. 60 Minuten"></label></div><button class="sheet-submit">Speichern</button></form>`);$('#priceSheetForm').onsubmit=async e=>{e.preventDefault();try{await api(`/api/person/${state.detail.person.person_id}/prices`,{method:'POST',body:{source:'USER_ENTERED',items:[{item_type:'BASE',duration_minutes:$('#newPriceMinutes').value||null,amount_eur:$('#newPriceAmount').value,label:$('#newPriceLabel').value}]}});closeSheet();state.detail=await api(`/api/person/${state.detail.person.person_id}`);renderProfile();toast('Preisliste gespeichert');}catch(err){toast(err.message)}};}
+
+async function openSnapshotCompare(a,b){
+  try{const [x,y]=await Promise.all([api(`/api/snapshot/${a}`),api(`/api/snapshot/${b}`)]);const before=x.snapshot,after=y.snapshot;const img=s=>(s?.media||[]).find(m=>m.kind==='IMAGE');openSheet(`<div class="sheet-title"><h2>Bilder-Historie</h2></div><div class="before-after"><figure>${img(before)?`<img src="${esc(mediaUrl(img(before)))}" alt="">`:''}<figcaption>Vorher</figcaption></figure><span class="compare-arrow">${ico('chevron-right')}</span><figure>${img(after)?`<img src="${esc(mediaUrl(img(after)))}" alt="">`:''}<figcaption>Nachher</figcaption></figure></div><div class="history-meta">${fmtDate(after?.captured_at)} · Snapshot #${after?.snapshot_id||''}</div>`);}catch(e){toast(e.message)}
+}
+
+function openSheet(html){$('#sheetContent').innerHTML=html;$('#sheetLayer').classList.remove('hidden');}
+function closeSheet(){$('#sheetLayer').classList.add('hidden');$('#sheetContent').innerHTML='';}
+function openInfoSheet(){openSheet(`<div class="sheet-title"><h2>Ladies Explorer V9.1</h2></div><p class="about-copy">Die Oberfläche ist personenzentriert. Anzeigen, Snapshots, Medien, Preise und Treffen bleiben im V9-Datenmodell historisiert; die neue mobile UI legt nur eine verständlichere Schicht darüber.</p>`);}
+function openSettingsInfo(){openSheet(`<div class="sheet-title"><h2>Einstellungen</h2></div><p class="about-copy">Alle Schalter werden serverseitig als V9-App-Settings gespeichert. Bildanalyse und Videoarchiv bleiben optional.</p>`);}
+
+let MP=null,mpLoading=null;
+async function loadMediaPipe(){
+  if(MP)return MP;if(mpLoading)return mpLoading;
+  mpLoading=(async()=>{const mp=await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.0/vision_bundle.mjs');const vision=await mp.FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.0/wasm');const face=await mp.FaceLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task'},runningMode:'IMAGE',numFaces:2});const pose=await mp.PoseLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task'},runningMode:'IMAGE',numPoses:2,outputSegmentationMasks:false});const hand=await mp.HandLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'},runningMode:'IMAGE',numHands:4});MP={face,pose,hand};return MP;})().finally(()=>mpLoading=null);return mpLoading;
+}
+async function runVisual(media,rerender=false,notify=true){
+  if(!media?.media_asset_id||media.kind!=='IMAGE')return;const key=String(media.media_asset_id);state.visualDone.add(key);
+  try{const models=await loadMediaPipe();const img=new Image();img.crossOrigin='anonymous';img.src=media.local_url||`/api/media-proxy?url=${encodeURIComponent(media.url)}`;await img.decode();const [f,p,h]=[models.face.detect(img),models.pose.detect(img),models.hand.detect(img)];const faces=f?.faceLandmarks?.length||0,poses=p?.landmarks?.length||0,hands=h?.landmarks?.length||0;let score=0,reasons=[];if(faces>1){score+=20;reasons.push('Mehr als ein Gesicht erkannt')}if(poses>1){score+=15;reasons.push('Mehr als eine Körperpose erkannt')}if(poses&&faces===0){score+=12;reasons.push('Körper erkannt, aber kein Gesicht')}if(faces&&poses===0){score+=8;reasons.push('Gesicht erkannt, aber keine klare Körperpose')}const label=score>=30?'prüfen':score>=12?'Hinweis':'unauffällig';await api(`/api/media/${media.media_asset_id}/visual-analysis`,{method:'POST',body:{engine:'mediapipe-browser',engine_version:'1.1.0-v9.1-ui',score,label,reasons,diagnostics:{faces,poses,hands,width:img.naturalWidth,height:img.naturalHeight}}});media.visual_analysis={score,label,reasons,diagnostics:{faces,poses,hands,width:img.naturalWidth,height:img.naturalHeight},checked_at:new Date().toISOString()};if(notify)toast(`Bildanalyse: ${label}`);loadStorage();if(rerender&&state.detail)renderProfile();}catch(e){state.visualDone.delete(key);if(notify)toast(`Bildanalyse nicht verfügbar: ${e.message}`);}
+}
+function pumpVisualQueue(){if(state.visualQueueBusy||!state.visualQueue.length)return;state.visualQueueBusy=true;const item=state.visualQueue.shift();const run=()=>runVisual(item.media,item.detail,false).finally(()=>{state.visualQueueBusy=false;pumpVisualQueue();});if('requestIdleCallback' in window)requestIdleCallback(run,{timeout:2200});else setTimeout(run,900);}
+function maybeAutoVisual(media,detail=false){if(!state.settings.visual_check_enabled||!media?.media_asset_id||media.kind!=='IMAGE'||media.visual_analysis||state.visualDone.has(String(media.media_asset_id)))return;const key=String(media.media_asset_id);if(state.visualQueue.some(x=>String(x.media.media_asset_id)===key))return;state.visualQueue.push({media,detail});pumpVisualQueue();}
+
+function bindGlobal(){
+  $('#brandBtn').onclick=()=>setScreen('home');$('#menuBtn').onclick=()=>openSheet(`<div class="sheet-title"><h2>Navigation</h2></div><div class="sheet-actions">${[['home','search','Suche'],['discover','compass','Entdecken'],['lists','list','Listen'],['history','chart','Verlauf'],['settings','settings','Einstellungen']].map(([screen,icon,label])=>`<button class="sheet-action" data-sheet-nav="${screen}">${ico(icon)}<span><b>${label}</b></span>${ico('chevron-right')}</button>`).join('')}</div>`);
+  $('#sheetContent').addEventListener('click',e=>{const btn=e.target.closest('[data-sheet-nav]');if(btn){closeSheet();setScreen(btn.dataset.sheetNav);}});
+  $$('[data-nav]').forEach(btn=>btn.onclick=()=>{if(!$('#profileLayer').classList.contains('hidden'))closeProfile();setScreen(btn.dataset.nav);});
+  $('#homeRadius').oninput=e=>{state.filters.radius=Number(e.target.value);$('#homeRadiusValue').textContent=`${state.filters.radius} km`;};$('#homeCity').oninput=e=>state.filters.city=e.target.value;$('#clearCity').onclick=()=>{$('#homeCity').value='';state.filters.city='';};
+  $('#homeSearchBtn').onclick=()=>{state.filters.city=$('#homeCity').value||'Leipzig';state.filters.radius=Number($('#homeRadius').value);performSearch();};
+  $('#quickSwipe').onclick=()=>state.results.length?setScreen('discover'):performSearch();
+  $('#recentSearches').onclick=e=>{const btn=e.target.closest('[data-recent-index]');if(btn)applyRecentSearch(Number(btn.dataset.recentIndex));};$('#allRecentBtn').onclick=openFilter;
+  $$('[data-go]').forEach(btn=>btn.onclick=()=>{if(btn.dataset.listTab)state.listTab=btn.dataset.listTab;setScreen(btn.dataset.go);});
+  $('#discoverFilterBtn').onclick=openFilter;$('#gridFilterBtn').onclick=openFilter;$('#discoverMore').onclick=()=>{const row=currentResult();openSheet(`<div class="sheet-title"><h2>Entdecken</h2></div><div class="sheet-actions">${row?`<button class="sheet-action" id="openCurrentProfile">${ico('user')}<span><b>Profil öffnen</b><small>Alle Profilinhalte anzeigen</small></span>${ico('chevron-right')}</button>`:''}<button class="sheet-action" id="switchDiscoverSheet">${ico('list')}<span><b>${state.discoverMode==='swipe'?'Grid-Ansicht':'Swipe-Ansicht'}</b><small>Ansicht wechseln</small></span>${ico('chevron-right')}</button><button class="sheet-action" id="menuFilter">${ico('filter')}<span><b>Filter anpassen</b><small>Weitere Filter öffnen</small></span>${ico('chevron-right')}</button><button class="sheet-action" id="searchAgainSheet">${ico('search')}<span><b>Neue Suche</b><small>Ort und Radius ändern</small></span>${ico('chevron-right')}</button>${row?.profile_url?`<button class="sheet-action" data-contact-url="${esc(row.profile_url)}">${ico('external')}<span><b>Originalprofil</b><small>Auf Ladies öffnen</small></span>${ico('chevron-right')}</button>`:''}</div>`);$('#openCurrentProfile')?.addEventListener('click',()=>{closeSheet();openPerson(row.person_id,row.advert_id)});$('#menuFilter')?.addEventListener('click',()=>{closeSheet();openFilter()});$('[data-contact-url]',$('#sheetContent'))?.addEventListener('click',e=>window.open(e.currentTarget.dataset.contactUrl,'_blank','noopener'));};
+  $('#sheetContent').addEventListener('click',e=>{if(e.target.closest('#switchDiscoverSheet')){closeSheet();state.discoverMode=state.discoverMode==='swipe'?'grid':'swipe';renderDiscover();}if(e.target.closest('#searchAgainSheet')){closeSheet();openFilter();}});
+  $('#discoverModeSwitch').onclick=()=>{state.discoverMode=state.discoverMode==='swipe'?'grid':'swipe';renderDiscover();};
+  $('#gridTabs').onclick=e=>{const btn=e.target.closest('[data-grid-filter]');if(btn){state.gridFilter=btn.dataset.gridFilter;renderGrid();}};
+  $('#listTabs').onclick=e=>{const btn=e.target.closest('[data-list-tab]');if(btn){state.listTab=btn.dataset.listTab;loadPeople();}};$('#runStatusCheck').onclick=runStatusCheck;$('#historyRefresh').onclick=()=>loadDashboard(true);
+  $$('[data-close-layer]').forEach(btn=>btn.onclick=()=>closeLayer(btn.dataset.closeLayer));$('#resetFilters').onclick=resetFilters;$('#applyFilters').onclick=async()=>{state.filters.city=$('#filterCity')?.value||state.filters.city;await performSearch();};
+  $('[data-close-sheet]').onclick=closeSheet;document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(!$('#sheetLayer').classList.contains('hidden'))closeSheet();else if(!$('#profileLayer').classList.contains('hidden'))closeProfile();else if(!$('#filterLayer').classList.contains('hidden'))closeLayer('filterLayer');}});
+}
+
+async function boot(){
+  bindGlobal();setHeaderForScreen('home');renderHome();renderStatusProgress();
+  await Promise.allSettled([loadSettings(),loadDashboard(),loadRecentSearches(),loadStorage()]);
+  renderHome();
+}
+boot();

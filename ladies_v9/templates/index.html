@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+  <meta name="theme-color" content="#071c31">
+  <meta name="color-scheme" content="light">
+  <title>Ladies Explorer V9.1.4</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="app" class="app-frame view-home">
+  <header id="appHeader" class="app-header">
+    <button id="menuBtn" class="header-icon" type="button" aria-label="Menü"><svg><use href="/static/icons.svg#menu"/></svg></button>
+    <button id="brandBtn" class="brand" type="button" aria-label="Startseite">
+      <span class="brand-title">Ladies Explorer</span><span class="version-pill">V9.1.4</span>
+      <small id="brandSubtitle">Neue Menschen. Echte Begegnungen.</small>
+    </button>
+    <button id="headerAction" class="header-icon notify-dot" type="button" aria-label="Benachrichtigungen"><svg><use href="/static/icons.svg#bell"/></svg></button>
+  </header>
+
+  <main id="screenStack" class="screen-stack">
+    <section id="homeScreen" class="screen active" data-screen="home" aria-label="Suche">
+      <div class="home-sheet">
+        <div class="home-intro"><h1>Hallo Chris!</h1><p>Entdecke interessante Frauen in deiner Nähe.</p></div>
+        <button id="homeSearchBtn" class="primary-search-cta" type="button"><svg><use href="/static/icons.svg#search"/></svg><span>Jetzt Frauen in der Nähe suchen</span><svg class="cta-arrow"><use href="/static/icons.svg#chevron-right"/></svg></button>
+
+        <div class="search-summary-card">
+          <label class="summary-row" for="homeCity"><span class="row-icon"><svg><use href="/static/icons.svg#map-pin"/></svg></span><b>Standort</b><span class="summary-input-wrap"><input id="homeCity" value="Leipzig" autocomplete="off" aria-label="Standort"><button id="clearCity" type="button" class="clear-input" aria-label="Standort leeren"><svg><use href="/static/icons.svg#x"/></svg></button></span></label>
+          <div class="summary-radius"><div class="summary-radius-head"><span class="row-icon"><svg><use href="/static/icons.svg#location"/></svg></span><b>Umkreis</b><strong id="homeRadiusValue">20 km</strong></div><input id="homeRadius" class="accent-range" type="range" min="1" max="100" value="20"><div class="range-labels"><span>1 km</span><span>100 km</span></div></div>
+          <p class="radius-note"><svg><use href="/static/icons.svg#info"/></svg>Der Umkreis wird nicht automatisch erweitert.</p>
+        </div>
+
+        <div class="section-inline-head"><h2>Letzte Suchen</h2><button id="allRecentBtn" type="button">Alle anzeigen <svg><use href="/static/icons.svg#chevron-right"/></svg></button></div>
+        <div id="recentSearches" class="recent-chips"><button type="button" class="recent-chip active" data-recent-city="Leipzig" data-recent-radius="20"><svg><use href="/static/icons.svg#map-pin"/></svg>Leipzig</button></div>
+
+        <button id="quickSwipe" class="swipe-launch-card" type="button"><span class="quick-icon pink"><svg><use href="/static/icons.svg#heart-fill"/></svg></span><span><b>Swipe-Modus</b><small>Neue Anzeigen entdecken</small></span><svg class="launch-arrow"><use href="/static/icons.svg#chevron-right"/></svg><span id="swipePreview" class="swipe-preview"><svg><use href="/static/icons.svg#image"/></svg></span></button>
+
+        <div class="quick-grid">
+          <button class="quick-tile" data-go="lists" data-list-tab="ALL"><span class="quick-icon blue"><svg><use href="/static/icons.svg#users"/></svg></span><span><b>Personen</b><small><strong id="countPersons">0</strong> gespeichert</small></span><svg><use href="/static/icons.svg#chevron-right"/></svg></button>
+          <button class="quick-tile" data-go="lists" data-list-tab="FAVORITE"><span class="quick-icon amber"><svg><use href="/static/icons.svg#star-fill"/></svg></span><span><b>Favoriten</b><small><strong id="countFavorites">0</strong> Personen</small></span><svg><use href="/static/icons.svg#chevron-right"/></svg></button>
+          <button class="quick-tile" data-go="lists" data-list-tab="LIKE"><span class="quick-icon green"><svg><use href="/static/icons.svg#heart-fill"/></svg></span><span><b>Likes</b><small><strong id="countLikes">0</strong> Personen</small></span><svg><use href="/static/icons.svg#chevron-right"/></svg></button>
+          <button class="quick-tile" data-go="lists" data-list-tab="DISLIKE"><span class="quick-icon red"><svg><use href="/static/icons.svg#heart"/></svg></span><span><b>Dislikes</b><small><strong id="countDislikes">0</strong> Personen</small></span><svg><use href="/static/icons.svg#chevron-right"/></svg></button>
+          <button class="quick-tile" data-go="history"><span class="quick-icon purple"><svg><use href="/static/icons.svg#clock"/></svg></span><span><b>Verlauf</b><small>Zuletzt angesehen</small></span><svg><use href="/static/icons.svg#chevron-right"/></svg></button>
+          <button class="quick-tile" data-go="settings"><span class="quick-icon slate"><svg><use href="/static/icons.svg#settings"/></svg></span><span><b>Einstellungen</b><small>App konfigurieren</small></span><svg><use href="/static/icons.svg#chevron-right"/></svg></button>
+        </div>
+      </div>
+    </section>
+
+    <section id="discoverScreen" class="screen" data-screen="discover" aria-label="Entdecken">
+      <div id="discoverHeader" class="discover-toolbar" aria-label="Entdecken-Werkzeuge">
+        <button id="discoverFilterBtn" class="discover-tool" type="button" aria-label="Filter öffnen"><svg><use href="/static/icons.svg#filter"/></svg></button>
+        <span class="discover-toolbar-spacer"></span>
+        <button id="discoverModeSwitch" class="discover-tool mode-tool" type="button" aria-label="Ansicht wechseln"><svg><use href="/static/icons.svg#list"/></svg><span>Grid</span></button>
+        <button id="discoverMore" class="discover-tool" type="button" aria-label="Mehr"><svg><use href="/static/icons.svg#more"/></svg></button>
+      </div>
+      <div id="swipeView" class="discover-pane swipe-pane"></div>
+      <div id="gridView" class="discover-pane grid-pane hidden">
+        <div class="grid-toolbar"><div id="gridTabs" class="scroll-tabs"><button class="active" data-grid-filter="ALL">Alle <span id="gridAllCount">0</span></button><button data-grid-filter="VIDEO"><svg><use href="/static/icons.svg#play"/></svg>Mit Video</button><button data-grid-filter="LIKE"><svg><use href="/static/icons.svg#heart-fill"/></svg>Likes</button></div><button id="gridFilterBtn" class="square-filter" type="button"><svg><use href="/static/icons.svg#sliders"/></svg></button></div>
+        <div id="gridCards" class="profile-grid"></div>
+      </div>
+    </section>
+
+    <section id="listsScreen" class="screen" data-screen="lists" aria-label="Listen">
+      <div class="light-screen-pad">
+        <div id="listTabs" class="list-tabs"><button class="active" data-list-tab="LIKE"><svg><use href="/static/icons.svg#heart-fill"/></svg>Likes <span id="tabLikeCount"></span></button><button data-list-tab="FAVORITE"><svg><use href="/static/icons.svg#star-fill"/></svg>Favoriten <span id="tabFavoriteCount"></span></button><button data-list-tab="DISLIKE"><svg><use href="/static/icons.svg#heart"/></svg>Dislikes <span id="tabDislikeCount"></span></button></div>
+        <div class="status-check-card"><div class="status-check-line"><span><svg><use href="/static/icons.svg#list"/></svg><b id="statusCheckText">Statusprüfung bereit</b></span><small id="statusCheckedAt">Noch nicht geprüft</small></div><div class="progress-track"><i id="statusProgress"></i></div><button id="runStatusCheck" type="button" class="status-check-button"><svg><use href="/static/icons.svg#refresh"/></svg>Status jetzt prüfen</button></div>
+        <div id="peopleList" class="people-list"></div>
+      </div>
+    </section>
+
+    <section id="historyScreen" class="screen" data-screen="history" aria-label="Verlauf">
+      <div class="light-screen-pad history-page"><div id="historyIntro"></div><div class="history-summary" id="historySummary"></div><div id="usageSummary"></div><div class="section-inline-head"><h2>Letzte Änderungen</h2><button id="historyRefresh" type="button"><svg><use href="/static/icons.svg#refresh"/></svg></button></div><div id="globalTimeline" class="global-timeline"></div></div>
+    </section>
+
+    <section id="settingsScreen" class="screen" data-screen="settings" aria-label="Einstellungen">
+      <div class="settings-page" id="settingsPage"></div>
+    </section>
+  </main>
+
+  <nav id="bottomNav" class="bottom-nav" aria-label="Hauptnavigation">
+    <button class="active" data-nav="home"><svg><use href="/static/icons.svg#search"/></svg><span>Suche</span></button>
+    <button data-nav="discover"><svg><use href="/static/icons.svg#compass"/></svg><span>Entdecken</span></button>
+    <button data-nav="lists"><svg><use href="/static/icons.svg#list"/></svg><span>Listen</span></button>
+    <button data-nav="history"><svg><use href="/static/icons.svg#chart"/></svg><span>Verlauf</span></button>
+    <button data-nav="settings"><svg><use href="/static/icons.svg#settings"/></svg><span>Einstellungen</span></button>
+  </nav>
+
+  <section id="filterLayer" class="full-layer hidden" aria-label="Suche und Filter">
+    <header class="layer-header light"><button data-close-layer="filterLayer" class="header-icon light" type="button"><svg><use href="/static/icons.svg#chevron-left"/></svg></button><h1>Suche &amp; Filter</h1><button id="resetFilters" class="reset-link" type="button"><svg><use href="/static/icons.svg#refresh"/></svg>Filter zurücksetzen</button></header>
+    <div id="filterContent" class="filter-content"></div>
+    <button id="applyFilters" class="filter-sticky-cta" type="button"><svg><use href="/static/icons.svg#search"/></svg><span id="filterResultCount">Treffer anzeigen</span></button>
+  </section>
+
+  <section id="profileLayer" class="full-layer profile-layer hidden" aria-label="Profil">
+    <div id="profileContent" class="profile-content"></div>
+  </section>
+
+  <section id="sheetLayer" class="sheet-layer hidden" aria-modal="true"><button class="sheet-backdrop" data-close-sheet type="button" aria-label="Schließen"></button><div class="bottom-sheet"><div class="sheet-handle"></div><div id="sheetContent"></div></div></section>
+  <div id="toast" class="toast" role="status"></div>
+</div>
+<script src="/static/app.js" defer></script>
+</body>
+</html>
