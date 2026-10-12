@@ -5,6 +5,8 @@ from typing import Any
 
 from flask import Flask, jsonify, request
 
+from .errors import ExternalServiceError, ValidationError
+from .request_parsing import read_int, read_mapping
 from .source import (
     build_filter_path,
     build_search_url,
@@ -32,13 +34,7 @@ def fetch_search_preview_count(
     height_max: int = 200,
     selected: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
-    """Fetch only page 1 and return the server-side advert count.
-
-    This deliberately does not paginate and does not write a SearchRun.  The
-    Ladies page already exposes its result count in SearchConfig, so the UI can
-    mirror the original site's live filter feedback without turning every chip
-    tap into a persisted search.
-    """
+    """Fetch only page 1 and return the server-side advert count."""
     filter_path = build_filter_path(
         category, age_min, age_max, height_min, height_max, selected
     )
@@ -69,16 +65,13 @@ def fetch_search_preview_count(
     config = parse_search_config(response.text)
     distance = config.get("distance_searched")
     if distance is not None and int(distance) != int(radius_km):
-        raise RuntimeError(
-            f"Fail-closed: Suchvorschau meldet Radius {distance} km, "
-            f"angefordert waren {radius_km} km."
+        raise ValidationError(
+            f"Suchvorschau meldet Radius {distance} km, angefordert waren {radius_km} km."
         )
 
     count = config.get("advert_count")
     source = "search-config"
     if count is None:
-        # Markup fallback: page 1 count is less complete than SearchConfig but
-        # still gives a safe preview instead of widening the radius.
         count = len({profile.advert_id for profile in parse_search_cards(response.text)})
         source = "page-1-cards"
 
@@ -103,15 +96,15 @@ def install_search_preview(
     @app.post("/api/search-preview")
     def api_search_preview():
         payload = request.get_json(silent=True) or {}
-        city_raw = clean_text(str(payload.get("city") or default_city))
-        radius = max(1, min(200, int(payload.get("radius") or default_radius)))
-        category = clean_text(str(payload.get("category") or ""))
-        age_min = max(18, min(60, int(payload.get("age_min") or 18)))
-        age_max = max(age_min, min(60, int(payload.get("age_max") or 60)))
-        height_min = max(140, min(200, int(payload.get("height_min") or 140)))
-        height_max = max(height_min, min(200, int(payload.get("height_max") or 200)))
-        selected = payload.get("selected") or {}
         try:
+            city_raw = clean_text(str(payload.get("city") or default_city))
+            radius = read_int(payload, "radius", default=default_radius, minimum=1, maximum=200)
+            category = clean_text(str(payload.get("category") or ""))
+            age_min = read_int(payload, "age_min", default=18, minimum=18, maximum=60)
+            age_max = read_int(payload, "age_max", default=60, minimum=age_min, maximum=60)
+            height_min = read_int(payload, "height_min", default=140, minimum=140, maximum=200)
+            height_max = read_int(payload, "height_max", default=200, minimum=height_min, maximum=200)
+            selected = read_mapping(payload, "selected")
             city_slug, city_display = resolve_location(http, city_raw)
             result = fetch_search_preview_count(
                 http,
@@ -126,9 +119,11 @@ def install_search_preview(
                 selected=selected,
             )
             return jsonify(**result)
+        except ValidationError:
+            raise
         except (ValueError, RuntimeError) as exc:
             LOGGER.warning("Search preview rejected: %s", exc)
-            return jsonify(error=str(exc)), 400
+            raise ValidationError(str(exc)) from exc
         except Exception as exc:
             LOGGER.exception("Search preview failed")
-            return jsonify(error=str(exc)), 502
+            raise ExternalServiceError("Suchvorschau konnte nicht geladen werden.") from exc
