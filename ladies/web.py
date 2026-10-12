@@ -14,7 +14,6 @@ from .errors import ExternalServiceError, NotFoundError, ValidationError, instal
 from .logging_utils import redact_text, sanitize_log_value
 from .media import ArchiveManager
 from .parser import ADVERT_ID_RE
-from .repository import Repository
 from .request_parsing import read_int
 from .source import BatchRateLimiter, FixedRateLimiter, build_session, http_get
 from .utils import clean_text, safe_media_url, safe_profile_url
@@ -35,8 +34,7 @@ def create_app(
     install_error_handlers(app)
     database = Database(db_path)
     archive = ArchiveManager(data_dir)
-    store = Repository(database, archive)
-    repos = RepositoryBundle.from_store(store)
+    repos = RepositoryBundle.from_dependencies(database, archive)
     http = build_session()
     limiter = FixedRateLimiter(profile_delay)
     status_limiter = BatchRateLimiter(batch_size=3, pause_seconds=0.8)
@@ -45,7 +43,6 @@ def create_app(
     app.extensions["ladies_database"] = database
     app.extensions["ladies_archive"] = archive
     app.extensions["ladies_repositories"] = repos
-    app.extensions["ladies_repository_store"] = store
     app.extensions["ladies_http"] = http
     LOGGER.info(
         "Web app initialized db=%s data_dir=%s default_city=%s default_radius=%s",
