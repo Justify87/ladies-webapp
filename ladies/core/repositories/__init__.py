@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from .archive import ArchiveRepository
 from .history import HistoryRepository
+from .person_read import PersonReadRepository
 from .persons import PersonRepository
 from .search import SearchRepository
 from .settings import SettingsRepository
@@ -18,25 +19,22 @@ class RepositoryBundle:
     archive: ArchiveRepository
 
     @classmethod
-    def from_store(cls, store):
-        settings = SettingsRepository(store.database)
+    def from_dependencies(cls, database, archive):
+        settings = SettingsRepository(database)
+        person_read = PersonReadRepository(database)
         return cls(
-            search=SearchRepository(store.database),
-            persons=PersonRepository(
-                store.database,
-                store.archive,
-                settings,
-                store,
-            ),
-            history=HistoryRepository(store.database),
+            search=SearchRepository(database),
+            persons=PersonRepository(database, archive, settings, person_read),
+            history=HistoryRepository(database),
             settings=settings,
-            archive=ArchiveRepository(store.database, store.archive),
+            archive=ArchiveRepository(database, archive),
         )
 
 
 __all__ = [
     "ArchiveRepository",
     "HistoryRepository",
+    "PersonReadRepository",
     "PersonRepository",
     "RepositoryBundle",
     "SearchRepository",
