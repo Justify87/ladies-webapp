@@ -66,7 +66,7 @@ class CompleteMessagingTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        patcher = patch("ladies_v9.messaging.service_v92.BaileysWorkerManager", FeatureWorker)
+        patcher = patch("ladies_v9.messaging.service.WhatsAppGateway", FeatureWorker)
         self.addCleanup(patcher.stop)
         patcher.start()
         from ladies_v9.messaging import MessagingService
@@ -175,9 +175,6 @@ class CompleteMessagingTests(unittest.TestCase):
         self.assertEqual(payload["media_type"], "IMAGE")
 
     def test_view_once_incoming_can_only_be_revealed_once(self):
-        # Legacy V9.3-preview view-once files may still live in the normal media
-        # directory. The hardened path must consume them once, return a private
-        # file handle, and delete the original file immediately afterwards.
         media = self.service.media_dir / "once.jpg"
         media.write_bytes(b"once")
         message_id = self._incoming(
