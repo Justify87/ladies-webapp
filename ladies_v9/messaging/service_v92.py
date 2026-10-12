@@ -11,6 +11,7 @@ from sqlalchemy import desc, select
 
 from ladies_v9.database import Database
 from ladies_v9.models import AppSetting, Listing, Person, PersonIdentifier, utcnow
+from .integration import install_identity_merge_listener
 from .service import EventHub, MessagingService as BaseMessagingService
 from .whatsapp_manager import BaileysWorkerManager
 
@@ -27,6 +28,7 @@ class MessagingService(BaseMessagingService):
     """
 
     def __init__(self, db_path: str | Path, data_dir: str | Path):
+        install_identity_merge_listener()
         self.database = Database(db_path)
         from . import models as _messaging_models  # noqa: F401
         self.database.create_schema()
