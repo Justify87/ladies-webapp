@@ -231,21 +231,22 @@ class MessagingService(BaseMessagingService):
             self._assign_endpoint_in_session(db, phone_endpoint, person_id, add_system_message=False)
 
         if phone_endpoint is not None:
-            # The LID-only endpoint and an existing PN endpoint describe the same
-            # contact. Move any temporary thread first, then coalesce message refs.
             if endpoint.person_id is not None and phone_endpoint.person_id is not None and endpoint.person_id != phone_endpoint.person_id:
                 endpoint.state = "IDENTITY_CONFLICT"
                 return endpoint
-            if endpoint.provider_address and (
+            provider_address = endpoint.provider_address if endpoint.provider_address and (
                 not phone_endpoint.provider_address or endpoint.provider_address.endswith("@lid")
-            ):
-                phone_endpoint.provider_address = endpoint.provider_address
+            ) else None
             db.execute(update(ChatMessage).where(
                 ChatMessage.endpoint_id == endpoint.endpoint_id
             ).values(endpoint_id=phone_endpoint.endpoint_id))
+            # Delete/flush first so the unique provider_address constraint can never
+            # see the old and canonical endpoint holding the same LID simultaneously.
             db.delete(endpoint)
             db.flush()
             endpoint = phone_endpoint
+            if provider_address:
+                endpoint.provider_address = provider_address
         else:
             endpoint.normalized_phone = phone
 
@@ -372,12 +373,15 @@ class MessagingService(BaseMessagingService):
                     ChatMessage.message_id != message.message_id,
                 ))
                 if duplicate is not None and duplicate.direction == "OUT" and duplicate.thread_id == message.thread_id:
+                    if STATUS_RANK.get(duplicate.status, 0) > STATUS_RANK.get(message.status, 0):
+                        message.status = duplicate.status
                     db.delete(duplicate)
                     db.flush()
                 elif duplicate is not None:
                     raise RuntimeError("Provider-Nachrichten-ID ist bereits anderweitig belegt")
-                message.status = "SENT"
                 message.provider_message_id = provider_message_id
+                if STATUS_RANK.get(message.status, 0) < STATUS_RANK["SENT"]:
+                    message.status = "SENT"
                 message.error = None
                 thread = db.get(ChatThread, message.thread_id)
                 if thread:
@@ -391,8 +395,14 @@ class MessagingService(BaseMessagingService):
                     message.error = str(exc)[:1000]
             self.events.publish({"type": "message_update", "message_id": int(message_id), "status": "FAILED"})
             raise
-        self.events.publish({"type": "message_update", "message_id": int(message_id), "status": "SENT"})
-        return self.message(int(message_id))
+        result = self.message(int(message_id))
+        self.events.publish({
+            "type": "message_update",
+            "thread_id": result["thread_id"],
+            "message_id": int(message_id),
+            "status": result["status"],
+        })
+        return result
 
     def send_text(self, thread_id: int, text: str, endpoint_id: int | None = None, reply_to: int | None = None) -> dict[str, Any]:
         text = str(text or "").strip()
@@ -525,12 +535,26 @@ class MessagingService(BaseMessagingService):
         if event_type == "message_update":
             payload = event.get("payload") or {}
             provider_id = payload.get("provider_message_id")
+            client_message_id = payload.get("client_message_id")
             status = payload.get("status")
             if not provider_id or status not in {"SENT", "DELIVERED", "READ", "FAILED"}:
                 return
             browser_event = None
             with self.database.session() as db:
                 message = db.scalar(select(ChatMessage).where(ChatMessage.provider_message_id == provider_id))
+                if message is None and client_message_id:
+                    try:
+                        local = db.get(ChatMessage, int(client_message_id))
+                    except (TypeError, ValueError):
+                        local = None
+                    if local is not None and local.direction == "OUT" and local.provider_message_id in {None, provider_id}:
+                        conflict = db.scalar(select(ChatMessage).where(
+                            ChatMessage.provider_message_id == provider_id,
+                            ChatMessage.message_id != local.message_id,
+                        ))
+                        if conflict is None:
+                            local.provider_message_id = provider_id
+                            message = local
                 if message is not None:
                     if status == "FAILED" or STATUS_RANK.get(status, 0) >= STATUS_RANK.get(message.status, 0):
                         message.status = status
@@ -562,6 +586,13 @@ class MessagingService(BaseMessagingService):
         # response/ready and any future raw transport event remain private to IPC.
 
     def _assign_endpoint_in_session(self, db, endpoint: ContactEndpoint, person_id: int, *, add_system_message: bool = True) -> None:
+        person_id = int(person_id)
+        if endpoint.normalized_phone:
+            other_people = self._phone_person_ids(db, endpoint.normalized_phone) - {person_id}
+            if other_people:
+                endpoint.state = "IDENTITY_CONFLICT"
+                raise ValueError("Telefonnummer ist bereits einer anderen Person zugeordnet")
+
         target = self._get_thread(db, person_id=person_id)
         temporary = db.scalar(
             select(ChatThread)
@@ -578,19 +609,10 @@ class MessagingService(BaseMessagingService):
                 target.last_message_at = max(times)
             db.delete(temporary)
         endpoint.person_id = person_id
+        endpoint.state = "ACTIVE"
         endpoint.updated_at = utcnow()
         if endpoint.normalized_phone:
-            other_people = self._phone_person_ids(db, endpoint.normalized_phone) - {int(person_id)}
-            if other_people:
-                endpoint.state = "IDENTITY_CONFLICT"
-                LOGGER.warning(
-                    "Manual endpoint assignment conflicts with phone identity endpoint_id=%s person_id=%s other_person_ids=%s",
-                    endpoint.endpoint_id,
-                    person_id,
-                    sorted(other_people),
-                )
-            else:
-                self._ensure_phone_identifier(db, int(person_id), endpoint.normalized_phone, endpoint.display_phone)
+            self._ensure_phone_identifier(db, person_id, endpoint.normalized_phone, endpoint.display_phone)
         if add_system_message:
             label = endpoint.display_phone or endpoint.normalized_phone or "WhatsApp-Endpunkt"
             db.add(ChatMessage(
