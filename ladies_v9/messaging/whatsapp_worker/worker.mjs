@@ -25,6 +25,7 @@ let manualDisconnect = false
 let connecting = null
 let localSendsInFlight = 0
 const locallySentIds = new Map()
+const localMessageIds = new Map()
 const pendingOwnMessages = new Map()
 const pendingMessageUpdates = []
 
@@ -32,10 +33,14 @@ const emit = event => process.stdout.write(`${JSON.stringify(event)}\n`)
 const reply = (id, ok, payload = null, message = null) => emit({ type: 'response', id, ok, payload, message })
 const isPhoneJid = jid => typeof jid === 'string' && jid.endsWith('@s.whatsapp.net')
 
-function rememberLocalSend(id) {
-  if (!id) return
-  locallySentIds.set(id, Date.now())
-  setTimeout(() => locallySentIds.delete(id), 5 * 60 * 1000).unref?.()
+function rememberLocalSend(providerId, clientMessageId) {
+  if (!providerId) return
+  locallySentIds.set(providerId, Date.now())
+  if (clientMessageId) localMessageIds.set(providerId, String(clientMessageId))
+  setTimeout(() => {
+    locallySentIds.delete(providerId)
+    localMessageIds.delete(providerId)
+  }, 5 * 60 * 1000).unref?.()
 }
 
 function statusCode(error) {
@@ -144,8 +149,16 @@ async function flushBufferedOwnMessages() {
 
 function emitMessageUpdate(item) {
   const mapped = mapReceiptStatus(item.update?.status)
-  if (!mapped || !item.key?.id) return
-  emit({ type: 'message_update', payload: { provider_message_id: item.key.id, status: mapped } })
+  const providerId = item.key?.id || null
+  if (!mapped || !providerId) return
+  emit({
+    type: 'message_update',
+    payload: {
+      provider_message_id: providerId,
+      client_message_id: localMessageIds.get(providerId) || null,
+      status: mapped,
+    },
+  })
 }
 
 function flushBufferedUpdates() {
@@ -261,7 +274,7 @@ async function handle(command) {
         try {
           const sent = await sock.sendMessage(target, { text: String(command.text || '') })
           const providerId = sent?.key?.id || null
-          rememberLocalSend(providerId)
+          rememberLocalSend(providerId, command.client_message_id)
           reply(id, true, { provider_message_id: providerId, provider_address: target })
         } finally {
           localSendsInFlight = Math.max(0, localSendsInFlight - 1)
