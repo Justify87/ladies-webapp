@@ -2,11 +2,21 @@ from __future__ import annotations
 
 from flask import jsonify, request
 
-from .service_hardened import PriceIntelligenceService
+from ladies_v9.database import Database
+from ladies_v9.errors import ConflictError, NotFoundError, ValidationError
+from ladies_v9.request_parsing import read_int
+
+from .service import PriceIntelligenceService
 
 
-def install_pricing(app, *, db_path, data_dir) -> PriceIntelligenceService:
-    service = PriceIntelligenceService(db_path, data_dir)
+def install_pricing(app, *, data_dir, database: Database | None = None, db_path=None) -> PriceIntelligenceService:
+    database = database or app.extensions.get("ladies_database")
+    if database is None:
+        if db_path is None:
+            raise RuntimeError("Pricing benötigt database oder db_path")
+        database = Database(db_path)
+        database.create_schema()
+    service = PriceIntelligenceService(database, data_dir)
     app.extensions["ladies_pricing"] = service
 
     @app.get("/api/pricing/runtime/status")
@@ -23,66 +33,65 @@ def install_pricing(app, *, db_path, data_dir) -> PriceIntelligenceService:
     def pricing_signal(thread_id: int):
         try:
             return jsonify(service.signal(thread_id))
-        except KeyError:
-            return jsonify(error="Chat nicht gefunden"), 404
+        except KeyError as exc:
+            raise NotFoundError("Chat nicht gefunden") from exc
 
     @app.post("/api/pricing/threads/<int:thread_id>/proposals")
     def pricing_create_proposal(thread_id: int):
         data = request.get_json(silent=True) or {}
         try:
+            seed_message_id = read_int(data, "seed_message_id", minimum=1) if data.get("seed_message_id") else None
             return jsonify(service.create_proposal(
                 thread_id,
                 trigger_type=str(data.get("trigger_type") or "MANUAL"),
-                seed_message_id=int(data["seed_message_id"]) if data.get("seed_message_id") else None,
+                seed_message_id=seed_message_id,
             ))
-        except KeyError:
-            return jsonify(error="Chat nicht gefunden"), 404
+        except KeyError as exc:
+            raise NotFoundError("Chat nicht gefunden") from exc
         except (ValueError, TypeError) as exc:
-            return jsonify(error=str(exc)), 400
+            raise ValidationError(str(exc)) from exc
 
     @app.get("/api/pricing/proposals/<int:extraction_id>")
     def pricing_get_proposal(extraction_id: int):
         try:
             return jsonify(service.proposal(extraction_id))
-        except KeyError:
-            return jsonify(error="Preisvorschlag nicht gefunden"), 404
+        except KeyError as exc:
+            raise NotFoundError("Preisvorschlag nicht gefunden") from exc
 
     @app.post("/api/pricing/proposals/<int:extraction_id>/accept")
     def pricing_accept_proposal(extraction_id: int):
         try:
             result = service.accept(extraction_id, request.get_json(silent=True) or {})
             if result.get("status") == "STALE":
-                return jsonify(result), 409
+                raise ConflictError(result.get("error") or "Preisvorschlag ist veraltet")
             return jsonify(result)
-        except KeyError:
-            return jsonify(error="Preisvorschlag nicht gefunden"), 404
+        except KeyError as exc:
+            raise NotFoundError("Preisvorschlag nicht gefunden") from exc
         except (ValueError, TypeError) as exc:
-            return jsonify(error=str(exc)), 400
+            raise ValidationError(str(exc)) from exc
 
     @app.post("/api/pricing/proposals/<int:extraction_id>/reject")
     def pricing_reject_proposal(extraction_id: int):
         try:
             return jsonify(service.reject(extraction_id))
-        except KeyError:
-            return jsonify(error="Preisvorschlag nicht gefunden"), 404
+        except KeyError as exc:
+            raise NotFoundError("Preisvorschlag nicht gefunden") from exc
         except ValueError as exc:
-            return jsonify(error=str(exc)), 400
+            raise ValidationError(str(exc)) from exc
 
     @app.get("/api/pricing/person/<int:person_id>/current")
     def pricing_current(person_id: int):
         try:
             return jsonify(service.current(person_id))
-        except KeyError:
-            return jsonify(error="Person nicht gefunden"), 404
+        except KeyError as exc:
+            raise NotFoundError("Person nicht gefunden") from exc
 
     @app.get("/api/pricing/person/<int:person_id>/history")
     def pricing_history(person_id: int):
         try:
-            limit = int(request.args.get("limit") or 30)
+            limit = read_int(request.args, "limit", default=30, minimum=1, maximum=100)
             return jsonify(items=service.history(person_id, limit))
-        except KeyError:
-            return jsonify(error="Person nicht gefunden"), 404
-        except ValueError:
-            return jsonify(error="Ungültiges Limit"), 400
+        except KeyError as exc:
+            raise NotFoundError("Person nicht gefunden") from exc
 
     return service
