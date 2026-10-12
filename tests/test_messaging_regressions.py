@@ -72,10 +72,10 @@ class MessagingRegressionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        patcher = patch("ladies_v9.messaging.service_v92.BaileysWorkerManager", FakeWorker)
+        patcher = patch("ladies_v9.messaging.service.WhatsAppGateway", FakeWorker)
         self.addCleanup(patcher.stop)
         patcher.start()
-        from ladies_v9.messaging.service_v92 import MessagingService
+        from ladies_v9.messaging.service import MessagingService
         self.service = MessagingService(self.root / "app.sqlite3", self.root / "data")
 
     def tearDown(self):
@@ -349,12 +349,12 @@ class MessagingRegressionTests(unittest.TestCase):
 
 class LanAccessTests(unittest.TestCase):
     def test_remote_api_and_archive_require_pairing_cookie(self):
-        with tempfile.TemporaryDirectory() as td, patch("ladies_v9.messaging.service_v92.BaileysWorkerManager", FakeWorker):
+        with tempfile.TemporaryDirectory() as td, patch("ladies_v9.messaging.service.WhatsAppGateway", FakeWorker):
             root = Path(td)
             data = root / "data"
             data.mkdir(parents=True)
             (data / "secret.txt").write_text("private", encoding="utf-8")
-            from ladies_v9.web_v92 import create_app
+            from ladies_v9.app import create_app
             app = create_app(db_path=root / "app.sqlite3", data_dir=data)
             client = app.test_client()
             remote = {"REMOTE_ADDR": "192.168.1.50"}
