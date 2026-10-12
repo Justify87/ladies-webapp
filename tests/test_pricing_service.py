@@ -76,6 +76,16 @@ class PricingServiceTests(unittest.TestCase):
             self.assertFalse(signal["strong"])
             self.assertGreater(signal["handled_through_message_id"], 0)
 
+    def test_rejected_context_no_longer_triggers_magic_signal(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            service = PriceIntelligenceService(root / "test.db", root / "data")
+            _, thread_id = _seed(service)
+            proposal = service.create_proposal(thread_id)
+            service.reject(proposal["price_extraction_id"])
+            signal = service.signal(thread_id, allow_ocr=False)
+            self.assertFalse(signal["strong"])
+
     def test_stale_proposal_cannot_overwrite_newer_revision(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -114,7 +124,7 @@ class PricingServiceTests(unittest.TestCase):
                 self.assertEqual(legacy[0].amount_cents, 4000)
                 self.assertEqual(legacy[0].note, "beibehalten")
 
-    def test_identity_merge_moves_extraction_before_source_thread_delete(self):
+    def test_identity_merge_moves_extraction_before_source_deletes(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             service = PriceIntelligenceService(root / "test.db", root / "data")
@@ -138,6 +148,7 @@ class PricingServiceTests(unittest.TestCase):
                 extraction_id = extraction.price_extraction_id
                 _merge_pricing_in_session(db, source.person_id, target.person_id)
                 db.delete(source_thread)
+                db.delete(source)
                 db.flush()
                 moved = db.get(PriceExtraction, extraction_id)
                 self.assertIsNotNone(moved)
