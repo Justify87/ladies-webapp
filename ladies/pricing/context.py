@@ -41,7 +41,8 @@ class PriceContext:
 
 
 def build_context(*, thread_id: int, person_id: int, rows: Iterable[ContextMessage], seed_message_id: int | None = None,
-                  max_messages: int = 12, max_chars: int = 4000, gap_minutes: int = 10) -> PriceContext:
+                  max_messages: int = 12, max_chars: int = 4000, gap_minutes: int = 10,
+                  question_gap_minutes: int = 30) -> PriceContext:
     items = [x for x in rows if x.direction in {"IN", "OUT"} and x.message_type != "SYSTEM"]
     items.sort(key=lambda x: (x.timestamp, x.message_id))
     if not items:
@@ -50,7 +51,8 @@ def build_context(*, thread_id: int, person_id: int, rows: Iterable[ContextMessa
     if seed_message_id is not None:
         for i, item in enumerate(items):
             if item.message_id == seed_message_id:
-                seed_index = i; break
+                seed_index = i
+                break
 
     selected = [items[seed_index]]
     total_chars = len(items[seed_index].effective_text)
@@ -62,7 +64,11 @@ def build_context(*, thread_id: int, person_id: int, rows: Iterable[ContextMessa
             gap = last_time - item.timestamp
         except TypeError:
             gap = timedelta(0)
-        allow_question = item.direction == "OUT" and any(k in item.effective_text.lower() for k in ("kost", "preis", "wie viel", "nimm"))
+        allow_question = (
+            item.direction == "OUT"
+            and gap <= timedelta(minutes=question_gap_minutes)
+            and any(k in item.effective_text.lower() for k in ("kost", "preis", "wie viel", "nimm"))
+        )
         if gap > timedelta(minutes=gap_minutes) and not allow_question:
             break
         selected.append(item)
