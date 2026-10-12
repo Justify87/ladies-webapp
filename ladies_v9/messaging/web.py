@@ -157,6 +157,8 @@ def install_messaging(app, *, db_path, data_dir) -> MessagingService:
             return jsonify(endpoint=service.assign_endpoint(endpoint_id, int(person_id)), person_id=int(person_id))
         except KeyError:
             return jsonify(error="Endpoint oder Person nicht gefunden"), 404
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 409
 
     @app.post("/api/messaging/settings")
     def messaging_settings():
