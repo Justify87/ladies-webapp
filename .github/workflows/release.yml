@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -91,7 +92,7 @@ jobs:
         run: |
           set -euo pipefail
           uv run python tools/build_release.py --output dist --commit "${GITHUB_SHA}"
-          unzip -t dist/ladies-explorer-${GITHUB_REF_NAME}.zip
+          unzip -t "dist/ladies-explorer-${GITHUB_REF_NAME}.zip"
 
       - name: Verify embedded release manifest
         shell: bash
