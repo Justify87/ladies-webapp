@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - 'packaging/**'
-      - 'tools/launcher_*.py'
+      - 'tools/launcher_*'
       - 'tools/build_release.py'
       - 'tests/test_portable_*.py'
       - 'ladies_explorer.py'
@@ -16,7 +16,7 @@ on:
     branches: [main]
     paths:
       - 'packaging/**'
-      - 'tools/launcher_*.py'
+      - 'tools/launcher_*'
       - 'tools/build_release.py'
       - 'tests/test_portable_*.py'
       - 'ladies_explorer.py'
