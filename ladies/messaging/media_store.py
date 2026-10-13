@@ -12,8 +12,6 @@ from typing import Any, BinaryIO
 
 import imageio_ffmpeg
 
-from ladies_v9.logging_utils import redact_text
-
 LOGGER = logging.getLogger("ladies_explorer.messaging.media")
 SAFE_INLINE_MIMES = {
     "image/jpeg", "image/png", "image/webp", "image/gif",
@@ -145,8 +143,7 @@ class MessagingMediaStore:
         try:
             completed = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
             if completed.returncode != 0 or not output.exists() or output.stat().st_size == 0:
-                detail = completed.stderr or "ffmpeg returned no usable output"
-                LOGGER.warning("Voice conversion rejected detail=%s", redact_text(detail, limit=500))
+                LOGGER.warning("Voice conversion rejected returncode=%s", completed.returncode)
                 raise ValueError(VOICE_CONVERSION_ERROR)
             # Replace the uploaded blob atomically. Keeping the archive name means
             # the request route can always clean up the same target on any later
@@ -158,7 +155,7 @@ class MessagingMediaStore:
             raise
         except Exception as exc:
             output.unlink(missing_ok=True)
-            LOGGER.warning("Voice conversion failed detail=%s", redact_text(exc, limit=500))
+            LOGGER.warning("Voice conversion failed error_type=%s", type(exc).__name__)
             raise ValueError(VOICE_CONVERSION_ERROR) from exc
 
     def delivery(self, message_type: str, media: dict[str, Any], *, private: bool = False) -> tuple[Path, str, str, bool]:
