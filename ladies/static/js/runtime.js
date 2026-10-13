@@ -1,6 +1,6 @@
 'use strict';
 
-// Canonical browser boundary between the core UI and feature scripts.
+// Transitional hook boundary for the remaining search/filter feature scripts.
 (() => {
   const config = window.__LADIES_CONFIG__ || {};
 
@@ -123,36 +123,6 @@
     enumerable: true,
     writable: false,
   });
-
-  // Transitional read-only aliases for messaging/pricing scripts that are still
-  // classic scripts. Search/filter features must use registerHooks and never
-  // assign these globals themselves.
-  const aliases = {
-    state: () => state,
-    setScreen: () => setScreen,
-    api: () => api,
-    openPerson: () => openPerson,
-    closeProfile: () => closeProfile,
-    renderProfile: () => renderProfile,
-    latestSnapshot: () => latestSnapshot,
-    fetchPersonDetail: () => fetchPersonDetail,
-    loadDashboard: () => loadDashboard,
-    loadRecentSearches: () => loadRecentSearches,
-    loadStorage: () => loadStorage,
-    openSheet: () => openSheet,
-    closeSheet: () => closeSheet,
-    toast: () => toast,
-    esc: () => esc,
-    ico: () => ico,
-  };
-  for (const [name, getter] of Object.entries(aliases)) {
-    if (Object.prototype.hasOwnProperty.call(window, name)) continue;
-    Object.defineProperty(window, name, {
-      get: getter,
-      configurable: false,
-      enumerable: false,
-    });
-  }
 
   const syncVersion = () => {
     const version = String(config.version || '').trim();
