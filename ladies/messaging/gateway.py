@@ -26,6 +26,9 @@ SERIAL_COMMANDS = {
     "connect", "disconnect", "logout", "send_text", "send_media",
     "send_reaction", "edit_message", "delete_message",
 }
+APP_STATE_RECOVERY_WINDOW_SECONDS = 15.0
+APP_STATE_RECOVERY_COOLDOWN_SECONDS = 300.0
+APP_STATE_MISSING_KEY_RE = re.compile(r"failed to find key .* to decode mutation", re.I)
 
 
 class WhatsAppGateway:
@@ -47,6 +50,9 @@ class WhatsAppGateway:
         self._pending: dict[str, queue.Queue] = {}
         self._stopping = False
         self._restart_attempt = 0
+        self._app_state_failures: list[float] = []
+        self._last_app_state_recovery = 0.0
+        self._app_state_recovery_running = False
         self.state = "NOT_CONFIGURED"
         self.detail = None
         self.qr = None
@@ -160,11 +166,83 @@ class WhatsAppGateway:
             return logging.WARNING, safe
         return logging.DEBUG, safe
 
+    @staticmethod
+    def _is_app_state_missing_key_log(line: str) -> bool:
+        try:
+            payload = json.loads(line)
+            text = " ".join(str(payload.get(key) or "") for key in ("error", "msg", "reason"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            text = line
+        return bool(APP_STATE_MISSING_KEY_RE.search(text))
+
+    def _clear_app_state_versions(self) -> int:
+        """Drop only app-state cursors; credentials and sync keys stay intact."""
+        removed = 0
+        for path in self.auth_dir.glob("app-state-sync-version-*.json"):
+            try:
+                path.unlink()
+                removed += 1
+            except FileNotFoundError:
+                continue
+            except OSError:
+                LOGGER.warning("Could not remove stale WhatsApp app-state cursor path=%s", path.name)
+        return removed
+
+    def _maybe_schedule_app_state_recovery(self, line: str, proc: subprocess.Popen[str]) -> None:
+        if not self._is_app_state_missing_key_log(line):
+            return
+        now = time.monotonic()
+        with self._lock:
+            cutoff = now - APP_STATE_RECOVERY_WINDOW_SECONDS
+            self._app_state_failures = [seen for seen in self._app_state_failures if seen >= cutoff]
+            self._app_state_failures.append(now)
+            if len(self._app_state_failures) < 2:
+                return
+            if self._app_state_recovery_running:
+                return
+            if now - self._last_app_state_recovery < APP_STATE_RECOVERY_COOLDOWN_SECONDS:
+                return
+            if proc is not self.proc or proc.poll() is not None or self._stopping:
+                return
+            self._app_state_recovery_running = True
+            self._last_app_state_recovery = now
+        threading.Thread(
+            target=self._recover_app_state,
+            args=(proc,),
+            daemon=True,
+            name="wa-app-state-recovery",
+        ).start()
+
+    def _recover_app_state(self, proc: subprocess.Popen[str]) -> None:
+        try:
+            with self._lock:
+                if proc is not self.proc or proc.poll() is not None or self._stopping:
+                    return
+            removed = self._clear_app_state_versions()
+            LOGGER.warning(
+                "WhatsApp app-state decode repeatedly missed a sync key; "
+                "resetting %s version cursor(s) and restarting worker while preserving credentials/keys",
+                removed,
+            )
+            with self._lock:
+                if proc is not self.proc or proc.poll() is not None or self._stopping:
+                    return
+                self._set_state("RECONNECTING", "WhatsApp-App-State wird neu synchronisiert")
+            proc.terminate()
+        except Exception:
+            LOGGER.exception("WhatsApp app-state recovery failed")
+        finally:
+            with self._lock:
+                self._app_state_recovery_running = False
+                self._app_state_failures.clear()
+
     def _read_stderr(self, proc: subprocess.Popen[str]) -> None:
         if not proc.stderr:
             return
         for line in proc.stderr:
-            level, safe = self._worker_log_level(line.rstrip())
+            raw = line.rstrip()
+            self._maybe_schedule_app_state_recovery(raw, proc)
+            level, safe = self._worker_log_level(raw)
             LOGGER.log(level, "baileys: %s", safe)
 
     def _watch(self, proc: subprocess.Popen[str]) -> None:
