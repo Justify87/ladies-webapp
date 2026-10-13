@@ -85,7 +85,7 @@ jobs:
               raise SystemExit('Could not update version in pyproject.toml')
           path.write_text(updated, encoding='utf-8')
           PY
-          npm --prefix ladies/messaging/whatsapp_worker version "$VERSION" --no-git-tag-version
+          npm --prefix ladies/messaging/whatsapp_worker version "$VERSION" --no-git-tag-version --allow-same-version
           uv lock
 
       - name: Validate release candidate
