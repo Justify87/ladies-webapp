@@ -1,0 +1,143 @@
+name: Refactor closeout fix
+
+on:
+  push:
+    branches:
+      - refactor/v9.6-final-cleanup
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/v9.6-final-cleanup
+          persist-credentials: true
+
+      - name: Apply reviewed closeout fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"Expected block not found in {path}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "ladies/messaging/service.py",
+              '''    def __init__(self, database: Database | str | Path, data_dir: str | Path):
+                  install_identity_merge_listener()
+                  owns_database = not isinstance(database, Database)
+                  self.database = database if isinstance(database, Database) else Database(database)
+                  if owns_database:
+                      self.database.create_schema()
+          ''',
+              '''    def __init__(self, database: Database, data_dir: str | Path):
+                  install_identity_merge_listener()
+                  if not isinstance(database, Database):
+                      raise TypeError("Messaging benötigt die gemeinsame Application-Database")
+                  self.database = database
+          ''',
+          )
+
+          replace_once(
+              "ladies/messaging/routes.py",
+              '''def install_messaging(app, *, data_dir, database: Database | None = None, db_path=None) -> MessagingService:
+              database = database or app.extensions.get("ladies_database")
+              if database is None:
+                  if db_path is None:
+                      raise RuntimeError("Messaging benötigt database oder db_path")
+                  database = Database(db_path)
+                  database.create_schema()
+              service = MessagingService(database, data_dir)
+          ''',
+              '''def install_messaging(app, *, data_dir, database: Database | None = None) -> MessagingService:
+              database = database or app.extensions.get("ladies_database")
+              if not isinstance(database, Database):
+                  raise RuntimeError("Messaging benötigt die gemeinsame Application-Database")
+              service = MessagingService(database, data_dir)
+          ''',
+          )
+
+          test_paths = [
+              "tests/test_pricing_service.py",
+              "tests/test_whatsapp_rehydrate.py",
+              "tests/test_messaging_baileys7.py",
+              "tests/test_message_visibility.py",
+              "tests/test_messaging.py",
+              "tests/test_messaging_complete.py",
+              "tests/test_messaging_review_fixes.py",
+              "tests/test_messaging_regressions.py",
+          ]
+
+          def ensure_database_helper(path: str) -> str:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              if "from ladies_v9.database import Database" not in text:
+                  marker = "from pathlib import Path\n"
+                  if marker not in text:
+                      raise SystemExit(f"Path import marker missing in {path}")
+                  text = text.replace(marker, marker + "\nfrom ladies_v9.database import Database\n", 1)
+              if "def _database(path):" not in text:
+                  marker = "\n\nclass "
+                  index = text.find(marker)
+                  if index < 0:
+                      raise SystemExit(f"Class marker missing in {path}")
+                  helper = (
+                      "\n\ndef _database(path):\n"
+                      "    database = Database(path)\n"
+                      "    database.create_schema()\n"
+                      "    return database\n"
+                  )
+                  text = text[:index] + helper + text[index:]
+              return text
+
+          for path in test_paths:
+              target = Path(path)
+              text = ensure_database_helper(path)
+              text = text.replace(
+                  'PriceIntelligenceService(root / "test.db", root / "data")',
+                  'PriceIntelligenceService(_database(root / "test.db"), root / "data")',
+              )
+              for old, new in (
+                  (
+                      'MessagingService(self.root / "app.sqlite3", self.root / "data")',
+                      'MessagingService(_database(self.root / "app.sqlite3"), self.root / "data")',
+                  ),
+                  (
+                      'MessagingService(self.root / "test.sqlite3", self.root / "data")',
+                      'MessagingService(_database(self.root / "test.sqlite3"), self.root / "data")',
+                  ),
+                  (
+                      'MessagingService(self.root / "old.sqlite3", self.data_dir)',
+                      'MessagingService(_database(self.root / "old.sqlite3"), self.data_dir)',
+                  ),
+                  (
+                      'MessagingService(self.root / "fresh.sqlite3", self.data_dir)',
+                      'MessagingService(_database(self.root / "fresh.sqlite3"), self.data_dir)',
+                  ),
+              ):
+                  text = text.replace(old, new)
+              target.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Commit fixes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ladies/messaging/service.py ladies/messaging/routes.py tests
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "Address V9.6 refactor review findings"
+          git push origin HEAD:refactor/v9.6-final-cleanup
