@@ -97,7 +97,11 @@ class LanAccessManager:
             return
         ordered = sorted(
             sessions.items(),
-            key=lambda item: str((item[1] or {}).get("created_at") or ""),
+            key=lambda item: str(
+                (item[1] or {}).get("last_seen_at")
+                or (item[1] or {}).get("created_at")
+                or ""
+            ),
             reverse=True,
         )
         state["sessions"] = dict(ordered[:MAX_DEVICE_SESSIONS])
