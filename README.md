@@ -46,21 +46,22 @@ Eigene Pfade über `--db` und `--data-dir` bleiben möglich.
 
 ## Architektur V9.6
 
-Die Anwendung bleibt bewusst ein kompakter lokaler Monolith: Flask + SQLAlchemy + SQLite im Backend, Vanilla JavaScript im Browser und ein separater interner Baileys-Worker für WhatsApp.
+Die Anwendung bleibt bewusst ein kompakter lokaler Monolith: Flask + SQLAlchemy + SQLite im Backend, Browser-ES-Module ohne Frontend-Framework und ein separater interner Baileys-Worker für WhatsApp.
 
 ```text
 ladies_explorer.py                 Start, Python-/Node-Bootstrap
 pyproject.toml                     Version + Python-Abhängigkeiten
 ladies/
-  app.py                           Integration der Features
+  app.py                           Application Composition
   web.py                           Core-HTTP/API
   database.py                      SQLite/SQLAlchemy + Migration
   config.py                        öffentliche Frontend-Konfiguration
   errors.py                        einheitliche API-Fehler
   request_parsing.py               Request-Validierung
   logging_utils.py                 Log-Redaction
+  background.py                    begrenzte In-Process-Hintergrundarbeit
   core/
-    repositories/                  fachliche Repository-Grenzen
+    repositories/                  fachliche Repository-/Readmodel-Grenzen
     services/                      Search/Profile-Orchestrierung
   messaging/
     service.py                     kanonischer MessagingService
@@ -70,15 +71,23 @@ ladies/
     history_cache.py               begrenzte Recent-History-Rehydration
     whatsapp_worker/               Baileys-7-Worker
   pricing/
-    service.py                     Price Intelligence
-    extraction_core.py             Extraktions-/Revisionslogik
+    service.py                     Price Intelligence / Revisionen
+    extraction_core.py             Extraktionslogik
     media_locator.py               sicherer lokaler Medienzugriff
-  static/                          Browser-Frontend
-  templates/                       HTML
+  static/
+    app.js                         kanonischer Browser-Core / öffentliche Modulverträge
+    messaging.js                   Messaging-UI
+    profile_messaging_ui.js        Profil↔Chat-Integration
+    pricing.js                     Pricing-UI
+    js/chat_profile.js             Chat↔Profil-Integration
+    css/                           statische Feature-Styles
+  templates/index.html             HTML + ES-Module-Entrypoints
 tests/                             Unit-/Regression-/Integrationstests
 ```
 
 Core, Messaging und Pricing teilen sich innerhalb einer App dieselbe `Database`-Instanz. Schemaerstellung und Migration erfolgen zentral vor Nutzung der Feature-Services.
+
+Im Browser gibt es keinen `window.LadiesApp`-Runtime-Layer, keine Hook-Setter-Pipeline und keinen `window.fetch`-Monkeypatch. Feature-Skripte werden als `type="module"` geladen und importieren ihre benötigten Verträge explizit aus `app.js`. Messaging veröffentlicht für die Pricing-Integration kleine DOM-Lifecycle-Events für geöffnete, aktualisierte und geschlossene Threads. Styles werden als statische CSS-Assets geladen und nicht aus JavaScript injiziert.
 
 ## Identität
 
@@ -91,6 +100,8 @@ Zu einer Person können gehören:
 - WhatsApp-PN-/LID-Endpunkte;
 - Bild-/Telefon-/Source-ID-Evidenz;
 - Historie, Medien, Preise und Treffen.
+
+Schreibende Identity-/Person-Operationen liegen im `PersonRepository`; größere Person-/Listing-Readmodels sind bewusst in einer separaten Read-Grenze gehalten. Merge/Split und Ingest erzeugen dadurch keine zweite fachliche Person-Implementierung.
 
 ## Nachrichten / WhatsApp
 
@@ -120,9 +131,13 @@ Ein Like kann im Hintergrund eine best-effort Rehydration der letzten Nachrichte
 
 Die Price-Intelligence-Schicht bleibt rule-first und lokal integrierbar. Sie kann relevante Chattexte und Medienkontext erfassen, optional OCR verwenden, Preisvorschläge erzeugen und akzeptierte Änderungen als nachvollziehbare Revisionen/Evidenz persistieren. OCR-/Model-Runtimes sind optionale Adapter und keine Voraussetzung für die Kernanwendung.
 
+Ein akzeptierter Vorschlag wird innerhalb einer zusammenhängenden Datenbanktransaktion geprüft und persistiert. Medien werden ausschließlich über den `MediaLocator` aufgelöst. Die Browser-Integration beobachtet den Messaging-Lifecycle explizit und verändert weder `fetch` noch globale App-Funktionen.
+
 ## Suche und Filter
 
 Search- und Profile-Orchestrierung liegen außerhalb der Flask-Routen in Application Services. Der Browser erhält Kategorien, Filterkatalog, Defaults und App-Version aus der zentralen Backend-Konfiguration (`/api/config`) statt dieselben Filterdefinitionen mehrfach zu pflegen.
+
+Die ehemalige Search-/Filter-Patchschicht ist entfernt. Suche, Preview und Filterdarstellung gehören zur kanonischen Browserimplementierung; es gibt keine nachgeladenen `runtime.js`, `search_ui.js` oder `filter_ui.js`-Overrides mehr.
 
 ## Sicherheit im Heimnetz
 
@@ -158,7 +173,9 @@ Lokal:
 uv run python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-GitHub Actions prüft Python-Compile, Unit-/Regressionstests, Flask-Smoke-Test, Bootstrap auf Linux/macOS, sämtliche Browser-JavaScript-Dateien, den Node-Worker, reproduzierbares `npm ci` und die erwartete Baileys-Version.
+GitHub Actions prüft Python-Compile, Unit-/Regressionstests, Flask-Smoke-Test, Bootstrap auf Linux/macOS, sämtliche Browser-JavaScript-Dateien im ES-Module-Modus, den Node-Worker, reproduzierbares `npm ci` und die erwartete Baileys-Version.
+
+Die Tests sollen öffentliche API-/Service-/Sicherheitsverträge absichern. Reine Source-String-Checks werden nur für kleine Architektur-Invarianten wie das Fehlen einer Transitional Runtime oder eines globalen Monkeypatches verwendet.
 
 ## Bewusste Grenzen
 
