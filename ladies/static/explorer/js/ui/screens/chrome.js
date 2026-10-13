@@ -1,0 +1,9 @@
+import { escapeHtml as e, escapeAttr as a } from '../../shared/html.js';
+import { icon } from '../../shared/icons.js';
+import * as S from '../../app/selectors.js';
+import { statusLabel } from '../../data/adapters.js';
+
+const NAV=[['search','search','Suche'],['swipe','cards','Swipe'],['favorites','heart','Favoriten'],['messages','chat','Nachrichten'],['settings','settings','Einstellungen']];
+
+export function renderHeader(state,route){if(route.name==='chat'){const t=S.currentThread(state);return `<button class="icon-button" data-action="back">${icon('back')}</button><button class="chat-avatar" data-action="chat-profile">${t?.avatar?`<img src="${a(t.avatar)}" alt="">`:icon('user')}</button><span class="chat-copy"><b>${e(t?.name||'Chat')}</b><small>${e(statusLabel(state.messaging.status.state))}</small></span><button class="icon-button" data-action="chat-profile">${icon('user')}</button>`;}if(route.name==='profile'||route.name==='history'||route.name==='archive')return '';const switcher=route.name==='swipe'?`<button class="icon-button" data-action="root-route" data-route="grid">${icon('grid')}</button>`:route.name==='grid'?`<button class="icon-button" data-action="root-route" data-route="swipe">${icon('cards')}</button>`:'';return `<div class="brand">Ladies <strong>Explorer</strong>${icon('heart')}</div><div class="header-actions">${switcher}<button class="icon-button" data-action="root-route" data-route="search">${icon('search')}</button></div>`;}
+export function renderBottomNav(state,route){const active=S.rootNav(route.name);if(['chat','profile','history','archive'].includes(route.name))return '';return NAV.map(([id,ico,label])=>`<button class="${active===id?'active':''}" data-action="root-route" data-route="${id}">${id==='messages'&&S.unreadTotal(state)?`<span class="nav-badge">${e(Math.min(99,S.unreadTotal(state)))}</span>`:''}${icon(ico)}<span>${e(label)}</span></button>`).join('');}
