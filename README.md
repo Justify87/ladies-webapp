@@ -27,9 +27,33 @@ Der Start ist selbstheilend ausgelegt:
 
 Für den Zugriff vom Smartphone im selben WLAN gibt der Start mit `--host 0.0.0.0` eine Pairing-URL aus. Diese zuerst auf dem Smartphone öffnen.
 
+## Portable Installation und Updates
+
+GitHub Releases veröffentlichen zusätzlich zum Source-Archiv ein kanonisches `ladies-explorer-vX.Y.Z.zip`. Dieses Paket kann einmalig als portable Installation eingerichtet werden. Danach liegen versionierter Programmcode und persistente Nutzerdaten getrennt:
+
+```text
+LadiesExplorer/
+├── start.command / start.cmd
+├── update.command / update.cmd
+├── current
+├── releases/
+└── data/
+    ├── ladies.sqlite3
+    ├── ladies_data/
+    └── logs/
+```
+
+`start.command` bzw. `start.cmd` startet immer die in `current` aktive Release-Version und übergibt dabei dieselben persistenten DB-, Daten- und Logpfade. Dadurch bleiben insbesondere WhatsApp-Auth, Chats, Medien, Profile, Preise und LAN-Gerätesessions bei einem App-Update erhalten.
+
+`update.command` bzw. `update.cmd` prüft nur auf ausdrücklichen Aufruf den neuesten stabilen GitHub Release, validiert Release-Asset, SHA-256-Digest, ZIP-Pfade und Manifest, installiert zunächst in ein Staging-Verzeichnis und schaltet `current` erst danach atomar um. Die zwei neuesten Releases bleiben für einen Code-Rollback erhalten.
+
+Eine bisherige entpackte Installation kann bei der Ersteinrichtung über `--legacy-root` übernommen werden. `.venv`, `.runtime` und `node_modules` werden bewusst nicht migriert; sie sind reproduzierbare Runtime-Daten.
+
+Details: [`docs/portable-updater.md`](docs/portable-updater.md).
+
 ## Lokale Dateien
 
-Standardmäßig:
+Beim direkten, nicht-portablen Start standardmäßig:
 
 - Datenbank: `ladies.sqlite3`
 - Archiv/Laufzeitdaten: `ladies_data/`
@@ -173,7 +197,7 @@ Lokal:
 uv run python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-GitHub Actions bündelt die Verifikation in einem Linux-Job: Python-Compile, vollständige Unit-/Regressionstests inklusive App-/Flask-Verträge, Bootstrap-Selbstheilung in einer frischen Virtualenv, sämtliche Browser-JavaScript-Dateien im ES-Module-Modus, den Node-Worker, reproduzierbares `npm ci` und die erwartete Baileys-Version. Veraltete Läufe desselben PRs werden automatisch abgebrochen; reine Doku- und Release-Note-Änderungen lösen keinen separaten CI-Lauf aus.
+GitHub Actions bündelt die Verifikation in einem Linux-Job: Python-Compile, vollständige Unit-/Regressionstests inklusive App-/Flask-Verträge, Portable-Release-Build/ZIP-Prüfung, Bootstrap-Selbstheilung in einer frischen Virtualenv, sämtliche Browser-JavaScript-Dateien im ES-Module-Modus, den Node-Worker, reproduzierbares `npm ci` und die erwartete Baileys-Version. Veraltete Läufe desselben PRs werden automatisch abgebrochen; reine Doku- und Release-Note-Änderungen lösen keinen separaten CI-Lauf aus.
 
 Die Tests sollen öffentliche API-/Service-/Sicherheitsverträge absichern. Reine Source-String-Checks werden nur für kleine Architektur-Invarianten wie das Fehlen einer Transitional Runtime oder eines globalen Monkeypatches verwendet.
 
