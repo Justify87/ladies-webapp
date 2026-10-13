@@ -92,7 +92,13 @@ class RecentHistoryCache:
 
         media = dict(existing_media or {})
         for key, value in incoming_media.items():
-            if key in LOCAL_MEDIA_KEYS and value in {None, ""} and media.get(key) not in {None, ""}:
+            previous = media.get(key)
+            if (
+                key in LOCAL_MEDIA_KEYS
+                and (value is None or value == "")
+                and previous is not None
+                and previous != ""
+            ):
                 continue
             media[key] = value
         merged["media"] = media
