@@ -22,7 +22,7 @@ class UiConsolidationTests(unittest.TestCase):
             "/static/js/chat_profile.js",
             "/static/pricing.js",
             "/static/css/profile_messaging_ui.css",
-            "/static/css/messaging_complete.css",
+            "/static/css/messaging_features.css",
             "/static/css/search_ui.css",
             "/static/css/filter_ui.css",
             "/static/css/chat_profile.css",
@@ -37,6 +37,7 @@ class UiConsolidationTests(unittest.TestCase):
             "/static/ui_consolidation.js",
             "/static/ui_followup.js",
             "/static/messaging_bridge.js",
+            "/static/css/messaging_complete.css",
         ):
             with self.subTest(removed=removed):
                 self.assertNotIn(removed, index)
@@ -49,6 +50,7 @@ class UiConsolidationTests(unittest.TestCase):
             "ui_consolidation.js",
             "ui_followup.js",
             "messaging_bridge.js",
+            "css/messaging_complete.css",
         ):
             with self.subTest(relative=relative):
                 self.assertFalse((STATIC / relative).exists())
@@ -110,10 +112,10 @@ class UiConsolidationTests(unittest.TestCase):
         index = TEMPLATE.read_text(encoding="utf-8")
         messaging = (STATIC / "messaging.js").read_text(encoding="utf-8")
         self.assertIn('/static/css/profile_messaging_ui.css', index)
-        self.assertIn('/static/css/messaging_complete.css', index)
+        self.assertIn('/static/css/messaging_features.css', index)
         self.assertLess(
             index.index('/static/css/profile_messaging_ui.css'),
-            index.index('/static/css/messaging_complete.css'),
+            index.index('/static/css/messaging_features.css'),
         )
         self.assertNotIn("messagingCompleteStyle", messaging)
         self.assertNotIn("document.createElement('style')", messaging)
