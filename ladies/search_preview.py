@@ -5,8 +5,8 @@ from typing import Any
 
 from flask import Flask, jsonify, request
 
+from .core.services.search import parse_search_request
 from .errors import ExternalServiceError, ValidationError
-from .request_parsing import read_int, read_mapping
 from .source import (
     build_filter_path,
     build_search_url,
@@ -16,7 +16,6 @@ from .source import (
     parse_search_config,
     resolve_location,
 )
-from .utils import clean_text
 
 LOGGER = logging.getLogger("ladies_explorer.search_preview")
 
@@ -91,32 +90,31 @@ def install_search_preview(
     default_city: str = "leipzig",
     default_radius: int = 20,
 ) -> None:
-    http = build_session()
+    # Reuse the same HTTP session as the canonical SearchService when installed
+    # through the normal application composition path.
+    http = app.extensions.get("ladies_http") or build_session()
 
     @app.post("/api/search-preview")
     def api_search_preview():
         payload = request.get_json(silent=True) or {}
         try:
-            city_raw = clean_text(str(payload.get("city") or default_city))
-            radius = read_int(payload, "radius", default=default_radius, minimum=1, maximum=200)
-            category = clean_text(str(payload.get("category") or ""))
-            age_min = read_int(payload, "age_min", default=18, minimum=18, maximum=60)
-            age_max = read_int(payload, "age_max", default=60, minimum=age_min, maximum=60)
-            height_min = read_int(payload, "height_min", default=140, minimum=140, maximum=200)
-            height_max = read_int(payload, "height_max", default=200, minimum=height_min, maximum=200)
-            selected = read_mapping(payload, "selected")
-            city_slug, city_display = resolve_location(http, city_raw)
+            params = parse_search_request(
+                payload,
+                default_city=default_city,
+                default_radius=default_radius,
+            )
+            city_slug, city_display = resolve_location(http, params["city_raw"])
             result = fetch_search_preview_count(
                 http,
                 city_slug=city_slug,
                 city_display=city_display,
-                radius_km=radius,
-                category=category,
-                age_min=age_min,
-                age_max=age_max,
-                height_min=height_min,
-                height_max=height_max,
-                selected=selected,
+                radius_km=params["radius"],
+                category=params["category"],
+                age_min=params["age_min"],
+                age_max=params["age_max"],
+                height_min=params["height_min"],
+                height_max=params["height_max"],
+                selected=params["selected"],
             )
             return jsonify(**result)
         except ValidationError:
