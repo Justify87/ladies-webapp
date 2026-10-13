@@ -54,9 +54,15 @@ jobs:
 
       - name: Verify Python
         run: |
-          python -m compileall -q ladies ladies_explorer.py
+          python -m compileall -q ladies tools ladies_explorer.py
           python -c "import ladies_v9.app, nodeenv, ladies_explorer; assert ladies_explorer._project_ready()"
           python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Verify portable release package
+        shell: bash
+        run: |
+          python tools/build_release.py --output .release-test --commit "${GITHUB_SHA}"
+          unzip -t .release-test/ladies-explorer-v*.zip
 
       - name: Verify JavaScript and WhatsApp worker
         shell: bash
