@@ -1,9 +1,6 @@
 'use strict';
 
 (() => {
-  const App = window.LadiesApp;
-  if (!App) throw new Error('LadiesApp runtime fehlt');
-  const {state, toast, esc} = App;
   const icon = name => `<svg aria-hidden="true"><use href="/static/icons.svg#${name}"/></svg>`;
   const contactCache = new Map();
   let activeThreadId = null;
@@ -334,7 +331,7 @@
       const presence = document.querySelector('#chatPresence');
       if (presence && !presence.dataset.presenceExpiryObserved) {
         presence.dataset.presenceExpiryObserved = '1';
-        presenceObserver.observe(presence, {childList:true, characterData:true, subtree:true});
+        presenceObserver.observe(presence, {childList:true, characterData:true,subtree:true});
       }
       if (layer && !layer.classList.contains('hidden')) polishChatChrome();
     });
