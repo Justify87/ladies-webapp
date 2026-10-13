@@ -15,6 +15,7 @@ def make_release(path: Path, version: str, schema: int = 1) -> Path:
     tag = f"v{version}"
     path.mkdir(parents=True, exist_ok=True)
     (path / "ladies").mkdir()
+    (path / "ladies" / "__init__.py").write_text("\n", encoding="utf-8")
     (path / "tools").mkdir()
     (path / "packaging").mkdir()
     (path / "ladies_explorer.py").write_text("print('ok')\n", encoding="utf-8")
