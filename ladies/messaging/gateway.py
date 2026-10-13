@@ -269,7 +269,3 @@ class WhatsAppGateway:
         with self._lock:
             if self.proc is proc:
                 self.proc = None
-
-
-# Temporary import compatibility for third-party/local tests during the V9.6 transition.
-BaileysWorkerManager = WhatsAppGateway
