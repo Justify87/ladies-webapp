@@ -137,8 +137,16 @@ def safe_extract(archive: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive) as bundle:
         for info in bundle.infolist():
-            member = PurePosixPath(info.filename)
-            if not info.filename or member.is_absolute() or ".." in member.parts or _is_symlink(info):
+            normalized = info.filename.replace("\\", "/")
+            member = PurePosixPath(normalized)
+            first = member.parts[0] if member.parts else ""
+            if (
+                not info.filename
+                or member.is_absolute()
+                or ".." in member.parts
+                or ":" in first
+                or _is_symlink(info)
+            ):
                 raise PortableError(f"Unsicherer ZIP-Eintrag: {info.filename}")
         bundle.extractall(destination)
 
@@ -367,6 +375,7 @@ def install(source: Path, root: Path, legacy_root: Path | None = None) -> str:
     staging = root / RELEASES_DIR / f".staging-{tag}"
     shutil.rmtree(staging, ignore_errors=True)
     target_created = False
+    activated = False
     try:
         _copy_tree(source, staging)
         validate_release_dir(staging, tag)
@@ -376,9 +385,10 @@ def install(source: Path, root: Path, legacy_root: Path | None = None) -> str:
         if legacy_root:
             migrate_legacy_data(legacy_root, root)
         set_current(root, tag)
+        activated = True
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
-        if target_created and not (root / CURRENT_FILE).exists():
+        if target_created and not activated:
             shutil.rmtree(target, ignore_errors=True)
         raise
     return tag
@@ -422,9 +432,8 @@ def prune_releases(root: Path, keep: int = MAX_RELEASES) -> None:
 def _activate_staged(root: Path, staging: Path, tag: str) -> None:
     target = root / RELEASES_DIR / tag
     if target.exists():
-        shutil.rmtree(staging, ignore_errors=True)
-    else:
-        os.replace(staging, target)
+        shutil.rmtree(target)
+    os.replace(staging, target)
     validate_release_dir(target, tag)
     _copy_launchers(target, root)
     set_current(root, tag)
