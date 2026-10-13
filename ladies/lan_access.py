@@ -6,12 +6,13 @@ import json
 import os
 import secrets
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 
 MAX_DEVICE_SESSIONS = 32
+SESSION_TOUCH_INTERVAL = timedelta(minutes=5)
 
 
 class LanAccessManager:
@@ -149,5 +150,19 @@ class LanAccessManager:
             row = sessions.get(digest)
             if not isinstance(row, dict):
                 return False
-            row["last_seen_at"] = self._now()
+
+            now = datetime.now(timezone.utc)
+            previous = None
+            try:
+                previous_raw = str(row.get("last_seen_at") or "")
+                if previous_raw:
+                    previous = datetime.fromisoformat(previous_raw.replace("Z", "+00:00"))
+                    if previous.tzinfo is None:
+                        previous = previous.replace(tzinfo=timezone.utc)
+            except ValueError:
+                previous = None
+
+            row["last_seen_at"] = now.isoformat()
+            if previous is None or now - previous.astimezone(timezone.utc) >= SESSION_TOUCH_INTERVAL:
+                self._write(self._state)
             return True
