@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+import tomllib
 
 from .source import CATEGORY_MAP, FILTER_GROUP_ORDER, FILTER_VALUE_MAP
 
@@ -19,11 +21,20 @@ CATEGORY_LABELS = {
 }
 
 
+def _source_project_version() -> str:
+    project_file = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    try:
+        data = tomllib.loads(project_file.read_text(encoding="utf-8"))
+        return str((data.get("project") or {}).get("version") or "0.0.0")
+    except (OSError, ValueError, TypeError, tomllib.TOMLDecodeError):
+        return "0.0.0"
+
+
 def application_version() -> str:
     try:
         return version("ladies-explorer")
     except PackageNotFoundError:
-        return "9.6.0"
+        return _source_project_version()
 
 
 def frontend_config(*, default_city: str, default_radius: int) -> dict:
