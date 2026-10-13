@@ -1,0 +1,188 @@
+import { api } from '../api/client.js';
+import * as S from '../app/selectors.js';
+import { filterPayload, profileBundleVm } from '../data/adapters.js';
+
+export function createCoreEffects({store,router}) {
+  let previewAbort=null, previewTimer=null, previewSeq=0;
+  const toast=message=>store.dispatch({type:'TOAST',value:message});
+  const state=()=>store.getState();
+
+  function rawSearchRowAt(index=state().discover.index) {
+    return S.discoverQueueRows(state())[index] || null;
+  }
+
+  async function loadSettings() {
+    try {
+      const [settings,storage,pricingRuntime] = await Promise.all([api.settings(),api.storage(),api.pricingStatus().catch(()=>({}))]);
+      store.dispatch({type:'SETTINGS',values:settings?.settings || {}});
+      store.dispatch({type:'STORAGE',value:storage || {}});
+      store.dispatch({type:'PRICING_RUNTIME',value:pricingRuntime || {}});
+      const defaults=settings?.settings?.default_filters;
+      if (defaults && typeof defaults === 'object') {
+        const current=state().search.filters;
+        store.dispatch({type:'SEARCH_FILTERS',filters:{...current,...defaults,selected:{...(current.selected||{}),...(defaults.selected||{})},local:{...(current.local||{}),...(defaults.local||{})}}});
+      }
+      document.documentElement.classList.toggle('reduced-motion',!!settings?.settings?.reduced_motion);
+    } catch (error) { console.warn(error); }
+  }
+
+  async function loadDashboard(showToast=false) {
+    try { store.dispatch({type:'DASHBOARD',value:await api.dashboard()}); if(showToast)toast('Aktualisiert'); }
+    catch(error){ if(showToast)toast(error.message); }
+  }
+
+  async function loadRecentSearches() {
+    try { const d=await api.recentSearches(); store.dispatch({type:'RECENT_SEARCHES',items:d?.items || []}); }
+    catch {}
+  }
+
+  async function openHistoryDrill(kind) {
+    try {
+      const d = kind === 'relistings' ? await api.historyRelistings(100) : await api.historyChanges(100);
+      store.dispatch({type:'SHEET',value:{kind:'history-drill',payload:{kind,items:d?.items || []}}});
+    } catch(error) { toast(error.message); }
+  }
+
+  function schedulePreview({immediate=false}={}) {
+    clearTimeout(previewTimer);
+    const sequence=++previewSeq;
+    previewTimer=setTimeout(async()=>{
+      previewAbort?.abort(); previewAbort=new AbortController();
+      store.dispatch({type:'SEARCH_PREVIEW',patch:{status:'loading',error:null}});
+      try {
+        const data=await api.searchPreview(filterPayload(state().search.filters),previewAbort.signal);
+        if(sequence!==previewSeq)return;
+        store.dispatch({type:'SEARCH_PREVIEW',patch:{status:'ready',count:Number(data?.count || 0),error:null}});
+      } catch(error) {
+        if(error?.name==='AbortError'||sequence!==previewSeq)return;
+        store.dispatch({type:'SEARCH_PREVIEW',patch:{status:'error',count:null,error:error.message}});
+      }
+    }, immediate?0:550);
+  }
+
+  async function performSearch() {
+    store.dispatch({type:'SEARCH_LOADING',value:true});
+    try {
+      const data=await api.search(filterPayload(state().search.filters));
+      store.dispatch({type:'SEARCH_RESULTS',results:data?.results || [],meta:data?.meta || null});
+      store.dispatch({type:'SEARCH_LOADING',value:false});
+      await loadRecentSearches();
+      router.replaceRoot('swipe');
+      await prefetchCurrent();
+    } catch(error) {
+      store.dispatch({type:'SEARCH_LOADING',value:false,error:error.message}); toast(error.message);
+    }
+  }
+
+  async function loadBundle(row,{detail=true,quiet=false}={}) {
+    if(!row?.advertId)return null;
+    let bundle=state().profiles.bundles[row.advertId];
+    if(!bundle) {
+      try {
+        store.dispatch({type:'PROFILE_LOADING',key:`advert:${row.advertId}`,value:true});
+        bundle=await api.profile(row.advertId);
+        store.dispatch({type:'PROFILE_BUNDLE',advertId:row.advertId,bundle});
+      } catch(error) { if(!quiet)toast(error.message); return null; }
+      finally { store.dispatch({type:'PROFILE_LOADING',key:`advert:${row.advertId}`,value:false}); }
+    }
+    const vm=profileBundleVm(bundle,row);
+    if(detail && vm.personId) await loadPerson(vm.personId,{quiet:true});
+    return vm;
+  }
+
+  async function loadPerson(personId,{force=false,quiet=false}={}) {
+    const key=String(personId); if(!force && state().profiles.details[key]) return state().profiles.details[key];
+    try {
+      store.dispatch({type:'PROFILE_LOADING',key:`person:${personId}`,value:true});
+      const d=await api.person(personId); store.dispatch({type:'PROFILE_DETAIL',personId,detail:d}); return d;
+    } catch(error) { if(!quiet)toast(error.message); return null; }
+    finally { store.dispatch({type:'PROFILE_LOADING',key:`person:${personId}`,value:false}); }
+  }
+
+  async function prefetchCurrent() {
+    const row=rawSearchRowAt(); if(!row)return;
+    await loadBundle(row,{detail:true,quiet:true});
+    [1,2].forEach((offset)=>{const next=rawSearchRowAt(state().discover.index+offset);if(next)setTimeout(()=>loadBundle(next,{detail:false,quiet:true}),offset*300);});
+  }
+
+  async function mutatePerson(personId,patch) {
+    if(!personId)throw new Error('Person konnte nicht aufgelöst werden');
+    const data=await api.personState(personId,patch); store.dispatch({type:'PERSON_STATE_SYNC',personId,userState:data?.user_state || patch}); return data?.user_state || patch;
+  }
+
+  async function discoverDecision(decision) {
+    const row=rawSearchRowAt(); if(!row)return;
+    const bundleVm=await loadBundle(row,{detail:false,quiet:false}); const personId=bundleVm?.personId || row.personId;
+    if(!personId)return toast('Person konnte nicht aufgelöst werden');
+    try {
+      const before={preference:bundleVm?.preference || row.preference || 'NONE',favorite:bundleVm?.favorite ?? row.favorite ?? false,index:state().discover.index,personId};
+      if(decision==='LIKE') await mutatePerson(personId,{preference:'LIKE'});
+      else if(decision==='DISLIKE') await mutatePerson(personId,{preference:'DISLIKE'});
+      else if(decision==='FAVORITE') await mutatePerson(personId,{favorite:!(bundleVm?.favorite ?? row.favorite)});
+      store.dispatch({type:'DISCOVER_HISTORY_PUSH',entry:before});
+      if(decision!=='FAVORITE')store.dispatch({type:'DISCOVER_INDEX',index:state().discover.index+1});
+      loadDashboard(); prefetchCurrent();
+    } catch(error){toast(error.message);}
+  }
+
+  async function undoDecision() {
+    const history=state().discover.history; const entry=history.at(-1); if(!entry)return toast('Nichts zum Zurücknehmen');
+    try { await mutatePerson(entry.personId,{preference:entry.preference,favorite:entry.favorite}); store.dispatch({type:'DISCOVER_HISTORY_POP'}); store.dispatch({type:'DISCOVER_INDEX',index:entry.index}); prefetchCurrent(); }
+    catch(error){toast(error.message);}
+  }
+
+  async function openProfile({personId,advertId}) {
+    let pid=Number(personId || 0) || null;
+    if(!pid && advertId) { const row=S.searchRows(state()).find(x=>x.advertId===String(advertId)); const vm=await loadBundle(row,{detail:false}); pid=vm?.personId || null; }
+    if(!pid)return toast('Person nicht gefunden');
+    router.push('profile',{personId:pid,advertId:advertId || null});
+    await loadPerson(pid,{force:false});
+  }
+
+  async function refreshProfile(personId) { await loadPerson(personId,{force:true}); }
+
+  async function loadList(tab=state().lists.tab) {
+    store.dispatch({type:'LIST_LOADING',value:true});
+    try { const d=await api.list(tab); store.dispatch({type:'LIST_ITEMS',items:d?.items || []}); }
+    catch(error){store.dispatch({type:'LIST_LOADING',value:false});toast(error.message);}
+  }
+
+  async function runStatusCheck() {
+    const current=state().lists.statusCheck;if(current.running)return;
+    try {
+      const d=await api.statusTargets(); const items=d?.items || [];
+      store.dispatch({type:'STATUS_CHECK',patch:{running:true,done:0,total:items.length,checkedAt:null}});
+      for(let i=0;i<items.length;i+=1){try{await api.profileStatus(items[i].advert_id);}catch{}store.dispatch({type:'STATUS_CHECK',patch:{done:i+1}});}
+      store.dispatch({type:'STATUS_CHECK',patch:{running:false,checkedAt:new Date().toISOString()}});toast(`${items.length} Anzeigen geprüft`);await Promise.all([loadList(),loadDashboard()]);
+    } catch(error){store.dispatch({type:'STATUS_CHECK',patch:{running:false}});toast(error.message);}
+  }
+
+  async function statusSingle(advertId) { if(!advertId)return;try{await api.profileStatus(advertId);toast('Status aktualisiert');await loadList();}catch(error){toast(error.message);} }
+
+  async function saveProfileData(form) {
+    const personId=Number(form.dataset.personId);const encounterId=Number(form.dataset.encounterId || 0);const fd=new FormData(form);
+    const choice=name=>form.querySelector(`[data-choice-name="${name}"] .selected`)?.dataset.value || 'UNKNOWN';
+    const rating=name=>form.querySelector(`[data-rating-name="${name}"] .selected`)?.dataset.value || null;
+    try {
+      const user=await api.personState(personId,{repeat_interest:choice('repeat_interest'),private_note:String(fd.get('private_note')||'')});
+      store.dispatch({type:'PERSON_STATE_SYNC',personId,userState:user?.user_state || {}});
+      const payload={duration_minutes:fd.get('duration_minutes')||null,total_price_eur:fd.get('total_price_eur')||null,overall_rating:rating('overall_rating'),sympathy_rating:rating('sympathy_rating'),photo_status:choice('photo_status'),service_accuracy:choice('service_accuracy'),hygiene:choice('hygiene'),kissing:choice('kissing'),negotiable:choice('negotiable')};
+      if(encounterId) await api.updateEncounter(personId,encounterId,payload); else if(Object.values(payload).some(v=>v&&v!=='UNKNOWN')) await api.addEncounter(personId,payload);
+      await loadPerson(personId,{force:true}); toast('Meine Daten gespeichert'); loadDashboard();
+    } catch(error){toast(error.message);}
+  }
+
+  async function addPrice(form) {
+    const personId=Number(form.dataset.personId),fd=new FormData(form);
+    try { await api.addPriceList(personId,{source:'USER_ENTERED',items:[{item_type:'BASE',duration_minutes:fd.get('minutes')||null,amount_eur:fd.get('amount'),label:fd.get('label')||null}]});store.dispatch({type:'SHEET',value:null});await loadPerson(personId,{force:true});toast('Preisliste gespeichert'); }
+    catch(error){toast(error.message);}
+  }
+
+  async function merge(form) { const source=Number(form.dataset.sourcePersonId),target=Number(new FormData(form).get('target'));if(!target||target===source)return toast('Andere gültige Person-ID eingeben');try{await api.merge(source,target);store.dispatch({type:'SHEET',value:null});router.back();await openProfile({personId:target});toast('Personen zusammengeführt');}catch(error){toast(error.message);} }
+
+  async function split(listingId) { try{const d=await api.split(listingId);store.dispatch({type:'SHEET',value:null});toast(`Neue Person #${d.new_person_id}`);const route=S.currentRoute(state());if(route.params?.personId)await loadPerson(route.params.personId,{force:true});}catch(error){toast(error.message);} }
+
+  async function snapshotCompare(a,b) { try{const [x,y]=await Promise.all([api.snapshot(a),api.snapshot(b)]);store.dispatch({type:'SHEET',value:{kind:'snapshot',payload:{before:x?.snapshot,after:y?.snapshot}}});}catch(error){toast(error.message);} }
+
+  return Object.freeze({loadSettings,loadDashboard,loadRecentSearches,openHistoryDrill,schedulePreview,performSearch,loadBundle,loadPerson,prefetchCurrent,mutatePerson,discoverDecision,undoDecision,openProfile,refreshProfile,loadList,runStatusCheck,statusSingle,saveProfileData,addPrice,merge,split,snapshotCompare,rawSearchRowAt,toast});
+}
