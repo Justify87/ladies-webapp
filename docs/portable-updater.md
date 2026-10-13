@@ -1,26 +1,34 @@
 # Portable Installation und Updater
 
-Der Ladies Explorer kann als portable, release-basierte Installation betrieben werden. Programmcode und persistente Daten sind dabei getrennt:
+Der Ladies Explorer kann als portable, release-basierte Installation betrieben werden. Programmcode, reproduzierbare Runtime und persistente Daten sind dabei getrennt:
 
 ```text
 LadiesExplorer/
 ├── start.command / start.cmd
 ├── update.command / update.cmd
 ├── current
+├── .runtime/
+│   └── python/                 # von uv verwaltetes app-lokales Python 3.12
 ├── releases/
-│   ├── v9.6.3/
-│   └── v9.6.4/
+│   ├── v9.7.0/
+│   │   └── .venv/             # releasebezogene Python-Umgebung
+│   └── v9.7.1/
+│       └── .venv/
 └── data/
     ├── ladies.sqlite3
     ├── ladies_data/
     └── logs/
 ```
 
-`releases/` enthält austauschbaren Programmcode. `data/` enthält den permanenten Datenbestand und wird von Updates nicht ersetzt.
+`releases/` enthält austauschbaren Programmcode und pro Release ein eigenes reproduzierbares `.venv`. `.runtime/python/` enthält das von `uv` verwaltete app-lokale Python und bleibt beim Wechsel zwischen Releases erhalten. `data/` enthält ausschließlich den permanenten Nutzerdatenbestand und wird von Updates nicht ersetzt.
+
+Das System-Python von macOS oder Windows ist **nicht** die App-Runtime. Die Portable-Launcher verwenden ein vorhandenes Release-venv oder provisionieren über `uv` zuerst Python 3.12 unter `<root>/.runtime/python` und bauen daraus das Release-venv auf.
 
 ## Erstinstallation
 
 GitHub-Releases stellen ein kanonisches Asset `ladies-explorer-vX.Y.Z.zip` bereit. Nach dem Entpacken kann die portable Installation angelegt werden.
+
+Für die einmalige Runtime-Provisionierung wird `uv` verwendet. Dadurch muss insbesondere das von macOS mitgelieferte System-Python nicht verändert oder als App-Runtime verwendet werden.
 
 macOS/Linux:
 
@@ -56,7 +64,7 @@ Die alte Ladies-Explorer-App muss dafür vollständig beendet sein. Bei interakt
 - `ladies_data/` inklusive WhatsApp-Auth, WhatsApp-Medien, Recent-History und LAN-Gerätesessions;
 - `logs/`.
 
-Nicht übernommen werden reproduzierbare Runtime-Daten wie `.venv/`, `.runtime` oder `node_modules/`.
+Nicht aus einer Legacy-Installation übernommen werden reproduzierbare Runtime-Daten wie `.venv/`, `.runtime` oder `node_modules/`. Die Portable-Installation erzeugt ihre eigene Runtime neu.
 
 Die alte Installation wird nicht gelöscht.
 
@@ -73,6 +81,15 @@ beziehungsweise unter Windows:
 ```cmd
 start.cmd
 ```
+
+Der Launcher löst die Python-Runtime in dieser Reihenfolge auf:
+
+1. vorhandenes `<root>/releases/<current>/.venv` verwenden;
+2. falls es fehlt, über `uv` ein app-lokales Python 3.12 unter `<root>/.runtime/python` provisionieren;
+3. daraus das Release-venv synchronisieren;
+4. erst danach den Portable Manager und `ladies_explorer.py` starten.
+
+Dadurch kann beispielsweise ein macOS-System-Python 3.9 vorhanden sein, ohne dass es für die Anwendung benutzt wird.
 
 Der Launcher übergibt der aktiven Release-Version immer dieselben persistenten Pfade:
 
@@ -91,6 +108,8 @@ Updates werden bewusst nur manuell gestartet:
 ```bash
 ./update.command
 ```
+
+Auch der Updater läuft über die app-eigene Runtime des aktuell aktiven Releases und nicht über das System-Python.
 
 Der Updater:
 

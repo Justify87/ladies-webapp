@@ -90,8 +90,27 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Verify portable updater on Windows
+      - name: Verify portable updater and launchers on Windows
         shell: pwsh
         run: |
           python -m compileall -q tools
-          python -m unittest discover -s tests -p 'test_portable_updater.py' -v
+          python -m unittest discover -s tests -p 'test_portable_*.py' -v
+
+  portable-macos:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify portable updater and launchers on macOS
+        shell: bash
+        run: |
+          sh -n packaging/install.command packaging/start.command packaging/update.command
+          python -m compileall -q tools
+          python -m unittest discover -s tests -p 'test_portable_*.py' -v
