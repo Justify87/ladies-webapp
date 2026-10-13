@@ -84,6 +84,34 @@ class UiConsolidationTests(unittest.TestCase):
         for source in (profile_messaging, messaging, chat_profile, pricing):
             self.assertNotIn("window.LadiesApp", source)
 
+    def test_messaging_shell_is_static_and_has_single_owner(self):
+        index = TEMPLATE.read_text(encoding="utf-8")
+        messaging = (STATIC / "messaging.js").read_text(encoding="utf-8")
+        profile_messaging = (STATIC / "profile_messaging_ui.js").read_text(encoding="utf-8")
+
+        for marker in (
+            'id="messagesScreen"',
+            'id="moreScreen"',
+            'id="messagingChatLayer"',
+            'data-nav="messages"',
+            'id="messageNavBadge"',
+        ):
+            self.assertIn(marker, index)
+
+        self.assertNotIn("insertAdjacentHTML", messaging)
+        self.assertNotIn("nav.innerHTML", messaging)
+        self.assertNotIn("q('#menuBtn').onclick", messaging)
+        self.assertNotIn("injectShell", messaging)
+        self.assertIn("function bindShell()", messaging)
+
+        self.assertNotIn("stopImmediatePropagation", profile_messaging)
+        self.assertNotIn("cleanMessagesUi", profile_messaging)
+        self.assertNotIn("observe(document.body", profile_messaging)
+        self.assertNotIn(".profile-chat-section", profile_messaging)
+        self.assertIn("ladies:open-person-chat", profile_messaging)
+        self.assertIn("ladies:messaging-thread-opened", profile_messaging)
+        self.assertIn("ladies:open-person-chat", messaging)
+
     def test_backend_config_is_filter_and_version_source_of_truth(self):
         config = frontend_config(default_city="leipzig", default_radius=20)
         self.assertEqual(config["defaults"], {"city": "leipzig", "radius_km": 20})
