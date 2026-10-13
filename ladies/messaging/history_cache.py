@@ -10,6 +10,7 @@ from ladies_v9.identity import normalize_phone_number
 from .models import ContactEndpoint
 
 REHYDRATE_LIMIT = 10
+LOCAL_MEDIA_KEYS = {"archive_name", "sha256", "private_view_once", "local_url"}
 
 
 def _jid_phone(jid: str | None) -> str | None:
@@ -77,6 +78,26 @@ class RecentHistoryCache:
             clean["media"] = {key: value for key, value in media.items() if key != "data_base64"}
         return clean
 
+    @staticmethod
+    def _merge_payload(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(existing)
+        merged.update(incoming)
+
+        existing_media = existing.get("media") if isinstance(existing.get("media"), dict) else None
+        incoming_media = incoming.get("media") if isinstance(incoming.get("media"), dict) else None
+        if incoming_media is None:
+            if existing_media is not None:
+                merged["media"] = dict(existing_media)
+            return merged
+
+        media = dict(existing_media or {})
+        for key, value in incoming_media.items():
+            if key in LOCAL_MEDIA_KEYS and value in {None, ""} and media.get(key) not in {None, ""}:
+                continue
+            media[key] = value
+        merged["media"] = media
+        return merged
+
     def _read_unlocked(self) -> dict[str, Any]:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
@@ -118,7 +139,17 @@ class RecentHistoryCache:
             conversations = data.setdefault("conversations", {})
             for payload in usable:
                 provider_id = str(payload["provider_message_id"])
-                for key in self._payload_keys(payload):
+                keys = self._payload_keys(payload)
+                merged_payload = payload
+                for key in keys:
+                    rows = conversations.get(key)
+                    if not isinstance(rows, list):
+                        continue
+                    for row in rows:
+                        if isinstance(row, dict) and str(row.get("provider_message_id")) == provider_id:
+                            merged_payload = self._merge_payload(row, merged_payload)
+
+                for key in keys:
                     rows = conversations.get(key)
                     if not isinstance(rows, list):
                         rows = []
@@ -126,7 +157,7 @@ class RecentHistoryCache:
                         row for row in rows
                         if isinstance(row, dict) and str(row.get("provider_message_id")) != provider_id
                     ]
-                    rows.append(payload)
+                    rows.append(merged_payload)
                     rows.sort(key=lambda row: (float(row.get("timestamp") or 0), str(row.get("provider_message_id") or "")))
                     conversations[key] = rows[-self.limit:]
             self._write_unlocked(data)
@@ -138,7 +169,9 @@ class RecentHistoryCache:
         for key in self._endpoint_keys(endpoint):
             for payload in conversations.get(key) or []:
                 if isinstance(payload, dict) and payload.get("provider_message_id"):
-                    by_id[str(payload["provider_message_id"])] = payload
+                    provider_id = str(payload["provider_message_id"])
+                    existing = by_id.get(provider_id)
+                    by_id[provider_id] = self._merge_payload(existing, payload) if existing else payload
         return sorted(
             by_id.values(),
             key=lambda row: (float(row.get("timestamp") or 0), str(row.get("provider_message_id") or "")),
