@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from flask import Flask, g, jsonify
+from flask import Flask, g, jsonify, request
+from werkzeug.exceptions import HTTPException
 
 
 @dataclass(slots=True)
@@ -52,3 +53,21 @@ def install_error_handlers(app: Flask) -> None:
     @app.errorhandler(AppError)
     def handle_app_error(error: AppError):
         return jsonify(error_payload(error)), error.status_code
+
+    @app.errorhandler(Exception)
+    def handle_unexpected_error(error: Exception):
+        if isinstance(error, HTTPException):
+            return error
+        app.logger.exception(
+            "Unhandled request error id=%s path=%s",
+            getattr(g, "request_id", "-"),
+            request.path,
+            exc_info=error,
+        )
+        if request.path.startswith("/api/"):
+            return jsonify({
+                "error": "Interner Serverfehler",
+                "code": "INTERNAL_ERROR",
+                "request_id": getattr(g, "request_id", None),
+            }), 500
+        return "Interner Serverfehler", 500
