@@ -173,7 +173,7 @@ Lokal:
 uv run python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-GitHub Actions prüft Python-Compile, Unit-/Regressionstests, Flask-Smoke-Test, Bootstrap auf Linux/macOS, sämtliche Browser-JavaScript-Dateien im ES-Module-Modus, den Node-Worker, reproduzierbares `npm ci` und die erwartete Baileys-Version.
+GitHub Actions bündelt die Verifikation in einem Linux-Job: Python-Compile, vollständige Unit-/Regressionstests inklusive App-/Flask-Verträge, Bootstrap-Selbstheilung in einer frischen Virtualenv, sämtliche Browser-JavaScript-Dateien im ES-Module-Modus, den Node-Worker, reproduzierbares `npm ci` und die erwartete Baileys-Version. Veraltete Läufe desselben PRs werden automatisch abgebrochen; reine Doku- und Release-Note-Änderungen lösen keinen separaten CI-Lauf aus.
 
 Die Tests sollen öffentliche API-/Service-/Sicherheitsverträge absichern. Reine Source-String-Checks werden nur für kleine Architektur-Invarianten wie das Fehlen einer Transitional Runtime oder eines globalen Monkeypatches verwendet.
 

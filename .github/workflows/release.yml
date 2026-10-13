@@ -1,9 +1,8 @@
-name: Publish release from notes
+name: Release
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - '.github/release-notes/v*.md'
 
@@ -15,8 +14,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  verify:
+    name: Verify release candidate
+    uses: ./.github/workflows/checks.yml
+
+  publish:
+    name: Publish release
+    needs: verify
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,20 +36,27 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Resolve release version
+      - name: Resolve changed release note
         id: release
         shell: bash
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
         run: |
           set -euo pipefail
-          NOTE_FILE="$(find .github/release-notes -maxdepth 1 -type f -name 'v*.md' | sort -V | tail -n 1)"
-          test -n "$NOTE_FILE"
+          mapfile -t NOTES < <(git diff --name-only "$BEFORE" "$AFTER" -- '.github/release-notes/v*.md')
+          if [ "${#NOTES[@]}" -ne 1 ]; then
+            echo "Expected exactly one changed release note, found ${#NOTES[@]}" >&2
+            exit 1
+          fi
+          NOTE_FILE="${NOTES[0]}"
           TAG="$(basename "$NOTE_FILE" .md)"
-          VERSION="${TAG#v}"
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid release note name: $NOTE_FILE" >&2; exit 1; }
           echo "note_file=$NOTE_FILE" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Skip already published release
+      - name: Check existing release
         id: existing
         env:
           GH_TOKEN: ${{ github.token }}
@@ -56,17 +69,14 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install release tooling
-        if: steps.existing.outputs.exists != 'true'
-        run: python -m pip install uv
-
-      - name: Synchronize project versions
+      - name: Synchronize versions
         if: steps.existing.outputs.exists != 'true'
         env:
           VERSION: ${{ steps.release.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
+          python -m pip install --disable-pip-version-check uv
           python - <<'PY'
           import os
           import re
@@ -87,20 +97,6 @@ jobs:
           PY
           npm --prefix ladies/messaging/whatsapp_worker version "$VERSION" --no-git-tag-version --allow-same-version
           uv lock
-
-      - name: Validate release candidate
-        if: steps.existing.outputs.exists != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install -e .
-          python -m compileall ladies ladies_explorer.py
-          python -m unittest discover -s tests -p 'test_*.py' -v
-          cd ladies/messaging/whatsapp_worker
-          npm ci --omit=dev --no-audit --no-fund
-          node --check worker.mjs
-          find ../../static -type f \( -name '*.js' -o -name '*.mjs' \) -print -exec node --experimental-default-type=module --check {} \;
-          node -e "const p=require('./node_modules/@whiskeysockets/baileys/package.json'); if(p.version!=='7.0.0-rc14') throw new Error('Unexpected Baileys '+p.version); console.log(p.version)"
 
       - name: Commit synchronized version
         if: steps.existing.outputs.exists != 'true'
