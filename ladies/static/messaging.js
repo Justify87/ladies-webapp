@@ -1,5 +1,7 @@
 'use strict';
 
+import { state, toast, openSheet, closeSheet, setScreen, openPerson, openContactSheet } from './app.js';
+
 (() => {
   const M = {
     status: {state:'CONNECTING'}, threads:[], filter:'ALL', current:null, endpointId:null,
@@ -48,7 +50,7 @@
 
   function navigate(screen){if(screen==='messages'){setScreen('messages');renderThreads();setMessagingHeader('Nachrichten')}else if(screen==='more'){setScreen('more');setMessagingHeader('Mehr')}else setScreen(screen);injectSettingsSoon()}
   function setMessagingHeader(title){const subtitle=q('#brandSubtitle');if(subtitle)subtitle.textContent=title==='Nachrichten'?'Deine personenbezogenen Chats':'Verlauf und Einstellungen';q('#headerAction')?.classList.add('hidden')}
-  function statusText(state){return ({UNAVAILABLE:'Nicht verfügbar',DEPENDENCY_MISSING:'Node.js 20+ fehlt',NOT_CONFIGURED:'Nicht verbunden',QR_REQUIRED:'QR-Code bereit',PAIRING:'Kopplung läuft …',CONNECTING:'Verbindet …',CONNECTED:'Verbunden',DISCONNECTED:'Verbindung unterbrochen',RECONNECTING:'Verbindet erneut …',LOGGED_OUT:'Erneute Kopplung nötig',ERROR:'Verbindungsfehler'})[state]||state||'Unbekannt'}
+  function statusText(status){return ({UNAVAILABLE:'Nicht verfügbar',DEPENDENCY_MISSING:'Node.js 20+ fehlt',NOT_CONFIGURED:'Nicht verbunden',QR_REQUIRED:'QR-Code bereit',PAIRING:'Kopplung läuft …',CONNECTING:'Verbindet …',CONNECTED:'Verbunden',DISCONNECTED:'Verbindung unterbrochen',RECONNECTING:'Verbindet erneut …',LOGGED_OUT:'Erneute Kopplung nötig',ERROR:'Verbindungsfehler'})[status]||status||'Unbekannt'}
   async function loadStatus(){try{M.status=await req('/api/messaging/status')}catch(e){M.status={state:'ERROR',detail:e.message}}renderStatusBits();injectSettingsSoon()}
   function renderStatusBits(){const mini=q('#waConnectionMini');if(mini)mini.innerHTML=`<span class="wa-dot ${M.status.state==='CONNECTED'?'ok':''}"></span>${escape(statusText(M.status.state))}`;const banner=q('#chatConnectionBanner');if(banner&&M.current){const ok=M.status.state==='CONNECTED';banner.classList.toggle('hidden',ok);banner.innerHTML=ok?'':`${escape(statusText(M.status.state))}<button type="button" id="chatConnectShortcut">Einstellungen</button>`;q('#chatConnectShortcut')?.addEventListener('click',()=>{closeChat();navigate('settings')});q('#chatInput').disabled=!ok;q('#chatSend').disabled=!ok;q('#chatMic').disabled=!ok;q('#chatPlus').disabled=!ok}}
 
@@ -89,7 +91,7 @@
   async function sendMessage(e){e.preventDefault();if(!M.current)return;const input=q('#chatInput'),text=input.value.trim();if(!text)return;const reply=M.replyTo?.message_id||null;await setTyping('paused');input.value='';clearReply(false);try{await req(`/api/messaging/threads/${M.current.thread_id}/messages`,{method:'POST',body:{text,endpoint_id:M.endpointId,reply_to_message_id:reply}});await refreshCurrent(true);loadThreads()}catch(err){toast(err.message);await refreshCurrent(true).catch(()=>{})}finally{focusInput();input.dispatchEvent(new Event('input',{bubbles:true}))}}
   async function retryMessage(id){try{await req(`/api/messaging/messages/${id}/retry`,{method:'POST'});await refreshCurrent(true)}catch(e){toast(e.message);await refreshCurrent(false).catch(()=>{})}finally{focusInput()}}
   function onTyping(){if(!M.current||M.status.state!=='CONNECTED')return;const has=Boolean(q('#chatInput').value);if(has&&!M.typingActive)setTyping('composing');if(!has&&M.typingActive)setTyping('paused');clearTimeout(M.typingTimer);if(has)M.typingTimer=setTimeout(()=>setTyping('paused'),2500)}
-  async function setTyping(state){clearTimeout(M.typingTimer);if(!M.current)return;if(state==='composing'&&M.typingActive)return;if(state==='paused'&&!M.typingActive)return;M.typingActive=state==='composing'||state==='recording';try{await req(`/api/messaging/threads/${M.current.thread_id}/presence`,{method:'POST',body:{state,endpoint_id:M.endpointId}})}catch{}}
+  async function setTyping(status){clearTimeout(M.typingTimer);if(!M.current)return;if(status==='composing'&&M.typingActive)return;if(status==='paused'&&!M.typingActive)return;M.typingActive=status==='composing'||status==='recording';try{await req(`/api/messaging/threads/${M.current.thread_id}/presence`,{method:'POST',body:{state:status,endpoint_id:M.endpointId}})}catch{}}
 
   function setReply(message){if(!message||message.deleted_at)return;M.replyTo=message;renderReplyPreview();focusInput()}
   function clearReply(refocus=true){M.replyTo=null;renderReplyPreview();if(refocus)focusInput()}
