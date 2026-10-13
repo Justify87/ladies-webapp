@@ -6,7 +6,6 @@ import json
 import os
 import re
 import shutil
-import signal
 import sqlite3
 import subprocess
 import sys
@@ -28,6 +27,7 @@ STATE_DIR = ".state"
 PID_FILE = "app.pid"
 MAX_RELEASES = 2
 SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.I)
 
 
 class PortableError(RuntimeError):
@@ -51,7 +51,6 @@ def infer_install_root(script: Path | None = None) -> Path:
     for candidate in (path.parent, *path.parents):
         if (candidate / RELEASES_DIR).is_dir() and (candidate / CURRENT_FILE).exists():
             return candidate
-    # Installed manager: <root>/releases/<version>/tools/portable_manager.py
     try:
         return path.parents[2]
     except IndexError as exc:
@@ -109,11 +108,17 @@ def validate_release_dir(path: Path, expected_tag: str | None = None) -> dict[st
     data = _manifest(path)
     if int(data.get("format_version") or 0) != 1:
         raise PortableError("Nicht unterstütztes Release-Manifestformat")
-    tag = _tag(str(data.get("tag") or data.get("app_version") or ""))
+    app_version = str(data.get("app_version") or "")
+    manifest_tag = str(data.get("tag") or "")
+    tag = _tag(manifest_tag)
+    if _tag(app_version) != tag:
+        raise PortableError("App-Version und Tag im Release-Manifest widersprechen sich")
     if expected_tag and tag != _tag(expected_tag):
         raise PortableError(f"Manifest-Version {tag} passt nicht zu {expected_tag}")
     if str(data.get("entrypoint") or "") != "ladies_explorer.py":
         raise PortableError("Release-Entrypoint ist ungültig")
+    if not str(data.get("commit") or "").strip():
+        raise PortableError("Release-Commit fehlt im Manifest")
     try:
         schema = int(data.get("db_schema_version"))
     except (TypeError, ValueError) as exc:
@@ -315,6 +320,25 @@ def migrate_legacy_data(legacy_root: Path, install_root: Path) -> list[str]:
     return copied
 
 
+def detect_legacy_root(source: Path, install_root: Path) -> Path | None:
+    candidates: list[Path] = []
+    try:
+        siblings = list(source.resolve().parent.iterdir())
+    except OSError:
+        return None
+    source_resolved = source.resolve()
+    install_resolved = install_root.resolve()
+    for candidate in siblings:
+        if not candidate.is_dir():
+            continue
+        resolved = candidate.resolve()
+        if resolved in {source_resolved, install_resolved}:
+            continue
+        if (candidate / "ladies.sqlite3").is_file() or (candidate / "ladies_data").is_dir():
+            candidates.append(candidate)
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def _copy_launchers(source_release: Path, root: Path) -> None:
     packaging = source_release / "packaging"
     for name in ("start.command", "update.command", "start.cmd", "update.cmd"):
@@ -342,16 +366,20 @@ def install(source: Path, root: Path, legacy_root: Path | None = None) -> str:
     (root / DATA_DIR).mkdir(parents=True, exist_ok=True)
     staging = root / RELEASES_DIR / f".staging-{tag}"
     shutil.rmtree(staging, ignore_errors=True)
+    target_created = False
     try:
         _copy_tree(source, staging)
         validate_release_dir(staging, tag)
         os.replace(staging, target)
+        target_created = True
         _copy_launchers(target, root)
         if legacy_root:
             migrate_legacy_data(legacy_root, root)
         set_current(root, tag)
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
+        if target_created and not (root / CURRENT_FILE).exists():
+            shutil.rmtree(target, ignore_errors=True)
         raise
     return tag
 
@@ -433,7 +461,10 @@ def update(root: Path) -> str:
         _download(url, archive)
         verify_asset_digest(archive, asset)
         safe_extract(archive, staging)
-        validate_release_dir(staging, latest)
+        manifest = validate_release_dir(staging, latest)
+        target_commit = str(release.get("target_commitish") or "")
+        if SHA_RE.fullmatch(target_commit) and str(manifest.get("commit") or "").lower() != target_commit.lower():
+            raise PortableError("Release-Manifest gehört nicht zum veröffentlichten Release-Commit")
         _activate_staged(root, staging, latest)
     finally:
         try:
@@ -449,12 +480,15 @@ def rollback(root: Path) -> str:
     root = root.resolve()
     _ensure_not_running(root)
     current = read_current(root)
+    current_key = _semver(current)
     candidates: list[tuple[tuple[int, int, int], str]] = []
     for path in (root / RELEASES_DIR).iterdir():
         if not path.is_dir() or path.name == current or path.name.startswith("."):
             continue
         try:
-            candidates.append((_semver(path.name), _tag(path.name)))
+            key = _semver(path.name)
+            if key < current_key:
+                candidates.append((key, _tag(path.name)))
         except PortableError:
             continue
     if not candidates:
@@ -514,7 +548,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "install":
             source = args.source.resolve()
             root = (args.root or (source.parent / "LadiesExplorer")).resolve()
-            tag = install(source, root, args.legacy_root)
+            legacy_root = args.legacy_root
+            if legacy_root is None:
+                legacy_root = detect_legacy_root(source, root)
+                if legacy_root is not None:
+                    print(f"Bestehende Installation erkannt: {legacy_root}")
+            tag = install(source, root, legacy_root)
             print(f"✓ Ladies Explorer {tag} installiert: {root}")
             return 0
         root = (args.root or infer_install_root()).resolve()
