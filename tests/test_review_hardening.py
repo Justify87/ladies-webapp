@@ -43,6 +43,23 @@ class NoNodeGateway:
         pass
 
 
+class FakeUpstream:
+    def __init__(self, chunks, headers):
+        self._chunks = list(chunks)
+        self.headers = dict(headers)
+        self.closed = False
+
+    def raise_for_status(self):
+        return None
+
+    def iter_content(self, chunk_size=128 * 1024):
+        del chunk_size
+        yield from self._chunks
+
+    def close(self):
+        self.closed = True
+
+
 class ReviewHardeningTests(unittest.TestCase):
     def make_app(self, td):
         from ladies_v9.app import create_app
@@ -162,9 +179,93 @@ class ReviewHardeningTests(unittest.TestCase):
         self.assertNotIn("/home/private-user", body)
         self.assertEqual(after, before)
 
+    def test_media_proxy_checks_complete_body_before_success(self):
+        cases = [
+            (
+                "declared-too-large",
+                {"Content-Type": "image/jpeg", "Content-Length": "9"},
+                [b"ignored"],
+                413,
+                None,
+            ),
+            (
+                "unknown-length-too-large",
+                {"Content-Type": "image/jpeg"},
+                [b"1234", b"56789"],
+                413,
+                None,
+            ),
+            (
+                "unknown-length-valid",
+                {"Content-Type": "image/jpeg"},
+                [b"1234", b"56"],
+                200,
+                b"123456",
+            ),
+            (
+                "wrong-small-length",
+                {"Content-Type": "video/mp4", "Content-Length": "4"},
+                [b"1234", b"56789"],
+                413,
+                None,
+            ),
+            (
+                "unsupported-mime",
+                {"Content-Type": "text/plain"},
+                [b"plain"],
+                400,
+                None,
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as td, patch(
+            "ladies_v9.messaging.service.WhatsAppGateway", NoNodeGateway
+        ):
+            app = self.make_app(td)
+            client = app.test_client()
+            http = app.extensions["ladies_http"]
+            for name, headers, chunks, expected_status, expected_body in cases:
+                upstream = FakeUpstream(chunks, headers)
+                with self.subTest(name=name), patch.object(
+                    http, "get", return_value=upstream
+                ), patch("ladies_v9.web.MEDIA_PROXY_LIMIT", 8):
+                    response = client.get(
+                        "/api/media-proxy",
+                        query_string={"url": "https://bilder1.ladies-cdn.de/test.jpg"},
+                        environ_base={"REMOTE_ADDR": "127.0.0.1"},
+                    )
+                    try:
+                        body = response.get_data()
+                        self.assertEqual(response.status_code, expected_status)
+                        self.assertTrue(upstream.closed)
+                        if expected_status == 200:
+                            self.assertEqual(body, expected_body)
+                            self.assertEqual(response.headers.get("Content-Length"), str(len(expected_body)))
+                            self.assertEqual(response.headers.get("Cache-Control"), "private, max-age=3600")
+                        else:
+                            self.assertNotIn("Cache-Control", response.headers)
+                            self.assertNotIn(b"123456789", body)
+                    finally:
+                        response.close()
+
     def test_release_workflow_allows_same_worker_version(self):
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         self.assertIn("--allow-same-version", workflow)
+
+    def test_release_workflow_verifies_exact_published_commit_and_separates_ci(self):
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        checks = (ROOT / ".github" / "workflows" / "checks.yml").read_text(encoding="utf-8")
+        self.assertEqual(release.count("- name: Resolve changed release note"), 1)
+        self.assertLess(release.index("- name: Commit synchronized version"), release.index("\n  verify:"))
+        self.assertIn('release_sha=$(git rev-parse HEAD)', release)
+        self.assertIn("checkout_ref: ${{ needs.prepare.outputs.release_sha }}", release)
+        self.assertIn('RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}', release)
+        self.assertIn('--target "$RELEASE_SHA"', release)
+        self.assertIn("if: needs.prepare.outputs.exists != 'true'", release)
+        self.assertIn(
+            "group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}",
+            checks,
+        )
+        self.assertIn("ref: ${{ inputs.checkout_ref || github.sha }}", checks)
 
     def test_source_version_fallback_comes_from_pyproject(self):
         import tomllib
