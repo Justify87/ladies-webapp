@@ -5,7 +5,7 @@ export const initialState = Object.freeze({
   config,
   navigation:{stack:[{key:'route-1',name:'search',params:{}}],seq:1},
   search:{
-    filters:{city:defaults.city || 'Leipzig',radius:Number(defaults.radius_km || 20),category:'',ageMin:18,ageMax:45,heightMin:140,heightMax:200,selected:{geschlecht:['weiblich']},local:{photosOnly:true,videoOnly:false,likesOnly:false}},
+    filters:{city:defaults.city || 'Leipzig',radius:Number(defaults.radius_km || 20),category:'',ageMin:18,ageMax:45,heightMin:140,heightMax:200,selected:{geschlecht:['weiblich']},local:{photosOnly:true,videoOnly:false,likesOnly:false,imageMode:'ALL'}},
     preview:{status:'idle',count:null,error:null}, recent:[], results:[], meta:null, loading:false, error:null
   },
   discover:{mode:'swipe',index:0,mediaIndex:{},history:[]},
