@@ -44,13 +44,10 @@ def _extension(file_name: str, mime_type: str) -> str:
     return (guessed or ".bin")[:12]
 
 
-def install_messaging(app, *, data_dir, database: Database | None = None, db_path=None) -> MessagingService:
+def install_messaging(app, *, data_dir, database: Database | None = None) -> MessagingService:
     database = database or app.extensions.get("ladies_database")
-    if database is None:
-        if db_path is None:
-            raise RuntimeError("Messaging benötigt database oder db_path")
-        database = Database(db_path)
-        database.create_schema()
+    if not isinstance(database, Database):
+        raise RuntimeError("Messaging benötigt die gemeinsame Application-Database")
     service = MessagingService(database, data_dir)
     app.extensions["ladies_messaging"] = service
 

@@ -4,12 +4,20 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+
+from ladies_v9.database import Database
 from unittest.mock import patch
 
 from sqlalchemy import select
 
 from ladies_v9.models import Person, PersonIdentifier, PersonUserState
 from ladies_v9.messaging.models import ChatMessage, ChatMessageMeta, ChatReaction
+
+
+def _database(path):
+    database = Database(path)
+    database.create_schema()
+    return database
 
 
 class FeatureWorker:
@@ -70,7 +78,7 @@ class CompleteMessagingTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         patcher.start()
         from ladies_v9.messaging import MessagingService
-        self.service = MessagingService(self.root / "app.sqlite3", self.root / "data")
+        self.service = MessagingService(_database(self.root / "app.sqlite3"), self.root / "data")
         self.person_id = self._person("Nina", "+4917612345678")
         self.thread_id = self.service.ensure_person_thread(self.person_id)["thread_id"]
         self.endpoint_id = self.service.ensure_person_thread(self.person_id)["endpoint"]["endpoint_id"]

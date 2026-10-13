@@ -123,12 +123,11 @@ class MessagingService:
     recent-history cache instead of layering release-specific subclasses.
     """
 
-    def __init__(self, database: Database | str | Path, data_dir: str | Path):
+    def __init__(self, database: Database, data_dir: str | Path):
         install_identity_merge_listener()
-        owns_database = not isinstance(database, Database)
-        self.database = database if isinstance(database, Database) else Database(database)
-        if owns_database:
-            self.database.create_schema()
+        if not isinstance(database, Database):
+            raise TypeError("Messaging benötigt die gemeinsame Application-Database")
+        self.database = database
 
         self.events = EventHub()
         self.data_dir = Path(data_dir)

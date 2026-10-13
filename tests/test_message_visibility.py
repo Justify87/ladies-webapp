@@ -3,10 +3,18 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+
+from ladies_v9.database import Database
 from unittest.mock import patch
 
 from ladies_v9.models import Person, PersonIdentifier, PersonUserState
 from ladies_v9.messaging.models import ChatMessage
+
+
+def _database(path):
+    database = Database(path)
+    database.create_schema()
+    return database
 
 
 class QuietWorker:
@@ -45,7 +53,7 @@ class MessageVisibilityTests(unittest.TestCase):
         self.patcher.start()
         self.addCleanup(self.patcher.stop)
         from ladies_v9.messaging import MessagingService
-        self.service = MessagingService(self.root / "test.sqlite3", self.root / "data")
+        self.service = MessagingService(_database(self.root / "test.sqlite3"), self.root / "data")
 
     def tearDown(self):
         self.tmp.cleanup()

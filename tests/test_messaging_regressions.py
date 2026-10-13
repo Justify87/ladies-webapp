@@ -4,12 +4,20 @@ import base64
 import tempfile
 import unittest
 from pathlib import Path
+
+from ladies_v9.database import Database
 from unittest.mock import patch
 
 from sqlalchemy import func, select
 
 from ladies_v9.models import Person, PersonIdentifier, PersonUserState
 from ladies_v9.messaging.models import ChatMessage, ChatThread, ContactEndpoint
+
+
+def _database(path):
+    database = Database(path)
+    database.create_schema()
+    return database
 
 
 class FakeWorker:
@@ -76,7 +84,7 @@ class MessagingRegressionTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         patcher.start()
         from ladies_v9.messaging.service import MessagingService
-        self.service = MessagingService(self.root / "app.sqlite3", self.root / "data")
+        self.service = MessagingService(_database(self.root / "app.sqlite3"), self.root / "data")
 
     def tearDown(self):
         self.tmp.cleanup()
