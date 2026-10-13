@@ -5,9 +5,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from ladies_v9.lan_access import LanAccessManager
+from ladies_v9.models import Person, PersonIdentifier, PersonUserState
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -110,6 +112,54 @@ class ReviewHardeningTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("Einmal ansehen", response.get_json()["error"])
+        self.assertEqual(after, before)
+
+    def test_voice_conversion_failure_is_sanitized_and_upload_is_removed(self):
+        with tempfile.TemporaryDirectory() as td, patch(
+            "ladies_v9.messaging.service.WhatsAppGateway", NoNodeGateway
+        ):
+            app = self.make_app(td)
+            service = app.extensions["ladies_messaging"]
+            with service.database.session() as db:
+                person = Person(display_name="Voice")
+                db.add(person)
+                db.flush()
+                db.add(PersonUserState(person_id=person.person_id))
+                db.add(PersonIdentifier(
+                    person_id=person.person_id,
+                    kind="PHONE",
+                    normalized_value="+4917612345678",
+                    raw_value="+49 176 12345678",
+                ))
+                person_id = person.person_id
+            ensured = service.ensure_person_thread(person_id)
+            before = set(service.media_dir.iterdir())
+            private_detail = "/home/private-user/recording.webm: invalid input"
+
+            with patch(
+                "ladies_v9.messaging.media_store.imageio_ffmpeg.get_ffmpeg_exe",
+                return_value="ffmpeg",
+            ), patch(
+                "ladies_v9.messaging.media_store.subprocess.run",
+                return_value=SimpleNamespace(returncode=1, stderr=private_detail),
+            ):
+                response = app.test_client().post(
+                    f"/api/messaging/threads/{ensured['thread_id']}/media",
+                    data={
+                        "media_type": "VOICE",
+                        "endpoint_id": str(ensured["endpoint"]["endpoint_id"]),
+                        "file": (io.BytesIO(b"webm-placeholder"), "recording.webm"),
+                    },
+                    content_type="multipart/form-data",
+                    environ_base={"REMOTE_ADDR": "127.0.0.1"},
+                )
+            after = set(service.media_dir.iterdir())
+
+        self.assertEqual(response.status_code, 400)
+        body = response.get_data(as_text=True)
+        self.assertIn("Sprachnachricht konnte nicht verarbeitet werden", body)
+        self.assertNotIn(private_detail, body)
+        self.assertNotIn("/home/private-user", body)
         self.assertEqual(after, before)
 
     def test_release_workflow_allows_same_worker_version(self):
