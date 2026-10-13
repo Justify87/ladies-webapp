@@ -21,6 +21,7 @@ class UiConsolidationTests(unittest.TestCase):
             "/static/messaging.js",
             "/static/js/chat_profile.js",
             "/static/pricing.js",
+            "/static/css/profile_messaging_ui.css",
             "/static/css/messaging_complete.css",
             "/static/css/search_ui.css",
             "/static/css/filter_ui.css",
@@ -52,6 +53,35 @@ class UiConsolidationTests(unittest.TestCase):
             with self.subTest(relative=relative):
                 self.assertFalse((STATIC / relative).exists())
 
+    def test_browser_entrypoints_are_real_es_modules(self):
+        index = TEMPLATE.read_text(encoding="utf-8")
+        for asset in (
+            "/static/app.js",
+            "/static/profile_messaging_ui.js",
+            "/static/messaging.js",
+            "/static/js/chat_profile.js",
+            "/static/pricing.js",
+        ):
+            with self.subTest(asset=asset):
+                self.assertIn(f'<script type="module" src="{asset}"></script>', index)
+
+        app = (STATIC / "app.js").read_text(encoding="utf-8")
+        self.assertIn("export { state, api, toast", app)
+        self.assertNotIn("window.LadiesApp", app)
+
+    def test_feature_modules_import_explicit_app_contracts(self):
+        profile_messaging = (STATIC / "profile_messaging_ui.js").read_text(encoding="utf-8")
+        messaging = (STATIC / "messaging.js").read_text(encoding="utf-8")
+        chat_profile = (STATIC / "js" / "chat_profile.js").read_text(encoding="utf-8")
+        pricing = (STATIC / "pricing.js").read_text(encoding="utf-8")
+
+        self.assertIn("from './app.js'", profile_messaging)
+        self.assertIn("from './app.js'", messaging)
+        self.assertIn("from '../app.js'", chat_profile)
+        self.assertIn("from './app.js'", pricing)
+        for source in (profile_messaging, messaging, chat_profile, pricing):
+            self.assertNotIn("window.LadiesApp", source)
+
     def test_backend_config_is_filter_and_version_source_of_truth(self):
         config = frontend_config(default_city="leipzig", default_radius=20)
         self.assertEqual(config["defaults"], {"city": "leipzig", "radius_km": 20})
@@ -79,7 +109,12 @@ class UiConsolidationTests(unittest.TestCase):
     def test_messaging_styles_are_static_assets(self):
         index = TEMPLATE.read_text(encoding="utf-8")
         messaging = (STATIC / "messaging.js").read_text(encoding="utf-8")
+        self.assertIn('/static/css/profile_messaging_ui.css', index)
         self.assertIn('/static/css/messaging_complete.css', index)
+        self.assertLess(
+            index.index('/static/css/profile_messaging_ui.css'),
+            index.index('/static/css/messaging_complete.css'),
+        )
         self.assertNotIn("messagingCompleteStyle", messaging)
         self.assertNotIn("document.createElement('style')", messaging)
         self.assertNotIn('document.createElement("style")', messaging)
