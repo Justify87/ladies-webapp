@@ -20,6 +20,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from collections import deque
+from contextlib import closing
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -27,10 +28,11 @@ from typing import Any, Callable
 
 try:
     from tools import portable_manager as pm
-except ImportError:  # copied manager under <install>/.state/
-    tools_dir = Path(__file__).resolve().parents[1] / "releases"
-    sys.path.insert(0, str(tools_dir))
-    raise
+except ImportError:
+    install_root = Path(__file__).resolve().parent.parent
+    current = (install_root / "current").read_text(encoding="utf-8").strip()
+    sys.path.insert(0, str(install_root / "releases" / current))
+    from tools import portable_manager as pm
 
 MANAGER_HOST = "127.0.0.1"
 APP_HOST = "0.0.0.0"
@@ -40,10 +42,9 @@ STOP_TIMEOUT = 10.0
 MAX_BACKUPS = 3
 MANAGER_STATE_FILE = "manager.json"
 MANAGER_COPY = "launcher_manager.py"
+MANAGER_UI = "launcher_manager.html"
 MANAGER_LOG = "manager.log"
 APP_CONSOLE_LOG = "app-console.log"
-UI_FILE = "launcher_manager.html"
-
 LOGGER = logging.getLogger("ladies_launcher_manager")
 
 
@@ -61,52 +62,55 @@ def _manager_copy_path(root: Path) -> Path:
     return _state_dir(root) / MANAGER_COPY
 
 
+def _manager_ui_path(root: Path) -> Path:
+    return _state_dir(root) / MANAGER_UI
+
+
 def _app_url() -> str:
     return f"http://127.0.0.1:{APP_PORT}/"
 
 
-def _utc_now() -> str:
+def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _venv_python(release: Path) -> Path:
-    if os.name == "nt":
-        return release / ".venv" / "Scripts" / "python.exe"
-    return release / ".venv" / "bin" / "python"
+    return release / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
 def _copy_manager_to_state(root: Path, release: Path) -> Path:
-    source = release / "tools" / "launcher_manager.py"
-    target = _manager_copy_path(root)
-    if not source.is_file():
-        if target.is_file():
-            return target
-        raise pm.PortableError(f"Launcher Manager fehlt im Release: {source}")
-    temporary = target.with_suffix(".tmp")
-    shutil.copy2(source, temporary)
-    os.replace(temporary, target)
-    return target
+    state = _state_dir(root)
+    pairs = (
+        (release / "tools" / MANAGER_COPY, state / MANAGER_COPY),
+        (release / "tools" / MANAGER_UI, state / MANAGER_UI),
+    )
+    for source, target in pairs:
+        if not source.is_file():
+            if target.is_file():
+                continue
+            raise pm.PortableError(f"Launcher-Manager-Datei fehlt: {source}")
+        temporary = target.with_suffix(target.suffix + ".tmp")
+        shutil.copy2(source, temporary)
+        os.replace(temporary, target)
+    return state / MANAGER_COPY
 
 
 def _read_manager_state(root: Path) -> dict[str, Any] | None:
     try:
         data = json.loads(_manager_state_path(root).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
-    return data if isinstance(data, dict) else None
 
 
 def _manager_url(state: dict[str, Any]) -> str:
-    port = int(state["port"])
     token = urllib.parse.quote(str(state["token"]), safe="")
-    return f"http://{MANAGER_HOST}:{port}/?token={token}"
+    return f"http://{MANAGER_HOST}:{int(state['port'])}/?token={token}"
 
 
 def _manager_alive(state: dict[str, Any]) -> bool:
     try:
-        pid = int(state["pid"])
-        port = int(state["port"])
-        token = str(state["token"])
+        pid, port, token = int(state["pid"]), int(state["port"]), str(state["token"])
     except (KeyError, TypeError, ValueError):
         return False
     if not pm._process_running(pid):
@@ -122,7 +126,7 @@ def _manager_alive(state: dict[str, Any]) -> bool:
         return False
 
 
-def _configure_file_logging(root: Path) -> None:
+def _configure_logging(root: Path) -> None:
     if LOGGER.handlers:
         return
     LOGGER.setLevel(logging.INFO)
@@ -132,15 +136,10 @@ def _configure_file_logging(root: Path) -> None:
 
 
 def _spawn_detached(command: list[str], *, cwd: Path, log_path: Path) -> None:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
     stream = log_path.open("a", encoding="utf-8")
-    kwargs: dict[str, Any] = {
-        "cwd": str(cwd),
-        "stdin": subprocess.DEVNULL,
-        "stdout": stream,
-        "stderr": subprocess.STDOUT,
-        "close_fds": True,
-    }
+    kwargs: dict[str, Any] = dict(
+        cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT, close_fds=True
+    )
     if os.name == "nt":
         kwargs["creationflags"] = (
             getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -167,15 +166,15 @@ def launch_manager(root: Path, *, open_browser: bool = True) -> int:
     release = root / pm.RELEASES_DIR / current
     pm.validate_release_dir(release, current)
     manager = _copy_manager_to_state(root, release)
-    state_path = _manager_state_path(root)
     try:
-        state_path.unlink()
+        _manager_state_path(root).unlink()
     except FileNotFoundError:
         pass
-
-    command = [sys.executable, str(manager), "serve", "--root", str(root)]
-    _spawn_detached(command, cwd=root, log_path=_state_dir(root) / MANAGER_LOG)
-
+    _spawn_detached(
+        [sys.executable, str(manager), "serve", "--root", str(root)],
+        cwd=root,
+        log_path=_state_dir(root) / MANAGER_LOG,
+    )
     deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline:
         state = _read_manager_state(root)
@@ -193,7 +192,6 @@ def ensure_release_environment(root: Path, tag: str, emit: Callable[[str], None]
     python = _venv_python(release)
     if python.is_file():
         return python
-
     uv = shutil.which("uv")
     if not uv:
         raise pm.PortableError("uv ist nicht verfügbar; die Release-Umgebung kann nicht eingerichtet werden")
@@ -204,21 +202,11 @@ def ensure_release_environment(root: Path, tag: str, emit: Callable[[str], None]
     env["UV_PROJECT_ENVIRONMENT"] = str(release / ".venv")
     Path(env["UV_PYTHON_INSTALL_DIR"]).mkdir(parents=True, exist_ok=True)
     subprocess.run([uv, "python", "install", "3.12"], env=env, check=True, stdout=subprocess.DEVNULL)
-    managed_python = subprocess.check_output(
-        [uv, "python", "find", "3.12"], env=env, text=True
-    ).strip()
+    managed_python = subprocess.check_output([uv, "python", "find", "3.12"], env=env, text=True).strip()
     subprocess.run(
         [
-            uv,
-            "run",
-            "--locked",
-            "--project",
-            str(release),
-            "--python",
-            managed_python,
-            "python",
-            "-c",
-            "import sys; print(sys.executable)",
+            uv, "run", "--locked", "--project", str(release), "--python", managed_python,
+            "python", "-c", "import sys; print(sys.executable)",
         ],
         env=env,
         cwd=release,
@@ -237,30 +225,19 @@ def _app_command(root: Path, python: Path) -> list[str]:
     data_dir.mkdir(parents=True, exist_ok=True)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     return [
-        str(python),
-        str(release / "ladies_explorer.py"),
-        "--host",
-        APP_HOST,
-        "--port",
-        str(APP_PORT),
-        "--db",
-        str(db_path),
-        "--data-dir",
-        str(data_dir),
-        "--log",
-        str(log_path),
+        str(python), str(release / "ladies_explorer.py"),
+        "--host", APP_HOST, "--port", str(APP_PORT),
+        "--db", str(db_path), "--data-dir", str(data_dir), "--log", str(log_path),
     ]
 
 
 def _port_available(port: int) -> bool:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.bind((MANAGER_HOST, port))
-        return True
-    except OSError:
-        return False
-    finally:
-        sock.close()
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        try:
+            sock.bind((MANAGER_HOST, port))
+            return True
+        except OSError:
+            return False
 
 
 def _watch_app(process: subprocess.Popen[Any], pid_path: Path) -> None:
@@ -284,23 +261,21 @@ def start_app(root: Path, emit: Callable[[str], None] | None = None, *, open_bro
             raise pm.PortableError(f"Port {APP_PORT} ist bereits belegt")
         current = pm.read_current(root)
         python = ensure_release_environment(root, current, emit)
-        command = _app_command(root, python)
         console = (_state_dir(root) / APP_CONSOLE_LOG).open("a", encoding="utf-8")
-        kwargs: dict[str, Any] = {
-            "cwd": str(root / pm.RELEASES_DIR / current),
-            "stdin": subprocess.DEVNULL,
-            "stdout": console,
-            "stderr": subprocess.STDOUT,
-            "close_fds": True,
-        }
+        kwargs: dict[str, Any] = dict(
+            cwd=str(root / pm.RELEASES_DIR / current), stdin=subprocess.DEVNULL,
+            stdout=console, stderr=subprocess.STDOUT, close_fds=True,
+        )
         if os.name == "nt":
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
                 subprocess, "CREATE_NO_WINDOW", 0
             )
         else:
             kwargs["start_new_session"] = True
-        process = subprocess.Popen(command, **kwargs)
-        console.close()
+        try:
+            process = subprocess.Popen(_app_command(root, python), **kwargs)
+        finally:
+            console.close()
         pm._atomic_write(pm._pid_path(root), f"{process.pid}\n")
         threading.Thread(target=_watch_app, args=(process, pm._pid_path(root)), daemon=True).start()
 
@@ -327,10 +302,7 @@ def start_app(root: Path, emit: Callable[[str], None] | None = None, *, open_bro
 def _terminate_pid_tree(pid: int) -> None:
     if os.name == "nt":
         subprocess.run(
-            ["taskkill", "/PID", str(pid), "/T"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
+            ["taskkill", "/PID", str(pid), "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False
         )
         return
     try:
@@ -358,9 +330,7 @@ def stop_app(root: Path, emit: Callable[[str], None] | None = None) -> bool:
             if os.name == "nt":
                 subprocess.run(
                     ["taskkill", "/PID", str(pid), "/T", "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
                 )
             else:
                 try:
@@ -383,10 +353,12 @@ def _backup_database(root: Path) -> Path | None:
         return None
     backup_dir = _state_dir(root) / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     backup = backup_dir / f"pre-update-{stamp}.sqlite3"
     source_uri = f"file:{db_path.as_posix()}?mode=ro"
-    with sqlite3.connect(source_uri, uri=True, timeout=30) as source, sqlite3.connect(str(backup)) as target:
+    with closing(sqlite3.connect(source_uri, uri=True, timeout=30)) as source, closing(
+        sqlite3.connect(str(backup))
+    ) as target:
         source.backup(target)
     backups = sorted(backup_dir.glob("pre-update-*.sqlite3"), key=lambda p: p.stat().st_mtime, reverse=True)
     for old in backups[MAX_BACKUPS:]:
@@ -404,7 +376,9 @@ def _restore_database(root: Path, backup: Path) -> None:
             sidecar.unlink()
         except FileNotFoundError:
             pass
-    with sqlite3.connect(str(backup), timeout=30) as source, sqlite3.connect(str(db_path)) as target:
+    with closing(sqlite3.connect(str(backup), timeout=30)) as source, closing(
+        sqlite3.connect(str(db_path))
+    ) as target:
         source.backup(target)
 
 
@@ -425,7 +399,7 @@ def migrate_database(root: Path, tag: str, emit: Callable[[str], None] | None = 
     return int(result.splitlines()[-1])
 
 
-def _tail(path: Path, limit: int = 80) -> list[str]:
+def _tail(path: Path, limit: int) -> list[str]:
     try:
         with path.open("r", encoding="utf-8", errors="replace") as handle:
             return list(deque((line.rstrip("\n") for line in handle), maxlen=limit))
@@ -447,13 +421,8 @@ class Controller:
         self.root = root.resolve()
         self._lock = threading.Lock()
         self._operation: dict[str, Any] = {
-            "active": False,
-            "name": None,
-            "message": "Bereit",
-            "error": None,
-            "started_at": None,
-            "finished_at": None,
-            "messages": [],
+            "active": False, "name": None, "message": "Bereit", "error": None,
+            "started_at": None, "finished_at": None, "messages": [],
         }
         self._latest: dict[str, Any] | None = None
         self.shutdown_callback: Callable[[], None] | None = None
@@ -461,23 +430,16 @@ class Controller:
     def emit(self, message: str) -> None:
         LOGGER.info(message)
         with self._lock:
-            messages = list(self._operation.get("messages") or [])
-            messages.append(message)
-            self._operation["messages"] = messages[-20:]
-            self._operation["message"] = message
+            messages = [*(self._operation.get("messages") or []), message][-20:]
+            self._operation.update(messages=messages, message=message)
 
     def begin(self, name: str, action: Callable[[], None]) -> bool:
         with self._lock:
             if self._operation["active"]:
                 return False
             self._operation = {
-                "active": True,
-                "name": name,
-                "message": "Wird vorbereitet …",
-                "error": None,
-                "started_at": _utc_now(),
-                "finished_at": None,
-                "messages": [],
+                "active": True, "name": name, "message": "Wird vorbereitet …", "error": None,
+                "started_at": _now(), "finished_at": None, "messages": [],
             }
 
         def runner() -> None:
@@ -486,12 +448,10 @@ class Controller:
             except Exception as exc:
                 LOGGER.exception("Operation failed name=%s", name)
                 with self._lock:
-                    self._operation["error"] = str(exc)
-                    self._operation["message"] = "Fehlgeschlagen"
+                    self._operation.update(error=str(exc), message="Fehlgeschlagen")
             finally:
                 with self._lock:
-                    self._operation["active"] = False
-                    self._operation["finished_at"] = _utc_now()
+                    self._operation.update(active=False, finished_at=_now())
 
         threading.Thread(target=runner, name=f"manager-{name}", daemon=True).start()
         return True
@@ -499,22 +459,22 @@ class Controller:
     def check_update(self) -> None:
         self.emit("Neueste stabile Version wird geprüft …")
         release = pm.latest_release()
-        latest = pm._tag(str(release.get("tag_name") or ""))
-        current = pm.read_current(self.root)
+        latest, current = pm._tag(str(release.get("tag_name") or "")), pm.read_current(self.root)
         self._latest = {
             "version": latest,
             "available": pm._semver(latest) > pm._semver(current),
             "notes": str(release.get("body") or "").strip(),
-            "checked_at": _utc_now(),
+            "checked_at": _now(),
         }
         self.emit(f"Installiert: {current} · Neueste Version: {latest}")
 
     def apply_update(self) -> None:
         release = pm.latest_release()
-        latest = pm._tag(str(release.get("tag_name") or ""))
-        previous = pm.read_current(self.root)
+        latest, previous = pm._tag(str(release.get("tag_name") or "")), pm.read_current(self.root)
         if pm._semver(latest) <= pm._semver(previous):
-            self._latest = {"version": latest, "available": False, "notes": str(release.get("body") or ""), "checked_at": _utc_now()}
+            self._latest = {
+                "version": latest, "available": False, "notes": str(release.get("body") or ""), "checked_at": _now()
+            }
             self.emit("Ladies Explorer ist bereits aktuell.")
             return
 
@@ -528,16 +488,13 @@ class Controller:
         try:
             self.emit(f"Update {previous} → {latest} wird geladen und geprüft …")
             installed = pm.update(self.root)
-            active_release = self.root / pm.RELEASES_DIR / installed
-            _copy_manager_to_state(self.root, active_release)
+            _copy_manager_to_state(self.root, self.root / pm.RELEASES_DIR / installed)
             ensure_release_environment(self.root, installed, self.emit)
             schema = migrate_database(self.root, installed, self.emit)
             self.emit(f"Update abgeschlossen. Datenbankschema: {schema}")
             self._latest = {
-                "version": installed,
-                "available": False,
-                "notes": str(release.get("body") or "").strip(),
-                "checked_at": _utc_now(),
+                "version": installed, "available": False,
+                "notes": str(release.get("body") or "").strip(), "checked_at": _now(),
             }
             if was_running:
                 start_app(self.root, self.emit, open_browser=True)
@@ -556,8 +513,7 @@ class Controller:
 
     def status(self) -> dict[str, Any]:
         current = pm.read_current(self.root)
-        release = self.root / pm.RELEASES_DIR / current
-        manifest = pm.validate_release_dir(release, current)
+        manifest = pm.validate_release_dir(self.root / pm.RELEASES_DIR / current, current)
         pid = pm.active_pid(self.root)
         db_path, data_dir, log_path = pm._data_paths(self.root)
         backups = sorted((_state_dir(self.root) / "backups").glob("pre-update-*.sqlite3"), reverse=True)
@@ -601,13 +557,13 @@ def make_handler(controller: Controller, token: str, ui: str) -> type[BaseHTTPRe
 
         def _send(self, status: int, body: bytes, content_type: str) -> None:
             self.send_response(status)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("X-Frame-Options", "DENY")
-            self.send_header("Referrer-Policy", "no-referrer")
-            self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'")
+            for key, value in (
+                ("Content-Type", content_type), ("Content-Length", str(len(body))), ("Cache-Control", "no-store"),
+                ("X-Content-Type-Options", "nosniff"), ("X-Frame-Options", "DENY"),
+                ("Referrer-Policy", "no-referrer"),
+                ("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"),
+            ):
+                self.send_header(key, value)
             self.end_headers()
             self.wfile.write(body)
 
@@ -621,20 +577,17 @@ def make_handler(controller: Controller, token: str, ui: str) -> type[BaseHTTPRe
             path = urllib.parse.urlparse(self.path).path
             if path == "/":
                 self._send(200, ui.encode("utf-8"), "text/html; charset=utf-8")
-                return
-            if path == "/api/ping":
+            elif path == "/api/ping":
                 self._json(200, {"ok": True})
-                return
-            if path == "/api/status":
+            elif path == "/api/status":
                 try:
                     self._json(200, controller.status())
                 except Exception as exc:
                     self._json(500, {"error": str(exc)})
-                return
-            if path == "/favicon.ico":
+            elif path == "/favicon.ico":
                 self._send(204, b"", "image/x-icon")
-                return
-            self._json(404, {"error": "Nicht gefunden"})
+            else:
+                self._json(404, {"error": "Nicht gefunden"})
 
         def do_POST(self) -> None:  # noqa: N802
             if not self._authorized():
@@ -644,7 +597,6 @@ def make_handler(controller: Controller, token: str, ui: str) -> type[BaseHTTPRe
                 self._json(413, {"error": "Anfrage zu groß"})
                 return
             path = urllib.parse.urlparse(self.path).path
-
             actions: dict[str, tuple[str, Callable[[], None]]] = {
                 "/api/app/start": ("start", lambda: start_app(controller.root, controller.emit, open_browser=True)),
                 "/api/app/stop": ("stop", lambda: stop_app(controller.root, controller.emit)),
@@ -655,8 +607,8 @@ def make_handler(controller: Controller, token: str, ui: str) -> type[BaseHTTPRe
                 name, action = actions[path]
                 if not controller.begin(name, action):
                     self._json(409, {"error": "Es läuft bereits eine Manager-Aktion"})
-                    return
-                self._json(202, {"ok": True})
+                else:
+                    self._json(202, {"ok": True})
                 return
             if path == "/api/app/open":
                 if pm.active_pid(controller.root) is None:
@@ -683,19 +635,22 @@ def make_handler(controller: Controller, token: str, ui: str) -> type[BaseHTTPRe
 
 def serve_manager(root: Path) -> int:
     root = root.resolve()
-    _configure_file_logging(root)
+    _configure_logging(root)
     current = pm.read_current(root)
     pm.validate_release_dir(root / pm.RELEASES_DIR / current, current)
-    token = secrets.token_urlsafe(24)
-    controller = Controller(root)
-    ui_path = root / pm.RELEASES_DIR / current / "tools" / UI_FILE
+    ui_path = Path(__file__).resolve().with_name(MANAGER_UI)
+    if not ui_path.is_file():
+        ui_path = root / pm.RELEASES_DIR / current / "tools" / MANAGER_UI
     if not ui_path.is_file():
         raise pm.PortableError(f"Manager-Oberfläche fehlt: {ui_path}")
-    ui = ui_path.read_text(encoding="utf-8")
-    server = ThreadingHTTPServer((MANAGER_HOST, 0), make_handler(controller, token, ui))
+    token = secrets.token_urlsafe(24)
+    controller = Controller(root)
+    server = ThreadingHTTPServer((MANAGER_HOST, 0), make_handler(controller, token, ui_path.read_text(encoding="utf-8")))
     controller.shutdown_callback = server.shutdown
-    state = {"pid": os.getpid(), "port": server.server_port, "token": token, "started_at": _utc_now()}
-    pm._atomic_write(_manager_state_path(root), json.dumps(state, ensure_ascii=False) + "\n")
+    pm._atomic_write(
+        _manager_state_path(root),
+        json.dumps({"pid": os.getpid(), "port": server.server_port, "token": token, "started_at": _now()}) + "\n",
+    )
     LOGGER.info("Launcher Manager ready port=%s current=%s", server.server_port, current)
     try:
         server.serve_forever(poll_interval=0.3)
@@ -721,14 +676,10 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        if args.command == "launch":
-            return launch_manager(args.root)
-        if args.command == "serve":
-            return serve_manager(args.root)
+        return launch_manager(args.root) if args.command == "launch" else serve_manager(args.root)
     except (pm.PortableError, subprocess.SubprocessError, OSError, ValueError) as exc:
         print(f"Fehler: {exc}", file=sys.stderr)
         return 2
-    return 1
 
 
 if __name__ == "__main__":
