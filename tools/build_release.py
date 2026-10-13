@@ -61,8 +61,10 @@ def _validate_file_set(files: list[Path]) -> None:
         "README.md",
         "tools/portable_manager.py",
         "tools/build_release.py",
+        "packaging/install.command",
         "packaging/start.command",
         "packaging/update.command",
+        "packaging/install.cmd",
         "packaging/start.cmd",
         "packaging/update.cmd",
     }
