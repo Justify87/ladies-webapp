@@ -119,7 +119,7 @@ class ManagerWebUiTests(unittest.TestCase):
             release = {"tag_name": "v9.8.1", "draft": False, "prerelease": False, "body": "notes"}
 
             def activate(_root):
-                pm.set_current(root, "v9.8.1")
+                pm.set_current(controller.root, "v9.8.1")
                 return "v9.8.1"
 
             with mock.patch.object(pm, "latest_release", return_value=release), mock.patch.object(
@@ -134,25 +134,25 @@ class ManagerWebUiTests(unittest.TestCase):
                 controller.apply_update()
 
             stop.assert_called_once()
-            migrate.assert_called_once_with(root, "v9.8.1", controller.emit)
-            start.assert_called_once_with(root, controller.emit, open_browser=True)
-            self.assertEqual(pm.read_current(root), "v9.8.1")
-            self.assertTrue(any((root / pm.STATE_DIR / "backups").glob("pre-update-*.sqlite3")))
+            migrate.assert_called_once_with(controller.root, "v9.8.1", controller.emit)
+            start.assert_called_once_with(controller.root, controller.emit, open_browser=True)
+            self.assertEqual(pm.read_current(controller.root), "v9.8.1")
+            self.assertTrue(any((controller.root / pm.STATE_DIR / "backups").glob("pre-update-*.sqlite3")))
 
     def test_failed_migration_restores_database_and_previous_release(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = make_root(Path(tmp), "9.8.0")
             make_release(root / "releases" / "v9.8.1", "9.8.1", schema=2)
-            db = root / "data" / "ladies.sqlite3"
+            controller = lm.Controller(root)
+            db = controller.root / "data" / "ladies.sqlite3"
             with closing(sqlite3.connect(db)) as connection:
                 connection.execute("CREATE TABLE keep_me(value TEXT)")
                 connection.execute("INSERT INTO keep_me(value) VALUES ('original')")
                 connection.commit()
-            controller = lm.Controller(root)
             release = {"tag_name": "v9.8.1", "draft": False, "prerelease": False, "body": "notes"}
 
             def activate(_root):
-                pm.set_current(root, "v9.8.1")
+                pm.set_current(controller.root, "v9.8.1")
                 with closing(sqlite3.connect(db)) as connection:
                     connection.execute("UPDATE keep_me SET value='changed'")
                     connection.commit()
@@ -168,9 +168,18 @@ class ManagerWebUiTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     controller.apply_update()
 
-            self.assertEqual(pm.read_current(root), "v9.8.0")
+            self.assertEqual(pm.read_current(controller.root), "v9.8.0")
             with closing(sqlite3.connect(db)) as connection:
                 self.assertEqual(connection.execute("SELECT value FROM keep_me").fetchone()[0], "original")
+
+    def test_copy_manager_to_state_keeps_script_and_ui_together(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_root(Path(tmp), "9.8.0")
+            release = root / "releases" / "v9.8.0"
+            manager = lm._copy_manager_to_state(root, release)
+            self.assertEqual(manager, root.resolve() / pm.STATE_DIR / lm.MANAGER_COPY)
+            self.assertTrue(manager.is_file())
+            self.assertTrue((manager.parent / lm.MANAGER_UI).is_file())
 
     def test_manager_ui_contains_core_controls(self):
         html = (ROOT / "tools" / "launcher_manager.html").read_text(encoding="utf-8")
