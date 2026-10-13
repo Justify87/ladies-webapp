@@ -13,8 +13,9 @@ import tempfile
 import urllib.error
 import urllib.request
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Iterator
 
 REPOSITORY = "Justify87/ladies-webapp"
 LATEST_RELEASE_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
@@ -25,6 +26,7 @@ RELEASES_DIR = "releases"
 DATA_DIR = "data"
 STATE_DIR = ".state"
 PID_FILE = "app.pid"
+LIFECYCLE_LOCK_FILE = "lifecycle.lock"
 MAX_RELEASES = 2
 SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.I)
@@ -221,9 +223,46 @@ def _pid_path(root: Path) -> Path:
     return root / STATE_DIR / PID_FILE
 
 
+def _lifecycle_lock_path(root: Path) -> Path:
+    return root / STATE_DIR / LIFECYCLE_LOCK_FILE
+
+
+def _windows_process_running(pid: int) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    ERROR_ACCESS_DENIED = 5
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    open_process.restype = wintypes.HANDLE
+    get_exit_code = kernel32.GetExitCodeProcess
+    get_exit_code.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    get_exit_code.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    handle = open_process(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+    try:
+        exit_code = wintypes.DWORD()
+        if not get_exit_code(handle, ctypes.byref(exit_code)):
+            return True
+        return exit_code.value == STILL_ACTIVE
+    finally:
+        close_handle(handle)
+
+
 def _process_running(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        return _windows_process_running(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -235,11 +274,17 @@ def _process_running(pid: int) -> bool:
     return True
 
 
+def _read_pid(path: Path) -> int | None:
+    try:
+        return int(path.read_text(encoding="ascii").splitlines()[0].strip())
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def active_pid(root: Path) -> int | None:
     path = _pid_path(root)
-    try:
-        pid = int(path.read_text(encoding="ascii").strip())
-    except (OSError, ValueError):
+    pid = _read_pid(path)
+    if pid is None:
         return None
     if _process_running(pid):
         return pid
@@ -256,38 +301,84 @@ def _ensure_not_running(root: Path) -> None:
         raise PortableError(f"Ladies Explorer läuft noch (PID {pid}). Bitte zuerst beenden.")
 
 
+@contextmanager
+def lifecycle_lock(root: Path, operation: str) -> Iterator[None]:
+    root = root.resolve()
+    state = root / STATE_DIR
+    state.mkdir(parents=True, exist_ok=True)
+    path = _lifecycle_lock_path(root)
+    payload = f"{os.getpid()}\n{operation}\n"
+
+    for _attempt in range(2):
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            owner = _read_pid(path)
+            if owner is not None and _process_running(owner):
+                raise PortableError(f"Eine andere Ladies-Explorer-Aktion läuft bereits (PID {owner}).")
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise PortableError("Veralteter Lifecycle-Lock konnte nicht entfernt werden") from exc
+            continue
+        try:
+            with os.fdopen(fd, "w", encoding="ascii") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                yield
+            finally:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+            return
+        except Exception:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            raise
+    raise PortableError("Lifecycle-Lock konnte nicht übernommen werden")
+
+
 def _data_paths(root: Path) -> tuple[Path, Path, Path]:
     data_root = root / DATA_DIR
     return data_root / "ladies.sqlite3", data_root / "ladies_data", data_root / "logs" / "ladies_explorer.log"
 
 
 def start(root: Path, extra_args: list[str] | None = None) -> int:
-    if active_pid(root) is not None:
-        raise PortableError("Ladies Explorer läuft bereits")
-    current = read_current(root)
-    release_dir = root / RELEASES_DIR / current
-    validate_release_dir(release_dir, current)
-    db_path, data_dir, log_path = _data_paths(root)
-    data_dir.mkdir(parents=True, exist_ok=True)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        sys.executable,
-        str(release_dir / "ladies_explorer.py"),
-        "--host", "0.0.0.0",
-        "--db", str(db_path),
-        "--data-dir", str(data_dir),
-        "--log", str(log_path),
-        *(extra_args or []),
-    ]
-    process = subprocess.Popen(command, cwd=release_dir)
-    _atomic_write(_pid_path(root), f"{process.pid}\n")
-    try:
-        return int(process.wait())
-    finally:
+    root = root.resolve()
+    with lifecycle_lock(root, "start"):
+        if active_pid(root) is not None:
+            raise PortableError("Ladies Explorer läuft bereits")
+        current = read_current(root)
+        release_dir = root / RELEASES_DIR / current
+        validate_release_dir(release_dir, current)
+        db_path, data_dir, log_path = _data_paths(root)
+        data_dir.mkdir(parents=True, exist_ok=True)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            sys.executable,
+            str(release_dir / "ladies_explorer.py"),
+            "--host", "0.0.0.0",
+            "--db", str(db_path),
+            "--data-dir", str(data_dir),
+            "--log", str(log_path),
+            *(extra_args or []),
+        ]
+        process = subprocess.Popen(command, cwd=release_dir)
+        _atomic_write(_pid_path(root), f"{process.pid}\n")
         try:
-            _pid_path(root).unlink()
-        except OSError:
-            pass
+            return int(process.wait())
+        finally:
+            try:
+                _pid_path(root).unlink()
+            except OSError:
+                pass
 
 
 def _copy_tree(source: Path, destination: Path) -> None:
@@ -308,19 +399,56 @@ def _copy_if_exists(source: Path, destination: Path) -> None:
         shutil.copy2(source, destination)
 
 
-def migrate_legacy_data(legacy_root: Path, install_root: Path) -> list[str]:
+def _portable_legacy_pid(legacy_root: Path) -> int | None:
+    for candidate in (legacy_root / STATE_DIR / PID_FILE, legacy_root / PID_FILE):
+        pid = _read_pid(candidate)
+        if pid is not None and _process_running(pid):
+            return pid
+    return None
+
+
+def _ensure_legacy_stopped(legacy_root: Path, confirmed_stopped: bool) -> None:
+    pid = _portable_legacy_pid(legacy_root)
+    if pid is not None:
+        raise PortableError(f"Die alte Ladies-Explorer-Installation läuft noch (PID {pid}). Bitte zuerst beenden.")
+    if not confirmed_stopped:
+        raise PortableError(
+            "Legacy-Migration benötigt die Bestätigung, dass die alte App beendet ist. "
+            "Interaktiv bestätigen oder --legacy-stopped verwenden."
+        )
+
+
+def _backup_sqlite(source: Path, destination: Path) -> bool:
+    if not source.is_file() or destination.exists():
+        return False
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        source_uri = f"file:{source.as_posix()}?mode=ro"
+        with sqlite3.connect(source_uri, uri=True, timeout=30) as source_db, sqlite3.connect(str(destination)) as target_db:
+            source_db.backup(target_db)
+    except sqlite3.Error as exc:
+        try:
+            destination.unlink()
+        except OSError:
+            pass
+        raise PortableError(f"Legacy-Datenbank konnte nicht konsistent gesichert werden: {exc}") from exc
+    return True
+
+
+def migrate_legacy_data(legacy_root: Path, install_root: Path, *, confirmed_stopped: bool = False) -> list[str]:
     legacy_root = legacy_root.resolve()
+    _ensure_legacy_stopped(legacy_root, confirmed_stopped)
     data_root = install_root / DATA_DIR
     data_root.mkdir(parents=True, exist_ok=True)
     copied: list[str] = []
-    mapping = [
-        (legacy_root / "ladies.sqlite3", data_root / "ladies.sqlite3"),
-        (legacy_root / "ladies.sqlite3-wal", data_root / "ladies.sqlite3-wal"),
-        (legacy_root / "ladies.sqlite3-shm", data_root / "ladies.sqlite3-shm"),
+
+    if _backup_sqlite(legacy_root / "ladies.sqlite3", data_root / "ladies.sqlite3"):
+        copied.append("ladies.sqlite3")
+
+    for source, destination in (
         (legacy_root / "ladies_data", data_root / "ladies_data"),
         (legacy_root / "logs", data_root / "logs"),
-    ]
-    for source, destination in mapping:
+    ):
         before = destination.exists()
         _copy_if_exists(source, destination)
         if source.exists() and not before and destination.exists():
@@ -361,7 +489,13 @@ def _copy_launchers(source_release: Path, root: Path) -> None:
                     pass
 
 
-def install(source: Path, root: Path, legacy_root: Path | None = None) -> str:
+def install(
+    source: Path,
+    root: Path,
+    legacy_root: Path | None = None,
+    *,
+    legacy_stopped: bool = False,
+) -> str:
     source = source.resolve()
     root = root.resolve()
     manifest = validate_release_dir(source)
@@ -383,7 +517,7 @@ def install(source: Path, root: Path, legacy_root: Path | None = None) -> str:
         target_created = True
         _copy_launchers(target, root)
         if legacy_root:
-            migrate_legacy_data(legacy_root, root)
+            migrate_legacy_data(legacy_root, root, confirmed_stopped=legacy_stopped)
         set_current(root, tag)
         activated = True
     except Exception:
@@ -411,9 +545,14 @@ def _release_schema(root: Path, tag: str) -> int:
     return int(data["db_schema_version"])
 
 
-def prune_releases(root: Path, keep: int = MAX_RELEASES) -> None:
+def prune_releases(
+    root: Path,
+    keep: int = MAX_RELEASES,
+    *,
+    preserve: set[str] | None = None,
+) -> None:
     current = read_current(root)
-    releases = []
+    releases: list[tuple[tuple[int, int, int], Path]] = []
     for path in (root / RELEASES_DIR).iterdir():
         if path.is_dir() and not path.name.startswith("."):
             try:
@@ -422,14 +561,25 @@ def prune_releases(root: Path, keep: int = MAX_RELEASES) -> None:
                 continue
             releases.append((key, path))
     releases.sort(reverse=True)
-    keep_paths = {path for _, path in releases[:max(1, keep)]}
-    keep_paths.add(root / RELEASES_DIR / current)
+
+    preserve_tags = {_tag(tag) for tag in (preserve or set())}
+    preserve_tags.add(current)
+    keep_paths = {
+        root / RELEASES_DIR / tag
+        for tag in preserve_tags
+        if (root / RELEASES_DIR / tag).is_dir()
+    }
+    limit = max(1, keep)
+    for _, path in releases:
+        if len(keep_paths) >= limit:
+            break
+        keep_paths.add(path)
     for _, path in releases:
         if path not in keep_paths:
             shutil.rmtree(path, ignore_errors=True)
 
 
-def _activate_staged(root: Path, staging: Path, tag: str) -> None:
+def _activate_staged(root: Path, staging: Path, tag: str, *, previous: str) -> None:
     target = root / RELEASES_DIR / tag
     if target.exists():
         shutil.rmtree(target)
@@ -437,83 +587,85 @@ def _activate_staged(root: Path, staging: Path, tag: str) -> None:
     validate_release_dir(target, tag)
     _copy_launchers(target, root)
     set_current(root, tag)
-    prune_releases(root)
+    prune_releases(root, preserve={tag, previous})
 
 
 def update(root: Path) -> str:
     root = root.resolve()
-    _ensure_not_running(root)
-    current = read_current(root)
-    release = latest_release()
-    latest = _tag(str(release.get("tag_name") or ""))
-    if _semver(latest) <= _semver(current):
-        print(f"Ladies Explorer {current} ist bereits aktuell.")
-        return current
+    with lifecycle_lock(root, "update"):
+        _ensure_not_running(root)
+        current = read_current(root)
+        release = latest_release()
+        latest = _tag(str(release.get("tag_name") or ""))
+        if _semver(latest) <= _semver(current):
+            print(f"Ladies Explorer {current} ist bereits aktuell.")
+            return current
 
-    asset = _asset_for_release(release)
-    url = str(asset.get("browser_download_url") or "")
-    if not url.startswith("https://"):
-        raise PortableError("Release-Asset besitzt keine gültige Download-URL")
+        asset = _asset_for_release(release)
+        url = str(asset.get("browser_download_url") or "")
+        if not url.startswith("https://"):
+            raise PortableError("Release-Asset besitzt keine gültige Download-URL")
 
-    print(f"Update verfügbar: {current} → {latest}")
-    notes = str(release.get("body") or "").strip()
-    if notes:
-        print("\n" + notes + "\n")
+        print(f"Update verfügbar: {current} → {latest}")
+        notes = str(release.get("body") or "").strip()
+        if notes:
+            print("\n" + notes + "\n")
 
-    state = root / STATE_DIR
-    downloads = state / "downloads"
-    downloads.mkdir(parents=True, exist_ok=True)
-    archive = downloads / str(asset["name"])
-    staging = root / RELEASES_DIR / f".staging-{latest}"
-    shutil.rmtree(staging, ignore_errors=True)
-    try:
-        _download(url, archive)
-        verify_asset_digest(archive, asset)
-        safe_extract(archive, staging)
-        manifest = validate_release_dir(staging, latest)
-        target_commit = str(release.get("target_commitish") or "")
-        if SHA_RE.fullmatch(target_commit) and str(manifest.get("commit") or "").lower() != target_commit.lower():
-            raise PortableError("Release-Manifest gehört nicht zum veröffentlichten Release-Commit")
-        _activate_staged(root, staging, latest)
-    finally:
-        try:
-            archive.unlink()
-        except OSError:
-            pass
+        state = root / STATE_DIR
+        downloads = state / "downloads"
+        downloads.mkdir(parents=True, exist_ok=True)
+        archive = downloads / str(asset["name"])
+        staging = root / RELEASES_DIR / f".staging-{latest}"
         shutil.rmtree(staging, ignore_errors=True)
-    print(f"✓ {latest} installiert. Persistente Daten wurden nicht verändert.")
-    return latest
+        try:
+            _download(url, archive)
+            verify_asset_digest(archive, asset)
+            safe_extract(archive, staging)
+            manifest = validate_release_dir(staging, latest)
+            target_commit = str(release.get("target_commitish") or "")
+            if SHA_RE.fullmatch(target_commit) and str(manifest.get("commit") or "").lower() != target_commit.lower():
+                raise PortableError("Release-Manifest gehört nicht zum veröffentlichten Release-Commit")
+            _activate_staged(root, staging, latest, previous=current)
+        finally:
+            try:
+                archive.unlink()
+            except OSError:
+                pass
+            shutil.rmtree(staging, ignore_errors=True)
+        print(f"✓ {latest} installiert. Persistente Daten wurden nicht verändert.")
+        return latest
 
 
 def rollback(root: Path) -> str:
     root = root.resolve()
-    _ensure_not_running(root)
-    current = read_current(root)
-    current_key = _semver(current)
-    candidates: list[tuple[tuple[int, int, int], str]] = []
-    for path in (root / RELEASES_DIR).iterdir():
-        if not path.is_dir() or path.name == current or path.name.startswith("."):
-            continue
-        try:
-            key = _semver(path.name)
-            if key < current_key:
-                candidates.append((key, _tag(path.name)))
-        except PortableError:
-            continue
-    if not candidates:
-        raise PortableError("Keine vorherige Release-Version für Rollback vorhanden")
-    candidates.sort(reverse=True)
-    target = candidates[0][1]
-    db_schema = _db_schema_version(root)
-    target_schema = _release_schema(root, target)
-    if db_schema > target_schema:
-        raise PortableError(
-            f"Rollback auf {target} blockiert: Datenbank-Schema {db_schema} ist neuer als Release-Schema {target_schema}."
-        )
-    set_current(root, target)
-    _copy_launchers(root / RELEASES_DIR / target, root)
-    print(f"✓ {target} ist wieder aktiv.")
-    return target
+    with lifecycle_lock(root, "rollback"):
+        _ensure_not_running(root)
+        current = read_current(root)
+        current_key = _semver(current)
+        candidates: list[tuple[tuple[int, int, int], str]] = []
+        for path in (root / RELEASES_DIR).iterdir():
+            if not path.is_dir() or path.name == current or path.name.startswith("."):
+                continue
+            try:
+                key = _semver(path.name)
+                if key < current_key:
+                    candidates.append((key, _tag(path.name)))
+            except PortableError:
+                continue
+        if not candidates:
+            raise PortableError("Keine vorherige Release-Version für Rollback vorhanden")
+        candidates.sort(reverse=True)
+        target = candidates[0][1]
+        db_schema = _db_schema_version(root)
+        target_schema = _release_schema(root, target)
+        if db_schema > target_schema:
+            raise PortableError(
+                f"Rollback auf {target} blockiert: Datenbank-Schema {db_schema} ist neuer als Release-Schema {target_schema}."
+            )
+        set_current(root, target)
+        _copy_launchers(root / RELEASES_DIR / target, root)
+        print(f"✓ {target} ist wieder aktiv.")
+        return target
 
 
 def status(root: Path) -> dict[str, Any]:
@@ -533,6 +685,22 @@ def status(root: Path) -> dict[str, Any]:
     return result
 
 
+def _confirm_legacy_stopped(legacy_root: Path) -> bool:
+    pid = _portable_legacy_pid(legacy_root)
+    if pid is not None:
+        raise PortableError(f"Die alte Ladies-Explorer-Installation läuft noch (PID {pid}). Bitte zuerst beenden.")
+    if not sys.stdin.isatty():
+        raise PortableError(
+            "Legacy-Migration ist nicht interaktiv. Alte App beenden und mit --legacy-stopped ausdrücklich bestätigen."
+        )
+    answer = input(
+        "Die alte Ladies-Explorer-App muss vollständig beendet sein. Ist sie beendet? [j/N] "
+    ).strip().lower()
+    if answer not in {"j", "ja", "y", "yes"}:
+        raise PortableError("Legacy-Migration abgebrochen")
+    return True
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Ladies Explorer Portable Release Manager")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -541,6 +709,11 @@ def _parser() -> argparse.ArgumentParser:
     install_cmd.add_argument("--source", type=Path, default=Path(__file__).resolve().parents[1])
     install_cmd.add_argument("--root", type=Path)
     install_cmd.add_argument("--legacy-root", type=Path)
+    install_cmd.add_argument(
+        "--legacy-stopped",
+        action="store_true",
+        help="Bestätigt für nicht-interaktive Migrationen ausdrücklich, dass die alte App beendet ist",
+    )
 
     for name in ("start", "update", "rollback", "status"):
         command = sub.add_parser(name)
@@ -562,7 +735,10 @@ def main(argv: list[str] | None = None) -> int:
                 legacy_root = detect_legacy_root(source, root)
                 if legacy_root is not None:
                     print(f"Bestehende Installation erkannt: {legacy_root}")
-            tag = install(source, root, legacy_root)
+            legacy_stopped = bool(args.legacy_stopped)
+            if legacy_root is not None and not legacy_stopped:
+                legacy_stopped = _confirm_legacy_stopped(legacy_root.resolve())
+            tag = install(source, root, legacy_root, legacy_stopped=legacy_stopped)
             print(f"✓ Ladies Explorer {tag} installiert: {root}")
             return 0
         root = (args.root or infer_install_root()).resolve()
