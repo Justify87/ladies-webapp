@@ -344,11 +344,21 @@ def _data_paths(root: Path) -> tuple[Path, Path, Path]:
 
 
 def _copy_tree(source: Path, destination: Path) -> None:
-    ignored = shutil.ignore_patterns(
-        ".git", ".github", ".venv", ".runtime", "node_modules", "__pycache__",
-        "tests", "dist", "logs", "ladies.sqlite3", "ladies.sqlite3-wal", "ladies.sqlite3-shm", "ladies_data",
-    )
-    shutil.copytree(source, destination, ignore=ignored)
+    source = source.resolve()
+    destination = destination.resolve()
+    patterns = [
+        ".git", ".github", ".venv", ".runtime", ".state", "node_modules", "__pycache__",
+        "tests", "dist", "releases", "data", "logs", "ladies.sqlite3", "ladies.sqlite3-wal",
+        "ladies.sqlite3-shm", "ladies_data",
+    ]
+    try:
+        relative_destination = destination.relative_to(source)
+    except ValueError:
+        pass
+    else:
+        if relative_destination.parts:
+            patterns.append(relative_destination.parts[0])
+    shutil.copytree(source, destination, ignore=shutil.ignore_patterns(*patterns))
 
 
 def _copy_if_exists(source: Path, destination: Path) -> None:
