@@ -30,7 +30,6 @@ from .normalize import extract_durations, extract_money
 from .ocr import PaddleOcrV6TinyEngine
 from .rules import extract_with_rules, merge_partial, proposal_diff
 from .schema import empty_proposal, validate_proposal
-from .signal import detect_price_signal
 
 LOGGER = logging.getLogger("ladies_explorer.pricing")
 
@@ -68,7 +67,7 @@ def iso(value: datetime | None) -> str | None:
 
 
 class PriceExtractionCore:
-    """Rule/OCR extraction primitives shared by the public pricing service."""
+    """Extraction, OCR, proposal and persistence primitives for the pricing service."""
 
     def __init__(self, database: Database | str | Path, data_dir: str | Path):
         owns_database = not isinstance(database, Database)
@@ -181,55 +180,6 @@ class PriceExtractionCore:
             return derived.ocr_text
         return message.text or ""
 
-    def signal(self, thread_id: int, *, allow_ocr: bool = True) -> dict[str, Any]:
-        settings = self.settings()
-        if not settings[SETTING_ENABLED]:
-            return {"thread_id": thread_id, "enabled": False, "strong": False, "score": 0, "reasons": []}
-        with self.database.session() as db:
-            thread = db.get(ChatThread, int(thread_id))
-            if thread is None:
-                raise KeyError(thread_id)
-            if thread.person_id is None:
-                return {"thread_id": thread_id, "enabled": True, "strong": False, "score": 0, "reasons": ["unassigned"]}
-            rows = db.scalars(
-                select(ChatMessage)
-                .where(ChatMessage.thread_id == thread.thread_id, ChatMessage.direction.in_(["IN", "OUT"]))
-                .order_by(desc(ChatMessage.timestamp), desc(ChatMessage.message_id))
-                .limit(12)
-            ).all()
-            rows.reverse()
-            best = None
-            previous_outgoing = None
-            contains_image = False
-            for message in rows:
-                derived = self._ensure_derived(db, message, run_ocr=allow_ocr and message.message_type == "IMAGE")
-                text = self._effective_text(message, derived)
-                if message.direction == "OUT":
-                    previous_outgoing = text
-                    continue
-                contains_image = contains_image or message.message_type == "IMAGE"
-                result = detect_price_signal(text, previous_outgoing=previous_outgoing, has_image=message.message_type == "IMAGE")
-                derived.price_signal_score = result.score
-                derived.price_signal_reasons_json = dumps(list(result.reasons))
-                derived.updated_at = utcnow()
-                candidate = (result.score, message.message_id, list(result.reasons), derived.ocr_status)
-                if best is None or candidate[0] >= best[0]:
-                    best = candidate
-            score, seed, reasons, ocr_status = best or (0, None, [], None)
-            return {
-                "thread_id": thread.thread_id,
-                "person_id": thread.person_id,
-                "enabled": True,
-                "magic_button_enabled": settings[SETTING_MAGIC],
-                "strong": bool(score >= 7),
-                "score": int(score),
-                "reasons": reasons,
-                "seed_message_id": seed,
-                "contains_image": contains_image,
-                "ocr_status": ocr_status,
-                "ocr_available": self.ocr.available(),
-            }
-
     def _context_rows(self, db, thread: ChatThread, *, limit: int = 40) -> list[ContextMessage]:
         rows = db.scalars(
             select(ChatMessage)
@@ -317,110 +267,6 @@ class PriceExtractionCore:
             row.status = "REJECTED"
             row.reviewed_at = utcnow()
             return {"price_extraction_id": row.price_extraction_id, "status": row.status}
-
-    def accept(self, extraction_id: int, data: dict[str, Any]) -> dict[str, Any]:
-        with self.database.session() as db:
-            extraction = db.get(PriceExtraction, int(extraction_id))
-            if extraction is None:
-                raise KeyError(extraction_id)
-            if extraction.status != "PENDING":
-                raise ValueError("Vorschlag wurde bereits bearbeitet")
-            original = validate_proposal(loads(extraction.original_proposal_json, {}))
-            reviewed_raw = data.get("proposal") if isinstance(data, dict) else None
-            reviewed = validate_proposal(reviewed_raw if isinstance(reviewed_raw, dict) else original)
-            user_edited = dumps(reviewed) != dumps(original)
-            if reviewed["update_mode"] == "UNKNOWN":
-                reviewed["update_mode"] = "PARTIAL" if extraction.base_price_list_id else "FULL"
-            if not user_edited:
-                self._validate_grounding(db, extraction, reviewed)
-
-            current = self._proposal_from_price_list(db, db.get(PriceList, extraction.base_price_list_id)) if extraction.base_price_list_id else None
-            effective = merge_partial(current, reviewed) if reviewed["update_mode"] == "PARTIAL" else validate_proposal(reviewed)
-            effective["update_mode"] = "FULL"
-            fingerprint = self._proposal_fingerprint(effective)
-
-            if extraction.base_price_list_id:
-                current_meta = db.get(PriceListRevisionMeta, extraction.base_price_list_id)
-                current_fp = current_meta.fingerprint if current_meta else self._proposal_fingerprint(current or empty_proposal())
-                if current_fp == fingerprint:
-                    extraction.status = "ACCEPTED_NO_CHANGE"
-                    extraction.reviewed_proposal_json = dumps(reviewed)
-                    extraction.reviewed_at = utcnow()
-                    extraction.accepted_price_list_id = extraction.base_price_list_id
-                    return self._extraction_payload(db, extraction, current=current)
-
-            price_list = PriceList(
-                person_id=int(extraction.person_id),
-                observed_at=utcnow(),
-                source="WHATSAPP_EXTRACTED",
-                currency=effective["currency"],
-                note=self._summary_note(effective),
-            )
-            db.add(price_list)
-            db.flush()
-
-            for offer in effective["offers"]:
-                if offer.get("amount_cents") is None:
-                    continue
-                item = PriceItem(
-                    price_list_id=price_list.price_list_id,
-                    item_type="BASE",
-                    label=offer.get("label") or (f"{offer['duration_minutes']} Minuten" if offer.get("duration_minutes") else "Preis"),
-                    duration_minutes=offer.get("duration_minutes"),
-                    amount_cents=int(offer["amount_cents"]),
-                    note=None,
-                )
-                db.add(item)
-                db.flush()
-                db.add(PriceOfferMeta(
-                    price_item_id=item.price_item_id,
-                    duration_max_minutes=offer.get("duration_max_minutes"),
-                    amount_type=offer.get("amount_type") or "EXACT",
-                    amount_max_cents=offer.get("amount_max_cents"),
-                ))
-                self._save_evidence(db, price_list.price_list_id, extraction.price_extraction_id, offer.get("evidence"), price_item_id=item.price_item_id, user_edited=user_edited)
-
-            for position, rule in enumerate(effective["service_rules"]):
-                row = PriceServiceRule(
-                    price_list_id=price_list.price_list_id,
-                    service_key=rule.get("service_key"),
-                    raw_label=rule["raw_label"],
-                    status=rule["status"],
-                    amount_cents=rule.get("amount_cents"),
-                    note=rule.get("note"),
-                    position=position,
-                )
-                db.add(row)
-                db.flush()
-                self._save_evidence(db, price_list.price_list_id, extraction.price_extraction_id, rule.get("evidence"), price_service_rule_id=row.price_service_rule_id, user_edited=user_edited)
-
-            for position, condition in enumerate(effective["conditions"]):
-                row = PriceCondition(
-                    price_list_id=price_list.price_list_id,
-                    condition_type=condition["condition_type"],
-                    label=condition["label"],
-                    amount_cents=condition.get("amount_cents"),
-                    note=condition.get("note"),
-                    position=position,
-                )
-                db.add(row)
-                db.flush()
-                self._save_evidence(db, price_list.price_list_id, extraction.price_extraction_id, condition.get("evidence"), price_condition_id=row.price_condition_id, user_edited=user_edited)
-
-            db.add(PriceListRevisionMeta(
-                price_list_id=price_list.price_list_id,
-                supersedes_price_list_id=extraction.base_price_list_id,
-                source_extraction_id=extraction.price_extraction_id,
-                revision_type=reviewed["update_mode"],
-                completeness="MERGED_PARTIAL" if reviewed["update_mode"] == "PARTIAL" else "FULL",
-                fingerprint=fingerprint,
-            ))
-            extraction.status = "ACCEPTED"
-            extraction.reviewed_proposal_json = dumps(reviewed)
-            extraction.reviewed_at = utcnow()
-            extraction.accepted_price_list_id = price_list.price_list_id
-            db.flush()
-            return self._extraction_payload(db, extraction, current=current)
 
     def current(self, person_id: int) -> dict[str, Any]:
         with self.database.session() as db:
