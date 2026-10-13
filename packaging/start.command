@@ -1,8 +1,12 @@
 #!/bin/sh
 set -eu
-ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
-if [ ! -f "$ROOT/current" ]; then
+if [ -f "$SCRIPT_DIR/current" ]; then
+  ROOT="$SCRIPT_DIR"
+elif [ -f "$SCRIPT_DIR/../current" ]; then
+  ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
+else
   echo "Fehler: Portable Installation ist noch nicht eingerichtet. Bitte zuerst packaging/install.command ausführen." >&2
   exit 1
 fi
