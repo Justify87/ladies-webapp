@@ -3,6 +3,8 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+
+from ladies_v9.database import Database
 from unittest.mock import patch
 
 from sqlalchemy import func, select
@@ -14,6 +16,12 @@ from ladies_v9.messaging.models import ChatMessage, ChatThread, ContactEndpoint
 
 PHONE = "+4917612345678"
 JID = "4917612345678@s.whatsapp.net"
+
+
+def _database(path):
+    database = Database(path)
+    database.create_schema()
+    return database
 
 
 class FakeWorker:
@@ -99,7 +107,7 @@ class WhatsAppRehydrateTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_fresh_database_restores_only_last_ten_cached_messages(self):
-        original = self.MessagingService(self.root / "old.sqlite3", self.data_dir)
+        original = self.MessagingService(_database(self.root / "old.sqlite3"), self.data_dir)
         add_person(original, "Alt")
         for index in range(12):
             original._ingest_message(message_payload(index))
@@ -107,7 +115,7 @@ class WhatsAppRehydrateTests(unittest.TestCase):
         cache_path = self.data_dir / "whatsapp" / "recent-history.json"
         self.assertTrue(cache_path.exists())
 
-        fresh = self.MessagingService(self.root / "fresh.sqlite3", self.data_dir)
+        fresh = self.MessagingService(_database(self.root / "fresh.sqlite3"), self.data_dir)
         person_id = add_person(fresh, "Neu")
         fresh.worker.state = "CONNECTED"
         result = fresh.rehydrate_recent_history(person_id, limit=10)
@@ -129,12 +137,12 @@ class WhatsAppRehydrateTests(unittest.TestCase):
             self.assertEqual(rows[-1].provider_message_id, "old-11")
 
     def test_partial_cache_requests_only_missing_messages_up_to_ten(self):
-        original = self.MessagingService(self.root / "old.sqlite3", self.data_dir)
+        original = self.MessagingService(_database(self.root / "old.sqlite3"), self.data_dir)
         add_person(original, "Alt")
         for index in range(3):
             original._ingest_message(message_payload(index))
 
-        fresh = self.MessagingService(self.root / "fresh.sqlite3", self.data_dir)
+        fresh = self.MessagingService(_database(self.root / "fresh.sqlite3"), self.data_dir)
         person_id = add_person(fresh, "Neu")
         fresh.worker.state = "CONNECTED"
         result = fresh.rehydrate_recent_history(person_id, limit=10)
@@ -226,11 +234,11 @@ class WhatsAppRehydrateTests(unittest.TestCase):
         self.assertFalse(attachment)
 
     def test_rehydrate_limit_is_enforced_even_when_caller_requests_more(self):
-        original = self.MessagingService(self.root / "old.sqlite3", self.data_dir)
+        original = self.MessagingService(_database(self.root / "old.sqlite3"), self.data_dir)
         add_person(original, "Alt")
         for index in range(20):
             original._ingest_message(message_payload(index))
-        fresh = self.MessagingService(self.root / "fresh.sqlite3", self.data_dir)
+        fresh = self.MessagingService(_database(self.root / "fresh.sqlite3"), self.data_dir)
         person_id = add_person(fresh, "Neu")
         result = fresh.rehydrate_recent_history(person_id, limit=100)
         self.assertEqual(result["restored"], REHYDRATE_LIMIT)

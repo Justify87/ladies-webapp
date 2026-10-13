@@ -3,12 +3,20 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+
+from ladies_v9.database import Database
 from unittest.mock import patch
 
 from sqlalchemy import select
 
 from ladies_v9.models import Person, PersonIdentifier, PersonUserState
 from ladies_v9.messaging.models import ContactEndpoint
+
+
+def _database(path):
+    database = Database(path)
+    database.create_schema()
+    return database
 
 
 class FakeWorker:
@@ -39,7 +47,7 @@ class Baileys7IdentityTests(unittest.TestCase):
         patcher.start()
         from ladies_v9.messaging.service import MessagingService
         self.MessagingService = MessagingService
-        self.service = MessagingService(self.root / "app.sqlite3", self.root / "data")
+        self.service = MessagingService(_database(self.root / "app.sqlite3"), self.root / "data")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -99,7 +107,7 @@ class Baileys7IdentityTests(unittest.TestCase):
 
     def test_typing_preference_persists(self):
         self.service.set_typing_enabled(False)
-        second = self.MessagingService(self.root / "app.sqlite3", self.root / "data")
+        second = self.MessagingService(_database(self.root / "app.sqlite3"), self.root / "data")
         self.assertFalse(second.typing_enabled)
 
 

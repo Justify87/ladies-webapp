@@ -4,6 +4,8 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+
+from ladies_v9.database import Database
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -11,6 +13,12 @@ from sqlalchemy import select
 
 from ladies_v9.models import Person, PersonIdentifier, PersonUserState
 from ladies_v9.messaging.models import ChatMessage, ContactEndpoint
+
+
+def _database(path):
+    database = Database(path)
+    database.create_schema()
+    return database
 
 
 class ReviewWorker:
@@ -71,7 +79,7 @@ class MessagingReviewFixTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         patcher.start()
         from ladies_v9.messaging import MessagingService
-        self.service = MessagingService(self.root / "app.sqlite3", self.root / "data")
+        self.service = MessagingService(_database(self.root / "app.sqlite3"), self.root / "data")
         with self.service.database.session() as db:
             person = Person(display_name="Review")
             db.add(person)

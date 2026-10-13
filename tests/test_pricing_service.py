@@ -2,6 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from ladies_v9.database import Database
+
 from sqlalchemy import select
 
 from ladies_v9.models import Person, PersonUserState, PriceItem, PriceList
@@ -34,11 +36,17 @@ def _add_incoming(service, thread_id, text):
         return row.message_id
 
 
+def _database(path):
+    database = Database(path)
+    database.create_schema()
+    return database
+
+
 class PricingServiceTests(unittest.TestCase):
     def test_end_to_end_proposal_accept_and_history(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            service = PriceIntelligenceService(root / "test.db", root / "data")
+            service = PriceIntelligenceService(_database(root / "test.db"), root / "data")
             person_id, thread_id = _seed(service)
             signal = service.signal(thread_id, allow_ocr=False)
             self.assertTrue(signal["strong"])
@@ -56,7 +64,7 @@ class PricingServiceTests(unittest.TestCase):
     def test_same_prices_do_not_create_duplicate_revision(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            service = PriceIntelligenceService(root / "test.db", root / "data")
+            service = PriceIntelligenceService(_database(root / "test.db"), root / "data")
             person_id, thread_id = _seed(service)
             first = service.create_proposal(thread_id)
             service.accept(first["price_extraction_id"], {})
@@ -68,7 +76,7 @@ class PricingServiceTests(unittest.TestCase):
     def test_handled_context_no_longer_triggers_magic_signal(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            service = PriceIntelligenceService(root / "test.db", root / "data")
+            service = PriceIntelligenceService(_database(root / "test.db"), root / "data")
             _, thread_id = _seed(service)
             first = service.create_proposal(thread_id)
             service.accept(first["price_extraction_id"], {})
@@ -79,7 +87,7 @@ class PricingServiceTests(unittest.TestCase):
     def test_rejected_context_no_longer_triggers_magic_signal(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            service = PriceIntelligenceService(root / "test.db", root / "data")
+            service = PriceIntelligenceService(_database(root / "test.db"), root / "data")
             _, thread_id = _seed(service)
             proposal = service.create_proposal(thread_id)
             service.reject(proposal["price_extraction_id"])
@@ -89,7 +97,7 @@ class PricingServiceTests(unittest.TestCase):
     def test_stale_proposal_cannot_overwrite_newer_revision(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            service = PriceIntelligenceService(root / "test.db", root / "data")
+            service = PriceIntelligenceService(_database(root / "test.db"), root / "data")
             _, thread_id = _seed(service)
             baseline = service.create_proposal(thread_id)
             service.accept(baseline["price_extraction_id"], {})
@@ -104,7 +112,7 @@ class PricingServiceTests(unittest.TestCase):
     def test_partial_revision_preserves_legacy_price_items_exactly(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            service = PriceIntelligenceService(root / "test.db", root / "data")
+            service = PriceIntelligenceService(_database(root / "test.db"), root / "data")
             person_id, thread_id = _seed(service)
             with service.database.session() as db:
                 price_list = PriceList(person_id=person_id, source="MANUAL", currency="EUR")
@@ -127,7 +135,7 @@ class PricingServiceTests(unittest.TestCase):
     def test_identity_merge_moves_extraction_before_source_deletes(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            service = PriceIntelligenceService(root / "test.db", root / "data")
+            service = PriceIntelligenceService(_database(root / "test.db"), root / "data")
             with service.database.session() as db:
                 source = Person(display_name="Source")
                 target = Person(display_name="Target")
