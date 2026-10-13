@@ -177,7 +177,8 @@ class ManagerWebUiTests(unittest.TestCase):
             root = make_root(Path(tmp), "9.8.0")
             release = root / "releases" / "v9.8.0"
             manager = lm._copy_manager_to_state(root, release)
-            self.assertEqual(manager, root.resolve() / pm.STATE_DIR / lm.MANAGER_COPY)
+            expected = root / pm.STATE_DIR / lm.MANAGER_COPY
+            self.assertEqual(manager.resolve(), expected.resolve())
             self.assertTrue(manager.is_file())
             self.assertTrue((manager.parent / lm.MANAGER_UI).is_file())
 
