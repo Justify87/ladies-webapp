@@ -101,9 +101,11 @@ def create_app(
     @app.after_request
     def browser_runtime_policy(response):
         # MediaPipe needs jsDelivr + Google model storage, but not Google's ODML
-        # telemetry endpoint. A narrow connect-src keeps analysis functional while
-        # preventing the observed background telemetry request.
-        response.headers["Content-Security-Policy"] = BROWSER_CSP
+        # telemetry endpoint. Only install the browser-wide policy when the route
+        # did not already provide a stricter policy (for example `sandbox` on
+        # active document downloads).
+        if not response.headers.get("Content-Security-Policy"):
+            response.headers["Content-Security-Policy"] = BROWSER_CSP
 
         # These read-only summaries are triggered by several independent UI
         # mutations. A one-second private browser cache coalesces bursts without
