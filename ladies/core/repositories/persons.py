@@ -56,6 +56,12 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat()
 
 
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 class PersonRepository:
     """Person, listing, identity and user-entered person data boundary.
 
@@ -1086,7 +1092,10 @@ class PersonRepository:
                 PersonIdentifier.normalized_value == row.normalized_value,
             ))
             if duplicate:
-                duplicate.last_seen_at = max(duplicate.last_seen_at, row.last_seen_at)
+                duplicate.last_seen_at = max(
+                    _as_utc(duplicate.last_seen_at),
+                    _as_utc(row.last_seen_at),
+                )
                 db.delete(row)
             else:
                 row.person_id = target_person_id
@@ -1098,8 +1107,14 @@ class PersonRepository:
             )
         if source_state:
             db.delete(source_state)
-        target.first_seen_at = min(target.first_seen_at, source.first_seen_at)
-        target.last_seen_at = max(target.last_seen_at, source.last_seen_at)
+        target.first_seen_at = min(
+            _as_utc(target.first_seen_at),
+            _as_utc(source.first_seen_at),
+        )
+        target.last_seen_at = max(
+            _as_utc(target.last_seen_at),
+            _as_utc(source.last_seen_at),
+        )
         target.updated_at = utcnow()
         if not target.display_name and source.display_name:
             target.display_name = source.display_name

@@ -37,7 +37,8 @@ class WorkerManagerTests(unittest.TestCase):
     def test_worker_log_masks_whatsapp_identifiers(self):
         masked = self.manager._safe_worker_log("jid=4917612345678@s.whatsapp.net")
         self.assertNotIn("4917612345678@s.whatsapp.net", masked)
-        self.assertIn("WHATSAPP_ADDRESS", masked)
+        self.assertNotIn("4917612345678", masked)
+        self.assertEqual(masked, "jid=491******5678@s.whatsapp.net")
 
     def test_worker_command_error_is_not_exposed_to_caller(self):
         secret_detail = "send failed for 4917612345678@s.whatsapp.net auth=/private/session"

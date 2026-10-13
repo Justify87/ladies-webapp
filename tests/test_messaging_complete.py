@@ -175,7 +175,7 @@ class CompleteMessagingTests(unittest.TestCase):
         self.assertEqual(payload["media_type"], "IMAGE")
 
     def test_view_once_incoming_can_only_be_revealed_once(self):
-        media = self.service.media_dir / "once.jpg"
+        media = self.service.view_once_dir / "once.jpg"
         media.write_bytes(b"once")
         message_id = self._incoming(
             "view-once-in",
@@ -184,6 +184,8 @@ class CompleteMessagingTests(unittest.TestCase):
             media={"archive_name": media.name, "mime_type": "image/jpeg", "local_url": "/archive/whatsapp/media/once.jpg"},
             view_once=True,
         )
+        before = self.service.message(message_id)
+        self.assertNotIn("local_url", before.get("media") or {})
         handle, mime = self.service.view_once_path(message_id)
         try:
             self.assertEqual(handle.read(), b"once")
