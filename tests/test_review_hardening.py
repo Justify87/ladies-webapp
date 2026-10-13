@@ -247,25 +247,42 @@ class ReviewHardeningTests(unittest.TestCase):
                     finally:
                         response.close()
 
-    def test_release_workflow_allows_same_worker_version(self):
-        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-        self.assertIn("--allow-same-version", workflow)
-
-    def test_release_workflow_verifies_exact_published_commit_and_separates_ci(self):
+    def test_release_workflow_is_immutable_and_requires_synchronized_versions(self):
         release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-        checks = (ROOT / ".github" / "workflows" / "checks.yml").read_text(encoding="utf-8")
-        self.assertEqual(release.count("- name: Resolve changed release note"), 1)
-        self.assertLess(release.index("- name: Commit synchronized version"), release.index("\n  verify:"))
-        self.assertIn('release_sha=$(git rev-parse HEAD)', release)
-        self.assertIn("checkout_ref: ${{ needs.prepare.outputs.release_sha }}", release)
-        self.assertIn('RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}', release)
-        self.assertIn('--target "$RELEASE_SHA"', release)
-        self.assertIn("if: needs.prepare.outputs.exists != 'true'", release)
-        self.assertIn(
-            "group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}",
-            checks,
-        )
-        self.assertIn("ref: ${{ inputs.checkout_ref || github.sha }}", checks)
+        self.assertIn("tags:", release)
+        self.assertIn("'v*.*.*'", release)
+        self.assertIn("Release version mismatch", release)
+        self.assertIn("package.json", release)
+        self.assertIn("package-lock.json", release)
+        self.assertIn(".github/release-notes", release)
+        for forbidden in (
+            "git push",
+            "git commit",
+            "npm --prefix ladies/messaging/whatsapp_worker version",
+            "uv lock",
+            "--allow-same-version",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, release)
+
+    def test_release_publishes_verified_artifact_and_platform_ci_is_separate(self):
+        workflows = ROOT / ".github" / "workflows"
+        release = (workflows / "release.yml").read_text(encoding="utf-8")
+        ci = (workflows / "ci.yml").read_text(encoding="utf-8")
+        platform = (workflows / "platform.yml").read_text(encoding="utf-8")
+
+        self.assertFalse((workflows / "checks.yml").exists())
+        self.assertEqual(release.count("tools/build_release.py"), 1)
+        self.assertIn('--commit "${GITHUB_SHA}"', release)
+        self.assertIn("actions/upload-artifact@", release)
+        self.assertIn("actions/download-artifact@", release)
+        self.assertIn("--verify-tag", release)
+        self.assertIn('--target "$GITHUB_SHA"', release)
+        self.assertIn("! -name 'test_portable_*.py'", ci)
+        self.assertIn("test_portable_*.py", platform)
+        self.assertIn("windows-2025", platform)
+        self.assertIn("macos-15", platform)
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", ci)
 
     def test_source_version_fallback_comes_from_pyproject(self):
         import tomllib
