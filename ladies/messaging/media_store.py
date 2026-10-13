@@ -12,6 +12,8 @@ from typing import Any, BinaryIO
 
 import imageio_ffmpeg
 
+from ladies_v9.logging_utils import redact_text
+
 LOGGER = logging.getLogger("ladies_explorer.messaging.media")
 SAFE_INLINE_MIMES = {
     "image/jpeg", "image/png", "image/webp", "image/gif",
@@ -19,6 +21,7 @@ SAFE_INLINE_MIMES = {
     "audio/ogg", "audio/webm", "audio/mpeg", "audio/mp4",
 }
 LEGACY_MEDIA_PREFIX = "/archive/whatsapp/media/"
+VOICE_CONVERSION_ERROR = "Sprachnachricht konnte nicht verarbeitet werden"
 
 
 class MessagingMediaStore:
@@ -82,7 +85,6 @@ class MessagingMediaStore:
         name = self.archive_name(media)
         if not name:
             return payload
-        root = self.view_once_dir if payload.get("view_once") else self.media_dir
         try:
             target = self.resolve(name, private=bool(payload.get("view_once")))
         except (FileNotFoundError, ValueError):
@@ -134,7 +136,7 @@ class MessagingMediaStore:
 
     def normalize_voice(self, archive_name: str) -> tuple[str, str]:
         source = self.resolve(archive_name)
-        output = self.media_dir / f"voice-{uuid.uuid4().hex}.ogg"
+        output = self.media_dir / f".voice-{uuid.uuid4().hex}.ogg"
         command = [
             imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y",
             "-i", str(source), "-vn", "-c:a", "libopus", "-b:a", "32k", "-vbr", "on",
@@ -143,13 +145,21 @@ class MessagingMediaStore:
         try:
             completed = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
             if completed.returncode != 0 or not output.exists() or output.stat().st_size == 0:
-                raise ValueError((completed.stderr or "Sprachaufnahme konnte nicht in Opus/OGG umgewandelt werden")[-500:])
-            source.unlink(missing_ok=True)
-            return output.name, "audio/ogg; codecs=opus"
-        except Exception:
+                detail = completed.stderr or "ffmpeg returned no usable output"
+                LOGGER.warning("Voice conversion rejected detail=%s", redact_text(detail, limit=500))
+                raise ValueError(VOICE_CONVERSION_ERROR)
+            # Replace the uploaded blob atomically. Keeping the archive name means
+            # the request route can always clean up the same target on any later
+            # validation failure, while MIME/file-name metadata describe OGG.
+            output.replace(source)
+            return source.name, "audio/ogg; codecs=opus"
+        except ValueError:
             output.unlink(missing_ok=True)
-            source.unlink(missing_ok=True)
             raise
+        except Exception as exc:
+            output.unlink(missing_ok=True)
+            LOGGER.warning("Voice conversion failed detail=%s", redact_text(exc, limit=500))
+            raise ValueError(VOICE_CONVERSION_ERROR) from exc
 
     def delivery(self, message_type: str, media: dict[str, Any], *, private: bool = False) -> tuple[Path, str, str, bool]:
         target = self.resolve(self.archive_name(media), private=private, allow_legacy_media=private)
