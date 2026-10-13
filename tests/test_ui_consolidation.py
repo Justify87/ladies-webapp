@@ -140,7 +140,8 @@ class UiConsolidationTests(unittest.TestCase):
         pricing = (STATIC / "pricing.js").read_text(encoding="utf-8")
         styles = (STATIC / "pricing.css").read_text(encoding="utf-8")
 
-        self.assertIn("/timeline?limit=40", pricing)
+        self.assertIn("/timeline?limit=100", pricing)
+        self.assertNotIn("/timeline?limit=40", pricing)
         self.assertIn("data-price-magic-trigger", pricing)
         self.assertIn("data-price-inline-artifact", pricing)
         self.assertIn(".message-bubble", pricing)
@@ -150,6 +151,17 @@ class UiConsolidationTests(unittest.TestCase):
         self.assertNotIn(".price-magic-bar", styles)
         self.assertIn(".price-inline-trigger", styles)
         self.assertIn(".price-inline-card", styles)
+
+    def test_pricing_inline_state_survives_message_dom_rerenders(self):
+        pricing = (STATIC / "pricing.js").read_text(encoding="utf-8")
+
+        self.assertIn("function handleInlineInput(e)", pricing)
+        self.assertIn("document.addEventListener('input',handleInlineInput,true)", pricing)
+        self.assertIn("document.addEventListener('change',handleInlineInput,true)", pricing)
+        self.assertIn("function chatStructureChanged(records)", pricing)
+        self.assertIn("function observeChatMessages()", pricing)
+        self.assertIn("P.chatObserver.observe(box,{childList:true})", pricing)
+        self.assertIn("renderInlinePricing()", pricing)
 
     def test_messaging_styles_are_static_assets(self):
         index = TEMPLATE.read_text(encoding="utf-8")
