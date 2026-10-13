@@ -10,6 +10,7 @@ import { toast, closeSheet } from './app.js';
     drafts:new Map(),
     signalTimer:null,
     mutationTimer:null,
+    chatObserver:null,
     busy:false,
   };
   const q=(s,r=document)=>r.querySelector(s);
@@ -33,7 +34,7 @@ import { toast, closeSheet } from './app.js';
     try{
       const [signal,timeline]=await Promise.all([
         req(`/api/pricing/threads/${threadId}/signal`),
-        req(`/api/pricing/threads/${threadId}/timeline?limit=40`),
+        req(`/api/pricing/threads/${threadId}/timeline?limit=100`),
       ]);
       if(threadId!==P.threadId)return;
       P.signal=signal;
@@ -42,7 +43,7 @@ import { toast, closeSheet } from './app.js';
       [...P.drafts.keys()].forEach(id=>{if(!liveIds.has(Number(id)))P.drafts.delete(id)});
       renderInlinePricing();
     }catch{
-      if(threadId===P.threadId){P.signal=null;P.timeline=[];clearTimelineUi()}
+      if(threadId===P.threadId){P.signal=null;renderInlinePricing()}
     }
   }
 
@@ -96,10 +97,26 @@ import { toast, closeSheet } from './app.js';
     const card=q(`[data-price-inline-artifact="${id}"]`);if(!card)return;
     p.update_mode=card.querySelector('[data-price-update-mode]')?.value||p.update_mode;
     card.querySelectorAll('[data-price-offer-index]').forEach(row=>{const i=Number(row.dataset.priceOfferIndex),o=p.offers?.[i];if(!o)return;const duration=row.querySelector('[data-price-field="duration_minutes"]')?.value,amount=row.querySelector('[data-price-field="amount_eur"]')?.value;o.duration_minutes=duration?Number(duration):null;o.amount_cents=amount!==''&&amount!=null?Math.round(Number(amount)*100):null;o.label=o.duration_minutes?`${o.duration_minutes} Minuten`:(o.label||'Preis')});
-    card.querySelectorAll('[data-price-service-index]').forEach(row=>{const i=Number(row.dataset.priceServiceIndex),s=p.service_rules?.[i];if(!s)return;s.raw_label=row.querySelector('[data-price-service-field="raw_label"]')?.value||s.raw_label;s.status=row.querySelector('[data-price-service-field="status"]')?.value||s.status;const amount=row.querySelector('[data-price-service-field="amount_eur"]')?.value;s.amount_cents=amount!==''&&amount!=null?Math.round(Number(amount)*100):null});
+    card.querySelectorAll('[data-price-service-index]').forEach(row=>{const i=Number(row.dataset.priceServiceIndex),s=p.service_rules?.[i];if(!s)return;const label=row.querySelector('[data-price-service-field="raw_label"]')?.value,status=row.querySelector('[data-price-service-field="status"]')?.value;s.raw_label=label!=null?label:s.raw_label;s.status=status!=null?status:s.status;const amount=row.querySelector('[data-price-service-field="amount_eur"]')?.value;s.amount_cents=amount!==''&&amount!=null?Math.round(Number(amount)*100):null});
   }
   function findItemFromTarget(target){const root=target.closest('[data-price-inline-artifact]');if(!root)return null;const id=Number(root.dataset.priceInlineArtifact);return P.timeline.find(x=>Number(x.price_extraction_id)===id)||null}
   function scrollToArtifact(item){const id=Number(item?.price_extraction_id||0);const el=q(`[data-price-inline-artifact="${id}"]`);if(el)el.scrollIntoView({behavior:'smooth',block:'center'})}
+  function handleInlineInput(e){
+    if(!e.target.closest('[data-price-field], [data-price-service-field], [data-price-update-mode]'))return;
+    const item=findItemFromTarget(e.target);if(item?.status==='PENDING')syncDraft(item);
+  }
+  function chatStructureChanged(records){
+    return records.some(record=>[...record.addedNodes,...record.removedNodes].some(node=>{
+      if(node.nodeType!==1)return false;
+      return node.matches?.('[data-message-id], .chat-day, .chat-empty, .system-message')||Boolean(node.querySelector?.('[data-message-id]'));
+    }));
+  }
+  function observeChatMessages(){
+    const box=q('#chatMessages');if(!box)return;
+    P.chatObserver?.disconnect();
+    P.chatObserver=new MutationObserver(records=>{if(chatStructureChanged(records)&&chatVisible()&&P.threadId)renderInlinePricing()});
+    P.chatObserver.observe(box,{childList:true});
+  }
 
   async function createProposal(trigger='MANUAL',seedMessageId=null){
     if(!P.threadId||P.busy)return;
@@ -146,10 +163,12 @@ import { toast, closeSheet } from './app.js';
   }
   async function injectSettings(){const page=q('#settingsPage');if(!page||q('#pricingSettingsCard'))return;let data;try{data=await req('/api/pricing/runtime/status')}catch{return}const s=data.settings||{};page.insertAdjacentHTML('beforeend',`<section id="pricingSettingsCard" class="settings-card pricing-settings-card"><div class="settings-card-head"><span class="settings-icon">${icon('sparkles')}</span><div><b>Preiserkennung</b><small>Lokale Erkennung aus WhatsApp-Chats</small></div></div><label class="pricing-setting-row"><span><b>Preiserkennung</b><small>Regelbasiert, ohne Cloud</small></span><input type="checkbox" data-pricing-setting="price_intelligence_enabled" ${s.price_intelligence_enabled?'checked':''}></label><label class="pricing-setting-row"><span><b>Inline-Hinweis</b><small>Direkt an Nachrichten mit erkannten Preisen</small></span><input type="checkbox" data-pricing-setting="price_magic_button_enabled" ${s.price_magic_button_enabled?'checked':''}></label><label class="pricing-setting-row"><span><b>OCR für Preisbilder</b><small>${data.ocr?.available?'PP-OCRv6 Tiny bereit':'Optionales OCR-Paket nicht installiert'}</small></span><input type="checkbox" data-pricing-setting="price_ocr_enabled" ${s.price_ocr_enabled?'checked':''}></label><div class="pricing-runtime-row"><span>Semantisches Mini-Modell</span><strong>${data.semantic_model?.available?'FunctionGemma 270M bereit':'nicht installiert · optional'}</strong></div></section>`);page.querySelectorAll('[data-pricing-setting]').forEach(input=>input.onchange=async()=>{const body={};body[input.dataset.pricingSetting]=input.checked;try{await req('/api/pricing/settings',{method:'POST',body});if(input.dataset.pricingSetting==='price_magic_button_enabled')scheduleRefresh(50)}catch(e){input.checked=!input.checked;toast(e.message)}})}
 
-  document.addEventListener('ladies:messaging-thread-opened',event=>{const id=Number(event.detail?.threadId||0);if(!id)return;P.threadId=id;P.signal=null;P.timeline=[];P.drafts.clear();scheduleRefresh(60)});
+  document.addEventListener('ladies:messaging-thread-opened',event=>{const id=Number(event.detail?.threadId||0);if(!id)return;P.threadId=id;P.signal=null;P.timeline=[];P.drafts.clear();observeChatMessages();scheduleRefresh(60)});
   document.addEventListener('ladies:messaging-thread-updated',event=>{const id=Number(event.detail?.threadId||0);if(id&&id===P.threadId)scheduleRefresh(220)});
   document.addEventListener('ladies:messaging-thread-closed',()=>{P.threadId=null;P.signal=null;P.timeline=[];P.drafts.clear();clearTimeout(P.signalTimer);clearTimelineUi()});
+  document.addEventListener('input',handleInlineInput,true);
+  document.addEventListener('change',handleInlineInput,true);
   document.addEventListener('click',e=>{handleInlineClick(e);if(e.target.closest('#chatMore'))setTimeout(injectChatMenuAction,0)},true);
   const observer=new MutationObserver(()=>{if(q('#settingsScreen.active')){clearTimeout(P.mutationTimer);P.mutationTimer=setTimeout(injectSettings,80)}});observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});
-  document.addEventListener('DOMContentLoaded',()=>{if(q('#settingsScreen.active'))injectSettings()});
+  document.addEventListener('DOMContentLoaded',()=>{observeChatMessages();if(q('#settingsScreen.active'))injectSettings()});
 })();
