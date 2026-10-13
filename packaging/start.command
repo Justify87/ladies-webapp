@@ -9,16 +9,26 @@ fi
 
 CURRENT="$(tr -d '\r\n' < "$ROOT/current")"
 RELEASE="$ROOT/releases/$CURRENT"
-MANAGER="$RELEASE/tools/portable_manager.py"
+SOURCE_MANAGER="$RELEASE/tools/launcher_manager.py"
+STATE_DIR="$ROOT/.state"
+MANAGER="$STATE_DIR/launcher_manager.py"
 VENV_PYTHON="$RELEASE/.venv/bin/python"
 
+mkdir -p "$STATE_DIR"
+if [ -f "$SOURCE_MANAGER" ]; then
+  cp "$SOURCE_MANAGER" "$MANAGER.tmp"
+  mv "$MANAGER.tmp" "$MANAGER"
+fi
+
 if [ ! -f "$MANAGER" ]; then
-  echo "Fehler: Aktiver Release $CURRENT ist unvollständig: $MANAGER fehlt." >&2
+  echo "Fehler: Launcher Manager fehlt. Bitte die Portable-Installation mit einem aktuellen Release reparieren." >&2
   exit 1
 fi
 
+export PYTHONPATH="$RELEASE${PYTHONPATH:+:$PYTHONPATH}"
+
 if [ -x "$VENV_PYTHON" ]; then
-  exec "$VENV_PYTHON" "$MANAGER" start --root "$ROOT" "$@"
+  exec "$VENV_PYTHON" "$MANAGER" launch --root "$ROOT" "$@"
 fi
 
 if ! command -v uv >/dev/null 2>&1; then
@@ -28,8 +38,7 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 export UV_PYTHON_INSTALL_DIR="$ROOT/.runtime/python"
-export UV_PROJECT_ENVIRONMENT="$RELEASE/.venv"
 mkdir -p "$UV_PYTHON_INSTALL_DIR"
 uv python install 3.12 >/dev/null
 PYTHON="$(uv python find 3.12)"
-exec uv run --locked --project "$RELEASE" --python "$PYTHON" python "$MANAGER" start --root "$ROOT" "$@"
+exec "$PYTHON" "$MANAGER" launch --root "$ROOT" "$@"
