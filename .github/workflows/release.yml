@@ -2,169 +2,164 @@ name: Release
 
 on:
   push:
-    branches: [main]
-    paths:
-      - '.github/release-notes/v*.md'
+    tags:
+      - 'v*.*.*'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: ladies-release
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  prepare:
-    name: Prepare release candidate
-    runs-on: ubuntu-latest
+  build:
+    name: Build and verify release artifact
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
-    outputs:
-      exists: ${{ steps.existing.outputs.exists }}
-      note_file: ${{ steps.release.outputs.note_file }}
-      tag: ${{ steps.release.outputs.tag }}
-      version: ${{ steps.release.outputs.version }}
-      release_sha: ${{ steps.candidate.outputs.release_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
 
-      - uses: actions/setup-node@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: latest-known
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: ladies/messaging/whatsapp_worker/package-lock.json
 
-      - name: Resolve changed release note
-        id: release
-        shell: bash
-        env:
-          BEFORE: ${{ github.event.before }}
-          AFTER: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          mapfile -t NOTES < <(git diff --name-only "$BEFORE" "$AFTER" -- '.github/release-notes/v*.md')
-          if [ "${#NOTES[@]}" -ne 1 ]; then
-            echo "Expected exactly one changed release note, found ${#NOTES[@]}" >&2
-            exit 1
-          fi
-          NOTE_FILE="${NOTES[0]}"
-          TAG="$(basename "$NOTE_FILE" .md)"
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid release note name: $NOTE_FILE" >&2; exit 1; }
-          echo "note_file=$NOTE_FILE" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Check existing release
-        id: existing
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.release.outputs.tag }}
-        shell: bash
-        run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Synchronize versions
-        if: steps.existing.outputs.exists != 'true'
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
+      - name: Verify tag and version metadata
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check uv
           python - <<'PY'
+          import json
           import os
           import re
+          import tomllib
           from pathlib import Path
 
-          version = os.environ['VERSION']
-          path = Path('pyproject.toml')
-          text = path.read_text(encoding='utf-8')
-          updated, count = re.subn(
-              r'(?m)^version = "[^"]+"$',
-              f'version = "{version}"',
-              text,
-              count=1,
-          )
-          if count != 1:
-              raise SystemExit('Could not update version in pyproject.toml')
-          path.write_text(updated, encoding='utf-8')
-          PY
-          npm --prefix ladies/messaging/whatsapp_worker version "$VERSION" --no-git-tag-version --allow-same-version
-          uv lock
+          tag = os.environ['GITHUB_REF_NAME']
+          if not re.fullmatch(r'v\d+\.\d+\.\d+', tag):
+              raise SystemExit(f'Invalid release tag: {tag}')
+          version = tag[1:]
 
-      - name: Commit synchronized version
-        if: steps.existing.outputs.exists != 'true'
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
+          project = tomllib.loads(Path('pyproject.toml').read_text(encoding='utf-8'))
+          worker = json.loads(Path('ladies/messaging/whatsapp_worker/package.json').read_text(encoding='utf-8'))
+          lock = json.loads(Path('ladies/messaging/whatsapp_worker/package-lock.json').read_text(encoding='utf-8'))
+          note = Path('.github/release-notes') / f'{tag}.md'
+
+          observed = {
+              'pyproject.toml': str(project['project']['version']),
+              'package.json': str(worker['version']),
+              'package-lock.json': str(lock['version']),
+              'package-lock root package': str(lock['packages']['']['version']),
+          }
+          mismatches = [f'{name}={value}' for name, value in observed.items() if value != version]
+          if mismatches:
+              raise SystemExit('Release version mismatch: ' + ', '.join(mismatches) + f'; tag={tag}')
+          if not note.is_file() or not note.read_text(encoding='utf-8').strip():
+              raise SystemExit(f'Missing or empty release note: {note}')
+
+          print(f'Release metadata verified for {tag}')
+          PY
+
+      - name: Install locked dependencies
+        run: |
+          uv sync --locked --python 3.12
+          npm ci --prefix ladies/messaging/whatsapp_worker --omit=dev --no-audit --no-fund
+
+      - name: Verify release package contract
+        run: uv run python -m unittest -v tests/test_release_package.py
+
+      - name: Build portable release once
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add pyproject.toml uv.lock ladies/messaging/whatsapp_worker/package.json ladies/messaging/whatsapp_worker/package-lock.json
-          if ! git diff --cached --quiet; then
-            git commit -m "Release V${VERSION}"
-            git push origin HEAD:main
-          fi
+          uv run python tools/build_release.py --output dist --commit "${GITHUB_SHA}"
+          unzip -t dist/ladies-explorer-${GITHUB_REF_NAME}.zip
 
-      - name: Resolve final release commit
-        id: candidate
+      - name: Verify embedded release manifest
         shell: bash
-        run: echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import zipfile
+          from pathlib import Path
 
-  verify:
-    name: Verify release candidate
-    needs: prepare
-    if: needs.prepare.outputs.exists != 'true'
-    uses: ./.github/workflows/checks.yml
-    with:
-      checkout_ref: ${{ needs.prepare.outputs.release_sha }}
+          tag = os.environ['GITHUB_REF_NAME']
+          sha = os.environ['GITHUB_SHA']
+          archive = Path('dist') / f'ladies-explorer-{tag}.zip'
+          with zipfile.ZipFile(archive) as bundle:
+              manifest = json.loads(bundle.read('release-manifest.json'))
+
+          expected = {
+              'tag': tag,
+              'app_version': tag[1:],
+              'commit': sha,
+              'entrypoint': 'ladies_explorer.py',
+          }
+          for key, value in expected.items():
+              if manifest.get(key) != value:
+                  raise SystemExit(f'Manifest mismatch for {key}: {manifest.get(key)!r} != {value!r}')
+          print(f'Manifest verified in {archive}')
+          PY
+
+      - name: Upload verified release artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ladies-explorer-${{ github.ref_name }}
+          path: dist/ladies-explorer-${{ github.ref_name }}.zip
+          if-no-files-found: error
+          retention-days: 7
 
   publish:
-    name: Publish release
-    needs: [prepare, verify]
-    if: needs.prepare.outputs.exists != 'true'
-    runs-on: ubuntu-latest
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.release_sha }}
+      - name: Checkout tagged commit for release notes
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@v5
+      - name: Download verified release artifact
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
         with:
-          python-version: '3.12'
+          name: ladies-explorer-${{ github.ref_name }}
+          path: dist
 
-      - name: Build portable release asset
-        env:
-          RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+      - name: Publish release without rebuilding
         shell: bash
-        run: |
-          set -euo pipefail
-          python tools/build_release.py --output dist --commit "$RELEASE_SHA"
-          unzip -t dist/ladies-explorer-v*.zip
-
-      - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.prepare.outputs.tag }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-          NOTE_FILE: ${{ needs.prepare.outputs.note_file }}
-          RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
-        shell: bash
         run: |
           set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
           ASSET="dist/ladies-explorer-${TAG}.zip"
+          NOTE_FILE=".github/release-notes/${TAG}.md"
           test -f "$ASSET"
+          test -s "$NOTE_FILE"
           gh release create "$TAG" "$ASSET" \
-            --target "$RELEASE_SHA" \
+            --verify-tag \
+            --target "$GITHUB_SHA" \
             --title "Ladies Explorer V${VERSION}" \
             --notes-file "$NOTE_FILE"
