@@ -1,12 +1,19 @@
 @echo off
 setlocal
-set "ROOT=%~dp0"
+set "SCRIPT_DIR=%~dp0"
+set "ROOT=%SCRIPT_DIR%"
 
-if not exist "%ROOT%current" (
-  echo Fehler: Portable Installation ist noch nicht eingerichtet. Bitte zuerst packaging\install.cmd ausfuehren. 1>&2
-  exit /b 1
+if exist "%ROOT%current" goto root_ready
+for %%I in ("%SCRIPT_DIR%..") do set "PARENT=%%~fI\"
+if exist "%PARENT%current" (
+  set "ROOT=%PARENT%"
+  goto root_ready
 )
 
+echo Fehler: Portable Installation ist noch nicht eingerichtet. Bitte zuerst packaging\install.cmd ausfuehren. 1>&2
+exit /b 1
+
+:root_ready
 set /p CURRENT=<"%ROOT%current"
 set "RELEASE=%ROOT%releases\%CURRENT%"
 set "STATE_DIR=%ROOT%.state"
