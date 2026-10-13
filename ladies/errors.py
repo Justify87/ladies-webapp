@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from flask import Flask, g, jsonify, request
-from werkzeug.exceptions import HTTPException
+from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 
 
 @dataclass(slots=True)
@@ -53,6 +53,16 @@ def install_error_handlers(app: Flask) -> None:
     @app.errorhandler(AppError)
     def handle_app_error(error: AppError):
         return jsonify(error_payload(error)), error.status_code
+
+    @app.errorhandler(RequestEntityTooLarge)
+    def handle_payload_too_large(error: RequestEntityTooLarge):
+        if request.path.startswith("/api/"):
+            return jsonify({
+                "error": "Anfrage ist zu groß",
+                "code": "PAYLOAD_TOO_LARGE",
+                "request_id": getattr(g, "request_id", None),
+            }), 413
+        return error
 
     @app.errorhandler(Exception)
     def handle_unexpected_error(error: Exception):
