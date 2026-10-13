@@ -35,7 +35,8 @@ MANAGER_HOST = "127.0.0.1"
 APP_HOST = "0.0.0.0"
 APP_PORT = 8765
 READY_TIMEOUT = 45.0
-STOP_TIMEOUT = 10.0
+STOP_GRACE_TIMEOUT = 12.0
+STOP_FORCE_TIMEOUT = 5.0
 MAX_BACKUPS = 3
 MANAGER_STATE_FILE = "manager.json"
 MANAGER_COPY = "launcher_manager.py"
@@ -191,7 +192,7 @@ def restart_manager(root: Path, old_pid: int) -> int:
         time.sleep(0.2)
     if core._process_running(old_pid):
         raise core.PortableError("Alter Launcher Manager konnte nicht beendet werden")
-    return launch_manager(root, open_browser=True)
+    return launch_manager(root, open_browser=False)
 
 
 def ensure_release_environment(root: Path, tag: str, emit: Callable[[str], None] | None = None) -> Path:
@@ -204,7 +205,7 @@ def ensure_release_environment(root: Path, tag: str, emit: Callable[[str], None]
     if not uv:
         raise core.PortableError("uv ist nicht verfügbar; die Release-Umgebung kann nicht eingerichtet werden")
     if emit:
-        emit("Python-Umgebung wird synchronisiert …")
+        emit("Python-Umgebung wird vorbereitet …")
     env = os.environ.copy()
     env["UV_PYTHON_INSTALL_DIR"] = str(root / ".runtime" / "python")
     env["UV_PROJECT_ENVIRONMENT"] = str(release / ".venv")
@@ -226,6 +227,31 @@ def ensure_release_environment(root: Path, tag: str, emit: Callable[[str], None]
     return python
 
 
+def prepare_app_runtime(root: Path, tag: str, emit: Callable[[str], None] | None = None) -> Path:
+    """Prepare Node/npm dependencies before the user presses Start for the first time."""
+    release = root / core.RELEASES_DIR / core._tag(tag)
+    python = ensure_release_environment(root, tag, emit)
+    if not python.is_file():
+        return python
+    if emit:
+        emit("App-Laufzeit wird vorbereitet …")
+    code = (
+        "import ladies_explorer as app; "
+        "_node, npm = app.ensure_node_runtime(); "
+        "app.ensure_javascript_dependencies(npm)"
+    )
+    subprocess.run(
+        [str(python), "-c", code],
+        cwd=release,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT,
+    )
+    if emit:
+        emit("App-Laufzeit ist bereit.")
+    return python
+
+
 def _app_command(root: Path, python: Path) -> list[str]:
     current = core.read_current(root)
     release = root / core.RELEASES_DIR / current
@@ -239,13 +265,118 @@ def _app_command(root: Path, python: Path) -> list[str]:
     ]
 
 
-def _port_available(port: int) -> bool:
+def _port_available(port: int = APP_PORT) -> bool:
     with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
         try:
             sock.bind((APP_HOST, port))
             return True
         except OSError:
             return False
+
+
+def _port_listening(port: int = APP_PORT) -> bool:
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        sock.settimeout(0.25)
+        try:
+            return sock.connect_ex(("127.0.0.1", port)) == 0
+        except OSError:
+            return False
+
+
+def _listener_pids(port: int = APP_PORT) -> list[int]:
+    if os.name == "nt":
+        shell = shutil.which("powershell") or shutil.which("pwsh")
+        if not shell:
+            return []
+        script = (
+            f"Get-NetTCPConnection -State Listen -LocalPort {int(port)} -ErrorAction SilentlyContinue | "
+            "Select-Object -ExpandProperty OwningProcess -Unique"
+        )
+        command = [shell, "-NoProfile", "-NonInteractive", "-Command", script]
+    else:
+        lsof = shutil.which("lsof")
+        if not lsof:
+            return []
+        command = [lsof, "-nP", "-t", f"-iTCP:{int(port)}", "-sTCP:LISTEN"]
+    try:
+        result = subprocess.run(command, text=True, capture_output=True, timeout=3, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids: list[int] = []
+    for raw in result.stdout.splitlines():
+        try:
+            pid = int(raw.strip())
+        except ValueError:
+            continue
+        if pid > 0 and pid not in pids:
+            pids.append(pid)
+    return pids
+
+
+def _process_command(pid: int) -> str:
+    if pid <= 0:
+        return ""
+    if os.name == "nt":
+        shell = shutil.which("powershell") or shutil.which("pwsh")
+        if not shell:
+            return ""
+        script = f"(Get-CimInstance Win32_Process -Filter \"ProcessId = {pid}\").CommandLine"
+        command = [shell, "-NoProfile", "-NonInteractive", "-Command", script]
+    else:
+        ps = shutil.which("ps") or "/bin/ps"
+        command = [ps, "-p", str(pid), "-o", "command="]
+    try:
+        return subprocess.check_output(command, text=True, timeout=3, stderr=subprocess.DEVNULL).strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _process_active(pid: int) -> bool:
+    if not core._process_running(pid):
+        return False
+    if os.name != "nt":
+        ps = shutil.which("ps") or "/bin/ps"
+        try:
+            state = subprocess.check_output(
+                [ps, "-p", str(pid), "-o", "stat="], text=True, timeout=2, stderr=subprocess.DEVNULL
+            ).strip()
+            if state.startswith("Z"):
+                return False
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return True
+
+
+def _looks_like_ladies_process(root: Path, pid: int) -> bool:
+    command = _process_command(pid).replace("\\", "/").lower()
+    if "ladies_explorer.py" not in command:
+        return False
+    root_text = str(root.resolve()).replace("\\", "/").lower()
+    return root_text in command or "/ladiespoc/" in command or "/releases/" in command
+
+
+def _managed_app_pid(root: Path) -> int | None:
+    root = root.resolve()
+    tracked = core.active_pid(root)
+    if tracked is not None:
+        return tracked
+
+    for pid in _listener_pids(APP_PORT):
+        if _looks_like_ladies_process(root, pid):
+            core._atomic_write(core._pid_path(root), f"{pid}\n")
+            LOGGER.warning("Recovered untracked Ladies Explorer process pid=%s port=%s", pid, APP_PORT)
+            return pid
+    return None
+
+
+def _port_owner_summary(root: Path) -> tuple[bool, int | None, bool]:
+    busy = not _port_available(APP_PORT)
+    if not busy:
+        return False, None, False
+    pids = _listener_pids(APP_PORT)
+    managed = _managed_app_pid(root)
+    pid = managed or (pids[0] if pids else None)
+    return True, pid, managed is not None
 
 
 def _watch_app(process: subprocess.Popen[Any], pid_path: Path) -> None:
@@ -260,13 +391,20 @@ def _watch_app(process: subprocess.Popen[Any], pid_path: Path) -> None:
 def start_app(root: Path, emit: Callable[[str], None] | None = None, *, open_browser: bool = True) -> int:
     root = root.resolve()
     with core.lifecycle_lock(root, "start"):
-        existing = core.active_pid(root)
+        existing = _managed_app_pid(root)
         if existing is not None:
+            if emit:
+                emit(f"Ladies Explorer läuft bereits (PID {existing}).")
             if open_browser:
                 webbrowser.open(_app_url(), new=2)
             return existing
         if not _port_available(APP_PORT):
-            raise core.PortableError(f"Port {APP_PORT} ist bereits belegt")
+            pids = _listener_pids(APP_PORT)
+            detail = f" (PID {pids[0]})" if pids else ""
+            raise core.PortableError(
+                f"Port {APP_PORT} wird von einem anderen Prozess verwendet{detail}. "
+                "Der Manager beendet fremde Prozesse nicht automatisch."
+            )
         current = core.read_current(root)
         python = ensure_release_environment(root, current, emit)
         console = (_state_dir(root) / APP_CONSOLE_LOG).open("a", encoding="utf-8")
@@ -290,7 +428,7 @@ def start_app(root: Path, emit: Callable[[str], None] | None = None, *, open_bro
     if emit:
         emit(f"Ladies Explorer wird gestartet (PID {process.pid}) …")
     deadline = time.monotonic() + READY_TIMEOUT
-    request = urllib.request.Request(_app_url() + "api/config")
+    request = urllib.request.Request(_app_url())
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise core.PortableError(f"Ladies Explorer wurde mit Exit-Code {process.returncode} beendet")
@@ -312,51 +450,84 @@ def start_app(root: Path, emit: Callable[[str], None] | None = None, *, open_bro
     raise core.PortableError("Ladies Explorer wurde nicht rechtzeitig erreichbar")
 
 
-def _terminate_pid_tree(pid: int) -> None:
+def _terminate_pid_tree(pid: int, *, force: bool = False) -> None:
     if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/PID", str(pid), "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False
-        )
+        command = ["taskkill", "/PID", str(pid), "/T"]
+        if force:
+            command.append("/F")
+        subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         return
+
+    sig = signal.SIGKILL if force else signal.SIGTERM
     try:
-        os.killpg(pid, signal.SIGTERM)
+        pgid = os.getpgid(pid)
     except (ProcessLookupError, PermissionError, OSError):
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        pgid = None
+    try:
+        if pgid == pid:
+            os.killpg(pgid, sig)
+        else:
+            os.kill(pid, sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def _wait_until_stopped(pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _process_active(pid) and not _port_listening(APP_PORT):
+            return True
+        time.sleep(0.15)
+    return not _process_active(pid) and not _port_listening(APP_PORT)
+
+
+def _cleanup_pid(root: Path) -> None:
+    try:
+        core._pid_path(root).unlink()
+    except OSError:
+        pass
 
 
 def stop_app(root: Path, emit: Callable[[str], None] | None = None) -> bool:
     root = root.resolve()
     with core.lifecycle_lock(root, "stop"):
-        pid = core.active_pid(root)
+        pid = _managed_app_pid(root)
         if pid is None:
-            return False
-        if emit:
-            emit(f"Ladies Explorer wird beendet (PID {pid}) …")
-        _terminate_pid_tree(pid)
-        deadline = time.monotonic() + STOP_TIMEOUT
-        while time.monotonic() < deadline and core._process_running(pid):
-            time.sleep(0.15)
-        if core._process_running(pid):
-            if os.name == "nt":
-                subprocess.run(
-                    ["taskkill", "/PID", str(pid), "/T", "/F"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+            if _port_listening(APP_PORT):
+                pids = _listener_pids(APP_PORT)
+                detail = f" (PID {pids[0]})" if pids else ""
+                raise core.PortableError(
+                    f"Port {APP_PORT} ist weiterhin belegt{detail}, gehört aber nicht erkennbar zu Ladies Explorer."
                 )
-            else:
-                try:
-                    os.killpg(pid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError, OSError):
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-        try:
-            core._pid_path(root).unlink()
-        except OSError:
-            pass
+            _cleanup_pid(root)
+            if emit:
+                emit("Ladies Explorer ist bereits beendet.")
+            return False
+
+        if emit:
+            emit(f"Ladies Explorer wird sauber beendet (PID {pid}) …")
+        _terminate_pid_tree(pid, force=False)
+        stopped = _wait_until_stopped(pid, STOP_GRACE_TIMEOUT)
+
+        if not stopped:
+            if emit:
+                emit("Der Prozess reagiert noch. Beenden wird jetzt erzwungen …")
+            targets = {pid}
+            for listener_pid in _listener_pids(APP_PORT):
+                if _looks_like_ladies_process(root, listener_pid):
+                    targets.add(listener_pid)
+            for target in targets:
+                _terminate_pid_tree(target, force=True)
+            stopped = _wait_until_stopped(pid, STOP_FORCE_TIMEOUT)
+
+        if not stopped:
+            raise core.PortableError(
+                f"Ladies Explorer konnte nicht vollständig beendet werden; Port {APP_PORT} ist noch belegt."
+            )
+
+        _cleanup_pid(root)
+        if emit:
+            emit("Ladies Explorer wurde vollständig beendet. Port ist frei.")
         return True
 
 
@@ -408,7 +579,7 @@ def migrate_database(root: Path, tag: str, emit: Callable[[str], None] | None = 
     python = ensure_release_environment(root, tag, emit)
     db_path, _, _ = core._data_paths(root)
     if emit:
-        emit("Datenbankschema wird geprüft und bei Bedarf migriert …")
+        emit("Datenbank wird geprüft und bei Bedarf automatisch migriert …")
     code = (
         "from ladies_v9.database import Database; import sys; "
         "db=Database(sys.argv[1]); db.create_schema(); print(db.schema_version())"
@@ -456,18 +627,18 @@ class Controller:
         }
         self._latest: dict[str, Any] | None = None
         self.shutdown_callback: Callable[[], None] | None = None
-        self.restart_callback: Callable[[Path], None] | None = None
+        # Kept as diagnostics/backwards-compatible state only. The running manager
+        # intentionally stays open across updates and is not restarted in-session.
         self._restart_python: Path | None = None
 
     def emit(self, message: str) -> None:
         LOGGER.info(message)
         with self._lock:
-            messages = [*(self._operation.get("messages") or []), message][-20:]
+            messages = [*(self._operation.get("messages") or []), message][-24:]
             self._operation.update(messages=messages, message=message)
 
     def request_restart(self, python: Path) -> None:
-        with self._lock:
-            self._restart_python = python
+        self._restart_python = python
 
     def begin(self, name: str, action: Callable[[], None]) -> bool:
         with self._lock:
@@ -479,7 +650,6 @@ class Controller:
             }
 
         def runner() -> None:
-            restart_python: Path | None = None
             try:
                 action()
             except Exception as exc:
@@ -489,10 +659,6 @@ class Controller:
             finally:
                 with self._lock:
                     self._operation.update(active=False, finished_at=_now())
-                    restart_python = self._restart_python
-                    self._restart_python = None
-            if restart_python is not None and self.restart_callback:
-                self.restart_callback(restart_python)
 
         threading.Thread(target=runner, name=f"manager-{name}", daemon=True).start()
         return True
@@ -519,39 +685,40 @@ class Controller:
             self.emit("Ladies Explorer ist bereits aktuell.")
             return
 
-        was_running = core.active_pid(self.root) is not None
+        was_running = _managed_app_pid(self.root) is not None
         db_path, _, _ = core._data_paths(self.root)
         db_existed_before = db_path.exists()
         backup: Path | None = None
 
         try:
+            self.emit(f"Update {previous} → {latest} wird vorbereitet …")
             if was_running:
                 stop_app(self.root, self.emit)
 
             backup = _backup_database(self.root)
             if backup:
-                self.emit(f"Sicherungsstand erstellt: {backup.name}")
+                self.emit("Sicherungspunkt wurde automatisch erstellt.")
 
-            self.emit(f"Update {previous} → {latest} wird geladen und geprüft …")
+            self.emit("Neue Version wird geladen und geprüft …")
             installed = core.update_release(self.root)
             release_dir = self.root / core.RELEASES_DIR / installed
             _copy_manager_to_state(self.root, release_dir)
-            python = ensure_release_environment(self.root, installed, self.emit)
+            python = prepare_app_runtime(self.root, installed, self.emit)
             schema = migrate_database(self.root, installed, self.emit)
-            self.emit(f"Update abgeschlossen. Datenbankschema: {schema}")
             self._latest = {
                 "version": installed, "available": False,
                 "notes": str(release.get("body") or "").strip(), "checked_at": _now(),
             }
+            self.emit(f"Update installiert. Datenbankschema: {schema}")
             if was_running:
                 start_app(self.root, self.emit, open_browser=True)
-            self.emit("Launcher Manager wird auf die neue Version umgestellt …")
             self.request_restart(python)
+            self.emit("Update vollständig abgeschlossen. Der Manager bleibt geöffnet.")
         except Exception as original:
             recovery_errors: list[str] = []
-            self.emit("Update fehlgeschlagen; vorheriger Zustand wird wiederhergestellt …")
+            self.emit("Update fehlgeschlagen. Vorheriger Zustand wird wiederhergestellt …")
 
-            if core.active_pid(self.root) is not None:
+            if _managed_app_pid(self.root) is not None:
                 _recover_step("laufende App stoppen", lambda: stop_app(self.root, self.emit), recovery_errors)
 
             if backup and backup.exists():
@@ -590,7 +757,8 @@ class Controller:
     def status(self) -> dict[str, Any]:
         current = core.read_current(self.root)
         manifest = core.validate_release_dir(self.root / core.RELEASES_DIR / current, current)
-        pid = core.active_pid(self.root)
+        pid = _managed_app_pid(self.root)
+        port_busy, port_pid, port_managed = _port_owner_summary(self.root)
         db_path, data_dir, log_path = core._data_paths(self.root)
         backups = sorted((_state_dir(self.root) / "backups").glob("pre-update-*.sqlite3"), reverse=True)
         with self._lock:
@@ -603,6 +771,10 @@ class Controller:
             "running": pid is not None,
             "pid": pid,
             "app_url": _app_url(),
+            "port": APP_PORT,
+            "port_busy": port_busy,
+            "port_pid": port_pid,
+            "port_managed": port_managed,
             "data_dir": str(data_dir),
             "db_path": str(db_path),
             "last_backup": backups[0].name if backups else None,
@@ -620,7 +792,7 @@ def _json_bytes(payload: Any) -> bytes:
 
 def make_handler(controller: Controller, token: str, ui: str) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
-        server_version = "LadiesLauncher/1"
+        server_version = "LadiesLauncher/2"
 
         def log_message(self, fmt: str, *args: Any) -> None:
             LOGGER.debug(fmt, *args)
@@ -692,7 +864,7 @@ def make_handler(controller: Controller, token: str, ui: str) -> type[BaseHTTPRe
                     self._json(202, {"ok": True})
                 return
             if path == "/api/app/open":
-                if core.active_pid(controller.root) is None:
+                if _managed_app_pid(controller.root) is None:
                     self._json(409, {"error": "Ladies Explorer läuft nicht"})
                 else:
                     webbrowser.open(_app_url(), new=2)
@@ -728,20 +900,6 @@ def serve_manager(root: Path) -> int:
     controller = Controller(root)
     server = ThreadingHTTPServer((MANAGER_HOST, 0), make_handler(controller, token, ui_path.read_text(encoding="utf-8")))
     controller.shutdown_callback = server.shutdown
-
-    def schedule_restart(python: Path) -> None:
-        manager_path = _manager_copy_path(root)
-        _spawn_detached(
-            [
-                str(python), str(manager_path), "restart",
-                "--root", str(root), "--old-pid", str(os.getpid()),
-            ],
-            cwd=root,
-            log_path=_state_dir(root) / MANAGER_LOG,
-        )
-        server.shutdown()
-
-    controller.restart_callback = schedule_restart
     core._atomic_write(
         _manager_state_path(root),
         json.dumps({"pid": os.getpid(), "port": server.server_port, "token": token, "started_at": _now()}) + "\n",
@@ -773,6 +931,7 @@ def _run_install(args: argparse.Namespace) -> int:
     if legacy_root is not None and not legacy_stopped:
         legacy_stopped = core._confirm_legacy_stopped(legacy_root.resolve())
     tag = core.install(source, root, legacy_root, legacy_stopped=legacy_stopped)
+    prepare_app_runtime(root, tag, lambda message: print(f"[Setup] {message}"))
     print(f"[OK] Ladies Explorer {tag} installiert: {root}")
     return 0
 
