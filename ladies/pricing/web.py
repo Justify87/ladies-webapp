@@ -33,6 +33,14 @@ def install_pricing(app, *, data_dir, database: Database | None = None) -> Price
         except KeyError as exc:
             raise NotFoundError("Chat nicht gefunden") from exc
 
+    @app.get("/api/pricing/threads/<int:thread_id>/timeline")
+    def pricing_timeline(thread_id: int):
+        try:
+            limit = read_int(request.args, "limit", default=30, minimum=1, maximum=100)
+            return jsonify(service.timeline(thread_id, limit=limit))
+        except KeyError as exc:
+            raise NotFoundError("Chat nicht gefunden") from exc
+
     @app.post("/api/pricing/threads/<int:thread_id>/proposals")
     def pricing_create_proposal(thread_id: int):
         data = request.get_json(silent=True) or {}
