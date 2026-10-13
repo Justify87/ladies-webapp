@@ -73,18 +73,17 @@ jobs:
           from pathlib import Path
 
           version = os.environ['VERSION']
-          replacements = [
-              ('pyproject.toml', r'(?m)^version = "[^"]+"$', f'version = "{version}"'),
-              ('ladies_explorer.py', r'(?m)^VERSION = "[^"]+"$', f'VERSION = "{version}"'),
-              ('ladies/static/profile_messaging_ui.js', r"(?m)^  const APP_VERSION = '[^']+';$", f"  const APP_VERSION = '{version}';"),
-          ]
-          for filename, pattern, replacement in replacements:
-              path = Path(filename)
-              text = path.read_text(encoding='utf-8')
-              updated, count = re.subn(pattern, replacement, text, count=1)
-              if count != 1:
-                  raise SystemExit(f'Could not update version in {filename}')
-              path.write_text(updated, encoding='utf-8')
+          path = Path('pyproject.toml')
+          text = path.read_text(encoding='utf-8')
+          updated, count = re.subn(
+              r'(?m)^version = "[^"]+"$',
+              f'version = "{version}"',
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit('Could not update version in pyproject.toml')
+          path.write_text(updated, encoding='utf-8')
           PY
           npm --prefix ladies/messaging/whatsapp_worker version "$VERSION" --no-git-tag-version
           uv lock
@@ -100,9 +99,7 @@ jobs:
           cd ladies/messaging/whatsapp_worker
           npm ci --omit=dev --no-audit --no-fund
           node --check worker.mjs
-          node --check ../../static/messaging.js
-          node --check ../../static/messaging_bridge.js
-          node --check ../../static/profile_messaging_ui.js
+          find ../../static -type f \( -name '*.js' -o -name '*.mjs' \) -print -exec node --experimental-default-type=module --check {} \;
           node -e "const p=require('./node_modules/@whiskeysockets/baileys/package.json'); if(p.version!=='7.0.0-rc14') throw new Error('Unexpected Baileys '+p.version); console.log(p.version)"
 
       - name: Commit synchronized version
@@ -114,7 +111,7 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add pyproject.toml uv.lock ladies_explorer.py ladies/static/profile_messaging_ui.js ladies/messaging/whatsapp_worker/package.json ladies/messaging/whatsapp_worker/package-lock.json
+          git add pyproject.toml uv.lock ladies/messaging/whatsapp_worker/package.json ladies/messaging/whatsapp_worker/package-lock.json
           if ! git diff --cached --quiet; then
             git commit -m "Release V${VERSION}"
             git push origin HEAD:main
