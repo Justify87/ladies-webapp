@@ -8,6 +8,7 @@ from sqlalchemy import desc, func, or_, select
 from ladies_v9.models import PriceItem, PriceList, utcnow
 from ladies_v9.messaging.models import ChatMessage, ChatThread
 
+from .context import build_context
 from .extraction_core import PriceExtractionCore, dumps, loads
 from .models import (
     ChatMessageDerived,
@@ -19,7 +20,7 @@ from .models import (
     PriceOfferMeta,
     PriceServiceRule,
 )
-from .rules import merge_partial
+from .rules import extract_with_rules, merge_partial
 from .schema import empty_proposal, validate_proposal
 from .signal import detect_price_signal
 
@@ -29,9 +30,9 @@ HANDLED_STATUSES = {"ACCEPTED", "ACCEPTED_NO_CHANGE", "REJECTED"}
 class PriceIntelligenceService(PriceExtractionCore):
     """Canonical pricing service.
 
-    Extraction/OCR primitives live in ``PriceExtractionCore``; this service
-    owns the review/revision semantics that turn chat evidence into persisted
-    price-list revisions. There are no release-specific hardening subclasses.
+    Extraction/OCR/persistence primitives live in ``PriceExtractionCore``;
+    this service owns signal, proposal orchestration and review/revision
+    semantics. There are no release-specific hardening subclasses.
     """
 
     def _handled_through_message_id(self, db, thread_id: int) -> int:
@@ -108,6 +109,70 @@ class PriceIntelligenceService(PriceExtractionCore):
                 "ocr_available": self.ocr.available(),
                 "handled_through_message_id": handled_through,
             }
+
+    def create_proposal(
+        self,
+        thread_id: int,
+        *,
+        trigger_type: str = "MANUAL",
+        seed_message_id: int | None = None,
+    ) -> dict[str, Any]:
+        if not self.settings()["price_intelligence_enabled"]:
+            raise ValueError("Preiserkennung ist deaktiviert")
+        if seed_message_id is None:
+            signal = self.signal(thread_id)
+            seed_message_id = signal.get("seed_message_id")
+        with self.database.session() as db:
+            thread = db.get(ChatThread, int(thread_id))
+            if thread is None:
+                raise KeyError(thread_id)
+            if thread.person_id is None:
+                raise ValueError("Chat ist keiner Person zugeordnet")
+            context = build_context(
+                thread_id=thread.thread_id,
+                person_id=int(thread.person_id),
+                rows=self._context_rows(db, thread),
+                seed_message_id=seed_message_id,
+            )
+            current_id, current = self._current_proposal(db, int(thread.person_id))
+            proposal = extract_with_rules(context, has_existing_price_list=current_id is not None)
+            if not (proposal["offers"] or proposal["service_rules"] or proposal["conditions"]):
+                raise ValueError("In diesem Chatabschnitt wurden keine ausreichend strukturierten Preisangaben erkannt")
+
+            extraction = PriceExtraction(
+                person_id=thread.person_id,
+                thread_id=thread.thread_id,
+                status="PENDING",
+                trigger_type=str(trigger_type or "MANUAL").upper()[:24],
+                schema_version=proposal["schema_version"],
+                extractor_name="rules",
+                extractor_version="1",
+                original_proposal_json=dumps(proposal),
+                context_fingerprint=context.fingerprint,
+                base_price_list_id=current_id,
+            )
+            db.add(extraction)
+            db.flush()
+            for position, message in enumerate(context.messages):
+                role = (
+                    "PRIMARY"
+                    if message.message_id == seed_message_id
+                    else "IMAGE_OCR"
+                    if message.message_type == "IMAGE" and message.ocr_text
+                    else "QUESTION"
+                    if message.direction == "OUT"
+                    else "CONTEXT"
+                )
+                db.add(
+                    PriceExtractionMessage(
+                        price_extraction_id=extraction.price_extraction_id,
+                        message_id=message.message_id,
+                        role=role,
+                        position=position,
+                    )
+                )
+            db.flush()
+            return self._extraction_payload(db, extraction, current=current)
 
     def _legacy_items(self, db, price_list_id: int | None) -> list[PriceItem]:
         if not price_list_id:
