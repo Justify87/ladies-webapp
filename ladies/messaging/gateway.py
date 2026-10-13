@@ -224,7 +224,12 @@ class WhatsAppGateway:
             with self._lock:
                 proc = self.proc
             if not proc or proc.poll() is not None:
-                raise RuntimeError(self.detail or "WhatsApp-Worker nicht verfügbar")
+                LOGGER.warning(
+                    "WhatsApp command unavailable type=%s detail=%s",
+                    command_type,
+                    self._safe_worker_log(str(self.detail or "-")),
+                )
+                raise RuntimeError("WhatsApp ist derzeit nicht verfügbar")
             request_id = uuid.uuid4().hex
             response_queue: queue.Queue = queue.Queue(maxsize=1)
             with self._lock:
@@ -232,13 +237,23 @@ class WhatsAppGateway:
             try:
                 raw = json.dumps({"id": request_id, "type": command_type, **payload}, ensure_ascii=False)
                 if not proc.stdin:
-                    raise RuntimeError("Worker stdin nicht verfügbar")
+                    LOGGER.warning("WhatsApp worker stdin unavailable type=%s", command_type)
+                    raise RuntimeError("WhatsApp ist derzeit nicht verfügbar")
                 with self._write_lock:
                     proc.stdin.write(raw + "\n")
                     proc.stdin.flush()
-                event = response_queue.get(timeout=timeout)
+                try:
+                    event = response_queue.get(timeout=timeout)
+                except queue.Empty:
+                    LOGGER.warning("WhatsApp worker command timed out type=%s timeout=%s", command_type, timeout)
+                    raise RuntimeError("WhatsApp hat nicht rechtzeitig geantwortet") from None
                 if event.get("ok") is False:
-                    raise RuntimeError(event.get("message") or "Worker-Fehler")
+                    LOGGER.warning(
+                        "WhatsApp worker command rejected type=%s detail=%s",
+                        command_type,
+                        self._safe_worker_log(str(event.get("message") or "Worker-Fehler")),
+                    )
+                    raise RuntimeError("WhatsApp-Aktion konnte nicht ausgeführt werden")
                 return event
             finally:
                 with self._lock:
