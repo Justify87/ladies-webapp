@@ -13,10 +13,16 @@
 .home-filter-content .filter-grid{align-items:start}
 .home-filter-content .filter-card:has([data-filter-group="service"]){grid-column:1/-1}
 .home-filter-content .filter-card:has([data-filter-group="service"]) .mini-chips{max-height:220px;overflow-y:auto;align-content:flex-start;padding-right:2px;scrollbar-width:thin}
-.home-filter-cta{z-index:66;bottom:calc(var(--nav-h) + var(--safe-bottom) + 9px);box-shadow:0 13px 30px rgba(238,31,92,.3),0 3px 10px rgba(7,28,49,.14)}
+/* Permanent search action dock: always occupies the strip directly above the app navigation. */
+.home-filter-cta{z-index:66;bottom:calc(var(--nav-h) + var(--safe-bottom));width:min(100vw,430px);max-width:430px;height:62px;border-radius:0;border-top:1px solid rgba(255,255,255,.2);box-shadow:0 -1px 0 rgba(7,28,49,.08),0 -10px 26px rgba(7,28,49,.13);padding:0 18px}
 .home-filter-cta.preview-loading{background:linear-gradient(100deg,#f05b84,#df416d)}
-.home-filter-cta.zero-results{background:linear-gradient(100deg,#718399,#596b80);box-shadow:0 10px 24px rgba(41,61,82,.22)}
+.home-filter-cta.zero-results{background:linear-gradient(100deg,#718399,#596b80);box-shadow:0 -1px 0 rgba(7,28,49,.08),0 -10px 24px rgba(41,61,82,.18)}
 .home-filter-cta:disabled{opacity:.78}
+@media (min-width:431px){
+  /* The app frame is vertically centered on desktop. A fixed CTA therefore has
+     to include the frame's bottom offset; otherwise it falls below the phone. */
+  .home-filter-cta{bottom:calc(var(--nav-h) + max(16px, calc((100dvh - min(900px, calc(100dvh - 32px))) / 2)));width:430px}
+}
 @media (max-height:720px){
   #homeScreen .home-sheet.filter-home{padding-bottom:138px}
   .home-filter-content .filter-card:has([data-filter-group="service"]){max-height:none}

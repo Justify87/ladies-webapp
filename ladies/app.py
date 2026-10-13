@@ -17,7 +17,26 @@ from .search_preview import install_search_preview
 from .web import create_app as create_core_app
 
 LOGGER = logging.getLogger("ladies_explorer.messaging.integration")
+REQUEST_LOGGER = logging.getLogger("ladies_explorer")
 LAN_COOKIE = "ladies_access"
+BROWSER_CSP = "frame-ancestors 'self'; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com"
+
+
+class _ExpectedStreamDisconnectFilter(logging.Filter):
+    """Suppress Flask's error-level teardown record for a normal SSE disconnect."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if "REQUEST exception" not in record.getMessage() or "path=/api/messaging/events" not in record.getMessage():
+            return True
+        exc_info = record.exc_info
+        exc = exc_info[1] if isinstance(exc_info, tuple) and len(exc_info) > 1 else None
+        return not isinstance(exc, GeneratorExit)
+
+
+def _install_request_log_filter() -> None:
+    if any(isinstance(item, _ExpectedStreamDisconnectFilter) for item in REQUEST_LOGGER.filters):
+        return
+    REQUEST_LOGGER.addFilter(_ExpectedStreamDisconnectFilter())
 
 
 def _is_loopback(remote_addr: str | None) -> bool:
@@ -41,6 +60,7 @@ def create_app(
     default_radius: int = 20,
     profile_delay: float = 2.0,
 ):
+    _install_request_log_filter()
     # Pricing moves extraction refs before messaging may delete a duplicate source thread.
     install_pricing_identity_merge_listener()
     install_identity_merge_listener()
@@ -77,6 +97,26 @@ def create_app(
         if access.validate_session(request.cookies.get(LAN_COOKIE)):
             return None
         return jsonify(error="Dieses Gerät ist noch nicht mit Ladies Explorer gekoppelt."), 401
+
+    @app.after_request
+    def browser_runtime_policy(response):
+        # MediaPipe needs jsDelivr + Google model storage, but not Google's ODML
+        # telemetry endpoint. Only install the browser-wide policy when the route
+        # did not already provide a stricter policy (for example `sandbox` on
+        # active document downloads).
+        if not response.headers.get("Content-Security-Policy"):
+            response.headers["Content-Security-Policy"] = BROWSER_CSP
+
+        # These read-only summaries are triggered by several independent UI
+        # mutations. A one-second private browser cache coalesces bursts without
+        # turning application state into a long-lived cache.
+        if request.method == "GET" and response.status_code == 200 and request.path in {
+            "/api/dashboard",
+            "/api/storage",
+            "/api/messaging/threads",
+        }:
+            response.headers["Cache-Control"] = "private, max-age=1"
+        return response
 
     @app.get("/pair/<token>")
     def pair_lan_device(token: str):

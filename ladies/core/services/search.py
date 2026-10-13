@@ -26,6 +26,16 @@ def parse_search_request(
     height_min = read_int(payload, "height_min", default=140, minimum=140, maximum=200)
     height_max = read_int(payload, "height_max", default=200, minimum=height_min, maximum=200)
     selected = read_mapping(payload, "selected")
+
+    # Ladies exposes the Treffpunkt facets below the canonical Ladies category.
+    # Sending them against the unscoped /sex-anzeigen route makes the upstream
+    # site silently widen the radius (observed as 50/70 km for a 20 km request),
+    # which our fail-closed radius guard correctly rejects. Keep explicit user
+    # categories untouched, but scope an otherwise category-less Treffpunkt
+    # search to the canonical Ladies category for both preview and real search.
+    if not category and selected.get("treff"):
+        category = "huren-hostessen"
+
     return {
         "city_raw": city_raw,
         "radius": radius,

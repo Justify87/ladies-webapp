@@ -1,5 +1,4 @@
 @import url('/static/css/profile_messaging_ui.css');
-@import url('/static/css/messaging_complete.css');
 
 body.chat-profile-open #profileLayer{z-index:180!important}
 #chatAvatar,#chatIdentity{cursor:pointer}
