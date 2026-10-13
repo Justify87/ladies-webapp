@@ -16,7 +16,8 @@ class PortableLauncherContractTests(unittest.TestCase):
     def test_unix_start_launcher_opens_manager_with_embedded_python(self):
         text = (PACKAGING / "start.command").read_text(encoding="utf-8")
         self.assertIn('tools/launcher_manager.py', text)
-        self.assertIn('.state/launcher_manager.py', text)
+        self.assertIn('STATE_DIR="$ROOT/.state"', text)
+        self.assertIn('MANAGER="$STATE_DIR/launcher_manager.py"', text)
         self.assertIn('.venv/bin/python', text)
         self.assertIn('UV_PYTHON_INSTALL_DIR="$ROOT/.runtime/python"', text)
         self.assertIn('uv python install 3.12', text)
@@ -28,7 +29,8 @@ class PortableLauncherContractTests(unittest.TestCase):
     def test_windows_start_launcher_opens_manager_with_embedded_python(self):
         text = (PACKAGING / "start.cmd").read_text(encoding="utf-8")
         self.assertIn('tools\\launcher_manager.py', text)
-        self.assertIn('.state\\launcher_manager.py', text)
+        self.assertIn('set "STATE_DIR=%ROOT%.state"', text)
+        self.assertIn('set "MANAGER=%STATE_DIR%\\launcher_manager.py"', text)
         self.assertIn('.venv\\Scripts\\python.exe', text)
         self.assertIn('UV_PYTHON_INSTALL_DIR=%ROOT%.runtime\\python', text)
         self.assertIn('uv python install 3.12', text)
@@ -93,7 +95,6 @@ class PortableLauncherContractTests(unittest.TestCase):
             fake_bin = Path(tmp) / "bin"
             fake_bin.mkdir()
             capture = root / "python-run.txt"
-            env_capture = root / "uv-env.txt"
             uv = fake_bin / "uv"
             managed_python = fake_bin / "managed-python"
             managed_python.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE"\n', encoding="utf-8")
