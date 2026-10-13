@@ -1,5 +1,7 @@
 'use strict';
 
+import { openPerson, toast } from '../app.js';
+
 (() => {
   let currentChatThreadId = null;
   let profileOpenedFromChat = false;
