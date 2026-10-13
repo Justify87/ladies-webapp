@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import atexit
-import hashlib
 import json
 import logging
 import os
@@ -12,19 +11,31 @@ import subprocess
 import threading
 import time
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Callable
 
-LOGGER = logging.getLogger("ladies_explorer.messaging.worker")
+LOGGER = logging.getLogger("ladies_explorer.messaging.gateway")
 ALLOWED_STATES = {
     "UNAVAILABLE", "DEPENDENCY_MISSING", "NOT_CONFIGURED", "QR_REQUIRED",
     "PAIRING", "CONNECTING", "CONNECTED", "DISCONNECTED", "RECONNECTING",
     "LOGGED_OUT", "ERROR",
 }
 RESTART_DELAYS = (1, 2, 5, 10, 30)
+SERIAL_COMMANDS = {
+    "connect", "disconnect", "logout", "send_text", "send_media",
+    "send_reaction", "edit_message", "delete_message",
+}
 
 
-class BaileysWorkerManager:
+class WhatsAppGateway:
+    """Process/IPC boundary for the Baileys worker.
+
+    Runtime provisioning belongs to ``ladies_explorer.py``. This class only
+    verifies that the prepared runtime exists and then manages one worker
+    process plus its request/response IPC contract.
+    """
+
     def __init__(self, worker_dir: Path, auth_dir: Path, event_handler: Callable[[dict[str, Any]], None]):
         self.worker_dir = Path(worker_dir)
         self.auth_dir = Path(auth_dir)
@@ -32,6 +43,7 @@ class BaileysWorkerManager:
         self.proc: subprocess.Popen[str] | None = None
         self._lock = threading.RLock()
         self._write_lock = threading.Lock()
+        self._serial_lock = threading.Lock()
         self._pending: dict[str, queue.Queue] = {}
         self._stopping = False
         self._restart_attempt = 0
@@ -67,7 +79,7 @@ class BaileysWorkerManager:
     def dependency_status(self) -> tuple[bool, str | None]:
         node = shutil.which("node")
         if not node:
-            return False, "Node.js 20+ fehlt"
+            return False, "Node.js 20+ fehlt; starte Ladies Explorer über den Launcher"
         try:
             major = int(subprocess.check_output(
                 [node, "-p", "process.versions.node.split('.')[0]"],
@@ -78,51 +90,19 @@ class BaileysWorkerManager:
                 return False, "Node.js 20+ erforderlich"
         except Exception:
             return False, "Node.js-Version konnte nicht geprüft werden"
+        if not (self.worker_dir / "worker.mjs").is_file():
+            return False, "WhatsApp-Worker fehlt"
+        if not (self.worker_dir / "node_modules" / "@whiskeysockets" / "baileys").exists():
+            return False, "WhatsApp-Abhängigkeiten fehlen; starte Ladies Explorer über den Launcher"
         return True, None
-
-    def bootstrap(self) -> bool:
-        ok, detail = self.dependency_status()
-        if not ok:
-            self._set_state("DEPENDENCY_MISSING", detail)
-            return False
-        npm = shutil.which("npm")
-        if not npm:
-            self._set_state("DEPENDENCY_MISSING", "npm fehlt")
-            return False
-        lock = self.worker_dir / "package-lock.json"
-        if not lock.exists():
-            self._set_state("UNAVAILABLE", "WhatsApp-Lockfile fehlt")
-            return False
-        lock_digest = hashlib.sha256(lock.read_bytes()).hexdigest()
-        stamp = self.worker_dir / "node_modules" / ".ladies-lock.sha256"
-        modules = self.worker_dir / "node_modules" / "@whiskeysockets" / "baileys"
-        try:
-            if modules.exists() and stamp.exists() and stamp.read_text(encoding="ascii").strip() == lock_digest:
-                return True
-        except OSError:
-            pass
-        try:
-            LOGGER.info("Installing locked WhatsApp worker dependencies")
-            subprocess.run(
-                [npm, "ci", "--omit=dev", "--no-audit", "--no-fund"],
-                cwd=self.worker_dir,
-                check=True,
-                timeout=180,
-                stdout=subprocess.DEVNULL,
-            )
-            stamp.parent.mkdir(parents=True, exist_ok=True)
-            stamp.write_text(lock_digest + "\n", encoding="ascii")
-            return True
-        except Exception as exc:
-            LOGGER.error("WhatsApp worker bootstrap failed: %s", exc)
-            self._set_state("UNAVAILABLE", "WhatsApp-Komponente konnte nicht installiert werden")
-            return False
 
     def start(self) -> None:
         with self._lock:
             if self.proc and self.proc.poll() is None:
                 return
-            if not self.bootstrap():
+            ok, detail = self.dependency_status()
+            if not ok:
+                self._set_state("DEPENDENCY_MISSING", detail)
                 return
             self.auth_dir.mkdir(parents=True, exist_ok=True)
             self._stopping = False
@@ -160,12 +140,13 @@ class BaileysWorkerManager:
 
     @staticmethod
     def _safe_worker_log(line: str) -> str:
-        return re.sub(r"(?<!\d)(\d{3})\d{4,}(\d{4})(?!\d)", r"\1******\2", line)[:1200]
+        safe = re.sub(r"(?<!\d)(\d{3})\d{4,}(\d{4})(?!\d)", r"\1******\2", line)
+        safe = re.sub(r"\b[0-9A-Za-z_.:-]{5,}@(s\.whatsapp\.net|lid|g\.us)\b", "[WHATSAPP_ADDRESS]", safe, flags=re.I)
+        return safe[:1200]
 
     @staticmethod
     def _worker_log_level(line: str) -> tuple[int, str]:
-        """Map Pino's numeric severity instead of promoting every worker line to INFO."""
-        safe = BaileysWorkerManager._safe_worker_log(line)
+        safe = WhatsAppGateway._safe_worker_log(line)
         try:
             payload = json.loads(line)
             level = int(payload.get("level") or 0)
@@ -237,29 +218,46 @@ class BaileysWorkerManager:
         self.event_handler(event)
 
     def command(self, command_type: str, timeout: int = 15, **payload):
-        self.start()
-        with self._lock:
-            proc = self.proc
-        if not proc or proc.poll() is not None:
-            raise RuntimeError(self.detail or "WhatsApp-Worker nicht verfügbar")
-        request_id = uuid.uuid4().hex
-        response_queue: queue.Queue = queue.Queue(maxsize=1)
-        with self._lock:
-            self._pending[request_id] = response_queue
-        try:
-            raw = json.dumps({"id": request_id, "type": command_type, **payload}, ensure_ascii=False)
-            if not proc.stdin:
-                raise RuntimeError("Worker stdin nicht verfügbar")
-            with self._write_lock:
-                proc.stdin.write(raw + "\n")
-                proc.stdin.flush()
-            event = response_queue.get(timeout=timeout)
-            if event.get("ok") is False:
-                raise RuntimeError(event.get("message") or "Worker-Fehler")
-            return event
-        finally:
+        guard = self._serial_lock if command_type in SERIAL_COMMANDS else nullcontext()
+        with guard:
+            self.start()
             with self._lock:
-                self._pending.pop(request_id, None)
+                proc = self.proc
+            if not proc or proc.poll() is not None:
+                LOGGER.warning(
+                    "WhatsApp command unavailable type=%s detail=%s",
+                    command_type,
+                    self._safe_worker_log(str(self.detail or "-")),
+                )
+                raise RuntimeError("WhatsApp ist derzeit nicht verfügbar")
+            request_id = uuid.uuid4().hex
+            response_queue: queue.Queue = queue.Queue(maxsize=1)
+            with self._lock:
+                self._pending[request_id] = response_queue
+            try:
+                raw = json.dumps({"id": request_id, "type": command_type, **payload}, ensure_ascii=False)
+                if not proc.stdin:
+                    LOGGER.warning("WhatsApp worker stdin unavailable type=%s", command_type)
+                    raise RuntimeError("WhatsApp ist derzeit nicht verfügbar")
+                with self._write_lock:
+                    proc.stdin.write(raw + "\n")
+                    proc.stdin.flush()
+                try:
+                    event = response_queue.get(timeout=timeout)
+                except queue.Empty:
+                    LOGGER.warning("WhatsApp worker command timed out type=%s timeout=%s", command_type, timeout)
+                    raise RuntimeError("WhatsApp hat nicht rechtzeitig geantwortet") from None
+                if event.get("ok") is False:
+                    LOGGER.warning(
+                        "WhatsApp worker command rejected type=%s detail=%s",
+                        command_type,
+                        self._safe_worker_log(str(event.get("message") or "Worker-Fehler")),
+                    )
+                    raise RuntimeError("WhatsApp-Aktion konnte nicht ausgeführt werden")
+                return event
+            finally:
+                with self._lock:
+                    self._pending.pop(request_id, None)
 
     def stop(self) -> None:
         with self._lock:

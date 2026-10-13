@@ -12,10 +12,10 @@ import shutil
 import socket
 import subprocess
 import sys
+import tomllib
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-VERSION = "9.5.0"
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_FILE = SCRIPT_DIR / "pyproject.toml"
 NODE_VERSION = "22.23.3"
@@ -26,16 +26,40 @@ BOOTSTRAP_MARKER = "LADIES_BOOTSTRAP_CHILD"
 BOOTSTRAP_CHECK_ONLY = "LADIES_BOOTSTRAP_CHECK_ONLY"
 PYTHON_MIN = (3, 12)
 PYTHON_MAX_EXCLUSIVE = (3, 14)
+IMPORT_MODULES = {
+    "Flask": "flask",
+    "requests": "requests",
+    "beautifulsoup4": "bs4",
+    "Pillow": "PIL",
+    "SQLAlchemy": "sqlalchemy",
+    "orjson": "orjson",
+    "qrcode": "qrcode",
+    "nodeenv": "nodeenv",
+    "imageio-ffmpeg": "imageio_ffmpeg",
+}
+
+
+def _project_metadata() -> tuple[str, tuple[str, ...]]:
+    if not PROJECT_FILE.exists():
+        raise RuntimeError(f"Projektdefinition fehlt: {PROJECT_FILE}")
+    data = tomllib.loads(PROJECT_FILE.read_text(encoding="utf-8"))
+    project = data.get("project") or {}
+    return str(project.get("version") or "0.0.0"), tuple(project.get("dependencies") or ())
+
+
+VERSION, PROJECT_DEPENDENCIES = _project_metadata()
+
+
+def _parse_requirement(requirement: str) -> tuple[str, str]:
+    match = re.match(r"^\s*([A-Za-z0-9_.-]+)\s*(.*)$", requirement)
+    if not match:
+        raise ValueError(f"Ungültige Projektabhängigkeit: {requirement}")
+    return match.group(1), match.group(2).strip()
+
+
 PYTHON_REQUIREMENTS = {
-    "Flask": ("flask", (3, 1), (4, 0)),
-    "requests": ("requests", (2, 32), (3, 0)),
-    "beautifulsoup4": ("bs4", (4, 12), (5, 0)),
-    "Pillow": ("PIL", (10, 0), (15, 0)),
-    "SQLAlchemy": ("sqlalchemy", (2, 0), (3, 0)),
-    "orjson": ("orjson", (3, 10), (4, 0)),
-    "qrcode": ("qrcode", (8, 0), (9, 0)),
-    "nodeenv": ("nodeenv", (1, 10), (2, 0)),
-    "imageio-ffmpeg": ("imageio_ffmpeg", (0, 6), (1, 0)),
+    dist_name: (IMPORT_MODULES.get(dist_name, dist_name.replace("-", "_")), spec)
+    for dist_name, spec in map(_parse_requirement, PROJECT_DEPENDENCIES)
 }
 
 
@@ -48,6 +72,29 @@ def _version_tuple(value: str) -> tuple[int, int, int]:
     return tuple((parts + [0, 0, 0])[:3])  # type: ignore[return-value]
 
 
+def _version_satisfies(value: str, spec: str) -> bool:
+    current = _version_tuple(value)
+    for clause in (part.strip() for part in spec.split(",") if part.strip()):
+        match = re.match(r"(>=|<=|==|!=|>|<)\s*([0-9][0-9A-Za-z_.-]*)", clause)
+        if not match:
+            continue
+        operator, expected_raw = match.groups()
+        expected = _version_tuple(expected_raw)
+        if operator == ">=" and not current >= expected:
+            return False
+        if operator == "<=" and not current <= expected:
+            return False
+        if operator == ">" and not current > expected:
+            return False
+        if operator == "<" and not current < expected:
+            return False
+        if operator == "==" and not current == expected:
+            return False
+        if operator == "!=" and not current != expected:
+            return False
+    return True
+
+
 def _python_version_supported() -> bool:
     current = sys.version_info[:2]
     return PYTHON_MIN <= current < PYTHON_MAX_EXCLUSIVE
@@ -56,14 +103,19 @@ def _python_version_supported() -> bool:
 def _project_ready() -> bool:
     if not _python_version_supported() or importlib.util.find_spec("ladies_v9") is None:
         return False
-    for dist_name, (module_name, minimum, maximum) in PYTHON_REQUIREMENTS.items():
+    try:
+        if importlib.metadata.version("ladies-explorer") != VERSION:
+            return False
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    for dist_name, (module_name, spec) in PYTHON_REQUIREMENTS.items():
         if importlib.util.find_spec(module_name) is None:
             return False
         try:
-            current = _version_tuple(importlib.metadata.version(dist_name))
+            current = importlib.metadata.version(dist_name)
         except importlib.metadata.PackageNotFoundError:
             return False
-        if not (_version_tuple(".".join(map(str, minimum))) <= current < _version_tuple(".".join(map(str, maximum)))):
+        if not _version_satisfies(current, spec):
             return False
     return True
 

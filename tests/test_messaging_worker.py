@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import io
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from ladies_v9.identity import normalize_phone_number
-from ladies_v9.messaging.whatsapp_manager import BaileysWorkerManager
+from ladies_v9.messaging.gateway import WhatsAppGateway
 
 
 class WorkerManagerTests(unittest.TestCase):
@@ -14,14 +16,14 @@ class WorkerManagerTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
         self.events = []
-        self.manager = BaileysWorkerManager(root / "worker", root / "auth", self.events.append)
+        self.manager = WhatsAppGateway(root / "worker", root / "auth", self.events.append)
 
     def tearDown(self):
         self.manager.stop()
         self.tmp.cleanup()
 
     def test_missing_node_is_nonfatal_dependency_state(self):
-        with patch("ladies_v9.messaging.whatsapp_manager.shutil.which", return_value=None):
+        with patch("ladies_v9.messaging.gateway.shutil.which", return_value=None):
             ok, detail = self.manager.dependency_status()
             self.assertFalse(ok)
             self.assertIn("Node.js 20+", detail)
@@ -32,10 +34,20 @@ class WorkerManagerTests(unittest.TestCase):
         self.manager._set_state("invented")
         self.assertEqual(self.manager.state, "ERROR")
 
-    def test_worker_log_masks_long_numeric_identifiers(self):
+    def test_worker_log_masks_whatsapp_identifiers(self):
         masked = self.manager._safe_worker_log("jid=4917612345678@s.whatsapp.net")
+        self.assertNotIn("4917612345678@s.whatsapp.net", masked)
         self.assertNotIn("4917612345678", masked)
-        self.assertIn("******", masked)
+        self.assertEqual(masked, "jid=491******5678@s.whatsapp.net")
+
+    def test_worker_command_error_is_not_exposed_to_caller(self):
+        secret_detail = "send failed for 4917612345678@s.whatsapp.net auth=/private/session"
+        self.manager.proc = SimpleNamespace(poll=lambda: None, stdin=io.StringIO())
+        with patch("ladies_v9.messaging.gateway.queue.Queue.get", return_value={"ok": False, "message": secret_detail}):
+            with self.assertRaisesRegex(RuntimeError, "^WhatsApp-Aktion konnte nicht ausgeführt werden$") as raised:
+                self.manager.command("send_text", jid="4917612345678@s.whatsapp.net", text="Hallo")
+        self.assertNotIn("4917612345678", str(raised.exception))
+        self.assertNotIn("/private/session", str(raised.exception))
 
 
 class PhoneNormalizationTests(unittest.TestCase):

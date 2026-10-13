@@ -1,18 +1,18 @@
 [build-system]
-requires = ["setuptools>=75"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "ladies-explorer"
-version = "9.5.0"
-description = "Local mobile-first Ladies Explorer"
+version = "9.6.0"
+description = "Local Ladies.de explorer with identity, history and media archiving"
 requires-python = ">=3.12,<3.14"
 dependencies = [
   "Flask>=3.1,<4",
   "requests>=2.32,<3",
   "beautifulsoup4>=4.12,<5",
   "Pillow>=10,<15",
-  "SQLAlchemy>=2.0,<3",
+  "SQLAlchemy>=2,<3",
   "orjson>=3.10,<4",
   "qrcode>=8,<9",
   "nodeenv>=1.10,<2",
@@ -20,15 +20,25 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["ladies_v9", "ladies_v9.messaging", "ladies_v9.pricing"]
-py-modules = ["ladies_explorer"]
+package-dir = {"ladies_v9" = "ladies"}
+packages = [
+  "ladies_v9",
+  "ladies_v9.core",
+  "ladies_v9.core.repositories",
+  "ladies_v9.core.services",
+  "ladies_v9.messaging",
+  "ladies_v9.pricing",
+]
 include-package-data = true
 
-[tool.setuptools.package-dir]
-ladies_v9 = "ladies"
-"ladies_v9.messaging" = "ladies/messaging"
-"ladies_v9.pricing" = "ladies/pricing"
-
 [tool.setuptools.package-data]
-ladies_v9 = ["static/*", "templates/*"]
-"ladies_v9.messaging" = ["whatsapp_worker/*"]
+ladies_v9 = [
+  "templates/*.html",
+  "static/*.js",
+  "static/*.css",
+  "static/*.svg",
+  "static/js/*.js",
+  "static/css/*.css",
+  "messaging/whatsapp_worker/*.mjs",
+  "messaging/whatsapp_worker/*.json",
+]

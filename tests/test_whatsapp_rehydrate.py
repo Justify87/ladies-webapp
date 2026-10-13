@@ -8,7 +8,8 @@ from unittest.mock import patch
 from sqlalchemy import func, select
 
 from ladies_v9.models import Person, PersonIdentifier, PersonUserState
-from ladies_v9.messaging.models import ChatMessage, ChatThread
+from ladies_v9.messaging.history_cache import REHYDRATE_LIMIT
+from ladies_v9.messaging.models import ChatMessage, ChatThread, ContactEndpoint
 
 
 PHONE = "+4917612345678"
@@ -88,7 +89,7 @@ class WhatsAppRehydrateTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.data_dir = self.root / "data"
-        patcher = patch("ladies_v9.messaging.service_v92.BaileysWorkerManager", FakeWorker)
+        patcher = patch("ladies_v9.messaging.service.WhatsAppGateway", FakeWorker)
         self.addCleanup(patcher.stop)
         patcher.start()
         from ladies_v9.messaging import MessagingService
@@ -111,6 +112,7 @@ class WhatsAppRehydrateTests(unittest.TestCase):
         fresh.worker.state = "CONNECTED"
         result = fresh.rehydrate_recent_history(person_id, limit=10)
 
+        self.assertEqual(REHYDRATE_LIMIT, 10)
         self.assertEqual(result["restored"], 10)
         self.assertEqual(result["requested"], 0)
         with fresh.database.session() as db:
@@ -163,21 +165,75 @@ class WhatsAppRehydrateTests(unittest.TestCase):
         self.assertEqual(result["restored"], 2)
         self.assertEqual(result["requested"], 0)
 
-    def test_source_contract_keeps_full_history_disabled_and_like_trigger_bounded(self):
-        root = Path(__file__).resolve().parents[1]
-        worker = (root / "ladies" / "messaging" / "whatsapp_worker" / "worker.mjs").read_text(encoding="utf-8")
-        app = (root / "ladies" / "app.py").read_text(encoding="utf-8")
-        messaging = (root / "ladies" / "messaging" / "__init__.py").read_text(encoding="utf-8")
+    def test_metadata_only_history_seed_preserves_local_media_for_rehydrate(self):
+        original = self.MessagingService(self.root / "old-media.sqlite3", self.data_dir)
+        person_id = add_person(original, "Alt")
+        original.sync_person(person_id)
+        media_file = original.media_dir / "cached-media.jpg"
+        media_file.write_bytes(b"cached-media")
 
-        self.assertIn("syncFullHistory: false", worker)
-        self.assertIn("MAX_REHYDRATE_MESSAGES = 10", worker)
-        self.assertIn("HistorySyncType.ON_DEMAND", worker)
-        self.assertIn("fetchMessageHistory(count, oldestKey, oldestTimestampMs)", worker)
-        self.assertIn("type: 'history_seed'", worker)
-        self.assertIn('submitted.get("preference")', app)
-        self.assertIn('== "LIKE"', app)
-        self.assertIn("rehydrate_recent_history(int(person_id), limit=10)", app)
-        self.assertIn("REHYDRATE_LIMIT = 10", messaging)
+        live = message_payload(7)
+        live.update({
+            "message_type": "IMAGE",
+            "text": None,
+            "media": {
+                "archive_name": media_file.name,
+                "sha256": "live-sha256",
+                "private_view_once": True,
+                "mime_type": "image/jpeg",
+                "byte_size": len(b"cached-media"),
+                "width": 320,
+            },
+        })
+        original._ingest_message(live)
+
+        seed = message_payload(7)
+        seed.update({
+            "message_type": "IMAGE",
+            "text": None,
+            "media": {
+                "mime_type": "image/jpeg",
+                "width": 640,
+                "height": 480,
+            },
+        })
+        original._worker_event({"type": "history_seed", "payloads": [seed]})
+
+        with original.database.session() as db:
+            endpoint = db.scalar(select(ContactEndpoint).where(ContactEndpoint.person_id == person_id))
+            self.assertIsNotNone(endpoint)
+            cached = original.history_cache.for_endpoint(endpoint)
+        row = next(item for item in cached if item["provider_message_id"] == "old-7")
+        self.assertEqual(row["media"]["archive_name"], media_file.name)
+        self.assertEqual(row["media"]["sha256"], "live-sha256")
+        self.assertTrue(row["media"]["private_view_once"])
+        self.assertEqual(row["media"]["width"], 640)
+        self.assertEqual(row["media"]["height"], 480)
+
+        fresh = self.MessagingService(self.root / "fresh-media.sqlite3", self.data_dir)
+        fresh_person_id = add_person(fresh, "Neu")
+        fresh.worker.state = "DISCONNECTED"
+        result = fresh.rehydrate_recent_history(fresh_person_id, limit=10)
+        self.assertEqual(result["restored"], 1)
+
+        with fresh.database.session() as db:
+            restored = db.scalar(select(ChatMessage).where(ChatMessage.provider_message_id == "old-7"))
+            self.assertIsNotNone(restored)
+            restored_id = restored.message_id
+        path, mime, _name, attachment = fresh.media_path(restored_id)
+        self.assertEqual(path, media_file.resolve())
+        self.assertEqual(mime, "image/jpeg")
+        self.assertFalse(attachment)
+
+    def test_rehydrate_limit_is_enforced_even_when_caller_requests_more(self):
+        original = self.MessagingService(self.root / "old.sqlite3", self.data_dir)
+        add_person(original, "Alt")
+        for index in range(20):
+            original._ingest_message(message_payload(index))
+        fresh = self.MessagingService(self.root / "fresh.sqlite3", self.data_dir)
+        person_id = add_person(fresh, "Neu")
+        result = fresh.rehydrate_recent_history(person_id, limit=100)
+        self.assertEqual(result["restored"], REHYDRATE_LIMIT)
 
 
 if __name__ == "__main__":

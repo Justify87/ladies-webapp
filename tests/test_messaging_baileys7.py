@@ -34,10 +34,10 @@ class Baileys7IdentityTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        patcher = patch("ladies_v9.messaging.service_v92.BaileysWorkerManager", FakeWorker)
+        patcher = patch("ladies_v9.messaging.service.WhatsAppGateway", FakeWorker)
         self.addCleanup(patcher.stop)
         patcher.start()
-        from ladies_v9.messaging.service_v92 import MessagingService
+        from ladies_v9.messaging.service import MessagingService
         self.MessagingService = MessagingService
         self.service = MessagingService(self.root / "app.sqlite3", self.root / "data")
 

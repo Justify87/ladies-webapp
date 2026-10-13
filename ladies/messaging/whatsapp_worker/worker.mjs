@@ -30,12 +30,17 @@ const logger = pino({ level: process.env.LADIES_BAILEYS_LOG_LEVEL || 'warn' }, p
 const reconnectDelays = [1000, 2000, 5000, 10000, 30000]
 const MAX_INCOMING_MEDIA = 96 * 1024 * 1024
 const MAX_REHYDRATE_MESSAGES = 10
+const SERIAL_COMMANDS = new Set([
+  'connect', 'disconnect', 'logout', 'send_text', 'send_media',
+  'send_reaction', 'edit_message', 'delete_message', 'shutdown',
+])
 let reconnectAttempt = 0
 let sock = null
 let stopped = false
 let manualDisconnect = false
 let connecting = null
 let localSendsInFlight = 0
+let commandChain = Promise.resolve()
 const locallySentIds = new Map()
 const localMessageIds = new Map()
 const pendingOwnMessages = new Map()
@@ -469,7 +474,11 @@ async function sendAndReply(id, command, content, options = {}) {
 
 function mediaContent(command) {
   const filePath = path.resolve(String(command.file_path || ''))
-  if (!filePath || !fs.existsSync(filePath)) throw new Error('Mediendatei nicht gefunden')
+  const relative = path.relative(mediaDir, filePath)
+  if (!filePath || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error('Mediendatei liegt außerhalb des freigegebenen Verzeichnisses')
+  }
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) throw new Error('Mediendatei nicht gefunden')
   const mediaType = String(command.media_type || '').toUpperCase()
   const source = { url: filePath }
   const caption = command.caption ? String(command.caption) : undefined
@@ -734,9 +743,19 @@ async function handle(command) {
   }
 }
 
+function dispatchCommand(command) {
+  if (!SERIAL_COMMANDS.has(command.type)) {
+    void handle(command)
+    return
+  }
+  commandChain = commandChain
+    .then(() => handle(command))
+    .catch(err => logger.error({ err: errorText(err) }, 'serialized worker command failed'))
+}
+
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })
 rl.on('line', line => {
-  try { handle(JSON.parse(line)) }
+  try { dispatchCommand(JSON.parse(line)) }
   catch { emit({ type: 'error', code: 'INVALID_COMMAND', message: 'Ungültiges JSON-Kommando' }) }
 })
 
