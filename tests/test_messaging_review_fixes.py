@@ -215,7 +215,7 @@ class MessagingReviewFixTests(unittest.TestCase):
         self.assertEqual(name, "danger.html")
         self.assertTrue(attachment)
 
-    def test_chromium_webm_voice_is_normalized_to_ogg_opus(self):
+    def test_chromium_webm_voice_is_normalized_in_place_to_ogg_opus(self):
         source = self.service.media_dir / "recording.webm"
         source.write_bytes(b"webm-placeholder")
 
@@ -239,9 +239,30 @@ class MessagingReviewFixTests(unittest.TestCase):
         self.assertEqual(result["message_type"], "VOICE")
         command, payload = next(x for x in reversed(self.service.worker.commands) if x[0] == "send_media")
         self.assertEqual(command, "send_media")
-        self.assertTrue(payload["file_path"].endswith(".ogg"))
+        self.assertEqual(Path(payload["file_path"]), source.resolve())
         self.assertEqual(payload["mime_type"], "audio/ogg; codecs=opus")
-        self.assertFalse(source.exists())
+        self.assertEqual(source.read_bytes(), b"OggS")
+
+    def test_voice_conversion_error_does_not_expose_ffmpeg_path(self):
+        source = self.service.media_dir / "private-recording.webm"
+        source.write_bytes(b"webm-placeholder")
+        private_detail = f"{source}: Invalid data found when processing input"
+
+        with patch("ladies_v9.messaging.media_store.imageio_ffmpeg.get_ffmpeg_exe", return_value="ffmpeg"), patch(
+            "ladies_v9.messaging.media_store.subprocess.run",
+            return_value=SimpleNamespace(returncode=1, stderr=private_detail),
+        ):
+            with self.assertRaisesRegex(ValueError, "Sprachnachricht konnte nicht verarbeitet werden") as raised:
+                self.service.send_media(
+                    self.thread_id,
+                    archive_name=source.name,
+                    media_type="VOICE",
+                    mime_type="audio/webm;codecs=opus",
+                    file_name="private-recording.webm",
+                    endpoint_id=self.endpoint_id,
+                )
+        self.assertNotIn(str(source), str(raised.exception))
+        self.assertTrue(source.exists())
 
 
 class MediaHttpHardeningTests(unittest.TestCase):
