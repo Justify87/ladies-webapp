@@ -1,0 +1,5 @@
+.wa-status-dot.connected{background:#23a05a;box-shadow:0 0 0 4px rgba(35,160,90,.12)}
+.reduced-motion *, .reduced-motion *::before, .reduced-motion *::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}
+
+.view-once-media{display:flex;align-items:center;gap:10px;padding:12px;border:1px dashed var(--outline-variant,#d8dde5);border-radius:12px;text-decoration:none;color:inherit;background:rgba(255,255,255,.55)}
+.view-once-media svg{width:22px;height:22px}
