@@ -4,7 +4,7 @@ from pathlib import Path
 
 from ladies_v9.database import Database
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ladies_v9.models import Person, PersonUserState, PriceItem, PriceList
 from ladies_v9.messaging.models import ChatMessage, ChatThread
@@ -60,6 +60,27 @@ class PricingServiceTests(unittest.TestCase):
             history = service.history(person_id)
             self.assertEqual(len(history), 1)
             self.assertEqual(history[0]["revision"]["source_extraction_id"], proposal["price_extraction_id"])
+
+    def test_timeline_exposes_local_artifacts_without_creating_chat_messages(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            service = PriceIntelligenceService(_database(root / "test.db"), root / "data")
+            _, thread_id = _seed(service)
+            with service.database.session() as db:
+                before = int(db.scalar(select(func.count()).select_from(ChatMessage)) or 0)
+            signal = service.signal(thread_id, allow_ocr=False)
+            proposal = service.create_proposal(thread_id, trigger_type="AUTO", seed_message_id=signal["seed_message_id"])
+            pending = service.timeline(thread_id)
+            self.assertEqual(len(pending["items"]), 1)
+            self.assertEqual(pending["items"][0]["status"], "PENDING")
+            self.assertEqual(pending["items"][0]["anchor_message_id"], signal["seed_message_id"])
+            service.accept(proposal["price_extraction_id"], {})
+            accepted = service.timeline(thread_id)
+            self.assertEqual(accepted["items"][0]["status"], "ACCEPTED")
+            self.assertEqual(accepted["items"][0]["anchor_message_id"], signal["seed_message_id"])
+            with service.database.session() as db:
+                after = int(db.scalar(select(func.count()).select_from(ChatMessage)) or 0)
+            self.assertEqual(after, before)
 
     def test_same_prices_do_not_create_duplicate_revision(self):
         with tempfile.TemporaryDirectory() as td:

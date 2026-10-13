@@ -25,6 +25,7 @@ from .schema import empty_proposal, validate_proposal
 from .signal import detect_price_signal
 
 HANDLED_STATUSES = {"ACCEPTED", "ACCEPTED_NO_CHANGE", "REJECTED"}
+TIMELINE_STATUSES = {"PENDING", "ACCEPTED", "ACCEPTED_NO_CHANGE", "STALE"}
 
 
 class PriceIntelligenceService(PriceExtractionCore):
@@ -109,6 +110,42 @@ class PriceIntelligenceService(PriceExtractionCore):
                 "ocr_available": self.ocr.available(),
                 "handled_through_message_id": handled_through,
             }
+
+    def timeline(self, thread_id: int, *, limit: int = 30) -> dict[str, Any]:
+        """Return local pricing artifacts that belong in a chat timeline.
+
+        These records are application-local UI artifacts backed by pricing
+        persistence. They are deliberately separate from ``ChatMessage`` so
+        they can never enter the WhatsApp send path.
+        """
+        with self.database.session() as db:
+            thread = db.get(ChatThread, int(thread_id))
+            if thread is None:
+                raise KeyError(thread_id)
+            rows = db.scalars(
+                select(PriceExtraction)
+                .where(
+                    PriceExtraction.thread_id == thread.thread_id,
+                    PriceExtraction.status.in_(TIMELINE_STATUSES),
+                )
+                .order_by(desc(PriceExtraction.created_at), desc(PriceExtraction.price_extraction_id))
+                .limit(max(1, min(100, int(limit))))
+            ).all()
+            items = []
+            for extraction in reversed(rows):
+                current = (
+                    self._proposal_from_price_list(db, db.get(PriceList, extraction.base_price_list_id))
+                    if extraction.base_price_list_id
+                    else None
+                )
+                payload = self._extraction_payload(db, extraction, current=current)
+                messages = payload.get("messages") or []
+                primary = next((x for x in messages if x.get("role") == "PRIMARY"), None)
+                fallback = next((x for x in reversed(messages) if x.get("role") != "QUESTION"), None)
+                anchor = primary or fallback or (messages[-1] if messages else None)
+                payload["anchor_message_id"] = int(anchor["message_id"]) if anchor else None
+                items.append(payload)
+            return {"thread_id": thread.thread_id, "items": items}
 
     def create_proposal(
         self,

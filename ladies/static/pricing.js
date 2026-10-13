@@ -1,34 +1,174 @@
 'use strict';
 
-import { toast, openSheet, closeSheet } from './app.js';
+import { toast, closeSheet } from './app.js';
 
 (() => {
-  const P = {threadId:null,signal:null,proposal:null,signalTimer:null,mutationTimer:null};
+  const P = {
+    threadId:null,
+    signal:null,
+    timeline:[],
+    drafts:new Map(),
+    signalTimer:null,
+    mutationTimer:null,
+    chatObserver:null,
+    busy:false,
+  };
   const q=(s,r=document)=>r.querySelector(s);
+  const qa=(s,r=document)=>[...r.querySelectorAll(s)];
   const esc=v=>String(v??'').replace(/[&<>'"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
   const euro=cents=>cents==null?'—':new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(Number(cents)/100);
   const icon=name=>`<svg aria-hidden="true"><use href="/static/icons.svg#${name}"/></svg>`;
+  const clone=value=>JSON.parse(JSON.stringify(value));
   async function req(url,options={}){const opts={...options,headers:{...(options.headers||{})}};if(opts.body&&typeof opts.body!=='string'){opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(opts.body)}const res=await fetch(url,opts);let data={};try{data=await res.json()}catch{}if(!res.ok)throw new Error(data.error||`HTTP ${res.status}`);return data}
   function chatVisible(){const layer=q('#messagingChatLayer');return !!layer&&!layer.classList.contains('hidden')}
+  function anchorMessageId(item){if(item?.anchor_message_id)return Number(item.anchor_message_id);const rows=item?.messages||[];const primary=rows.find(x=>x.role==='PRIMARY');if(primary)return Number(primary.message_id);const fallback=[...rows].reverse().find(x=>x.role!=='QUESTION')||rows.at(-1);return fallback?Number(fallback.message_id):null}
+  function pendingItem(){return P.timeline.find(x=>x.status==='PENDING')||null}
+  function proposalFor(item){if(item.status==='PENDING'){if(!P.drafts.has(item.price_extraction_id))P.drafts.set(item.price_extraction_id,clone(item.proposal));return P.drafts.get(item.price_extraction_id)}return item.proposal||item.effective_proposal||null}
+  function sourceCount(item){return (item.messages||[]).length}
+  function clearTimelineUi(){qa('[data-price-inline-artifact], [data-price-magic-trigger]').forEach(x=>x.remove())}
 
-  function ensureMagicBar(){const composer=q('#chatComposer');if(!composer||q('#priceMagicBar'))return;composer.insertAdjacentHTML('beforebegin',`<div id="priceMagicBar" class="price-magic-bar hidden"><button id="priceMagicBtn" type="button">${icon('sparkles')}<span><b>Preise erkannt</b><small>Aus Chat übernehmen</small></span>${icon('chevron-right')}</button></div>`);q('#priceMagicBtn').onclick=()=>createProposal('AUTO')}
-  function scheduleSignal(delay=180){clearTimeout(P.signalTimer);P.signalTimer=setTimeout(checkSignal,delay)}
-  async function checkSignal(){ensureMagicBar();const bar=q('#priceMagicBar');if(!bar||!chatVisible()||!P.threadId){if(bar)bar.classList.add('hidden');return}try{const signal=await req(`/api/pricing/threads/${P.threadId}/signal`);P.signal=signal;bar.classList.toggle('hidden',!(signal.enabled!==false&&signal.magic_button_enabled!==false&&signal.strong));const small=q('#priceMagicBtn small');if(small){if(signal.contains_image&&signal.ocr_status==='UNAVAILABLE')small.textContent='Bild erkannt · OCR optional nicht installiert';else if(signal.contains_image)small.textContent='Text/Bild analysieren';else small.textContent='Aus Chat übernehmen'}}catch{bar.classList.add('hidden')}}
-  async function createProposal(trigger='MANUAL'){if(!P.threadId)return toast('Kein Chat geöffnet');try{toast('Preise werden erkannt …');const data=await req(`/api/pricing/threads/${P.threadId}/proposals`,{method:'POST',body:{trigger_type:trigger,seed_message_id:P.signal?.seed_message_id||null}});P.proposal={...data,proposal:JSON.parse(JSON.stringify(data.proposal))};renderProposalSheet()}catch(e){toast(e.message)}}
+  function scheduleRefresh(delay=180){clearTimeout(P.signalTimer);P.signalTimer=setTimeout(refreshPricing,delay)}
+  async function refreshPricing(){
+    if(!chatVisible()||!P.threadId){clearTimelineUi();return}
+    const threadId=P.threadId;
+    try{
+      const [signal,timeline]=await Promise.all([
+        req(`/api/pricing/threads/${threadId}/signal`),
+        req(`/api/pricing/threads/${threadId}/timeline?limit=100`),
+      ]);
+      if(threadId!==P.threadId)return;
+      P.signal=signal;
+      P.timeline=timeline.items||[];
+      const liveIds=new Set(P.timeline.filter(x=>x.status==='PENDING').map(x=>Number(x.price_extraction_id)));
+      [...P.drafts.keys()].forEach(id=>{if(!liveIds.has(Number(id)))P.drafts.delete(id)});
+      renderInlinePricing();
+    }catch{
+      if(threadId===P.threadId){P.signal=null;renderInlinePricing()}
+    }
+  }
 
-  function currentProposal(){return P.proposal?.proposal||null}
-  function effectivePreview(){const p=P.proposal;if(!p)return null;if(p.proposal?.update_mode!=='PARTIAL')return p.proposal;const out=JSON.parse(JSON.stringify(p.effective_proposal||p.proposal));const byDuration=new Map((out.offers||[]).map((o,i)=>[`${o.duration_minutes??''}:${o.duration_max_minutes??''}`,i]));for(const patch of p.proposal.offers||[]){const key=`${patch.duration_minutes??''}:${patch.duration_max_minutes??''}`;const i=byDuration.get(key);if(i==null){out.offers.push(JSON.parse(JSON.stringify(patch)))}else out.offers[i]=JSON.parse(JSON.stringify(patch))}return out}
-  function renderEffectivePreview(proposal,diff){if(!P.proposal?.base_price_list_id||proposal.update_mode!=='PARTIAL')return'';const effective=effectivePreview()||P.proposal.effective_proposal;if(!effective)return'';const rows=(effective.offers||[]).map(o=>{const d=(diff.offers||[]).find(x=>Array.isArray(x.key)&&x.key[0]===o.duration_minutes&&x.key[1]===(o.duration_max_minutes??null));const state=d?.state||'UNCHANGED';const badge=state==='CHANGED'?'geändert':state==='ADDED'?'neu':'bleibt';return`<div class="price-condition-row"><span>${esc(o.label||`${o.duration_minutes??'—'} Minuten`)} <small>${badge}</small></span><b>${euro(o.amount_cents)}</b></div>`}).join('');return`<section class="price-proposal-section price-effective-preview"><h3>Wird als neue Revision gespeichert</h3>${rows||'<p class="price-empty">Keine Grundpreise.</p>'}<p class="price-review-hint">Unveränderte bestehende Einträge bleiben bei einer Teiländerung erhalten.</p></section>`}
-  function renderProposalSheet(){if(!P.proposal)return;const proposal=P.proposal.proposal,diff=P.proposal.diff||{},evidenceCount=(P.proposal.messages||[]).length;const offerRows=(proposal.offers||[]).map((o,i)=>`<div class="price-edit-row" data-offer-index="${i}"><label><span>Dauer</span><input data-p-field="duration_minutes" type="number" min="1" max="1440" value="${esc(o.duration_minutes??'')}"><em>Min.</em></label><label><span>Preis</span><input data-p-field="amount_eur" type="number" min="0" step="1" value="${o.amount_cents==null?'':esc(o.amount_cents/100)}"><em>€</em></label><button type="button" class="price-remove" data-remove-offer="${i}" aria-label="Preis entfernen">×</button></div>`).join('');const serviceRows=(proposal.service_rules||[]).map((s,i)=>`<div class="price-service-edit" data-service-index="${i}"><input data-s-field="raw_label" value="${esc(s.raw_label)}" aria-label="Service"><select data-s-field="status">${[['INCLUDED','inklusive'],['SURCHARGE','Aufpreis'],['ON_REQUEST','auf Anfrage'],['NEGOTIABLE','verhandelbar'],['EXCLUDED','nicht angeboten'],['UNKNOWN','unklar']].map(([v,l])=>`<option value="${v}" ${s.status===v?'selected':''}>${l}</option>`).join('')}</select><label class="service-amount"><input data-s-field="amount_eur" type="number" min="0" step="1" value="${s.amount_cents==null?'':esc(s.amount_cents/100)}"><em>€</em></label><button type="button" class="price-remove" data-remove-service="${i}" aria-label="Service entfernen">×</button></div>`).join('');const conditions=(proposal.conditions||[]).map(c=>`<div class="price-condition-row"><span>${esc(c.label)}</span>${c.amount_cents!=null?`<b>${euro(c.amount_cents)}</b>`:''}</div>`).join('');const uncertainties=(proposal.uncertainties||[]).map(x=>`<div class="price-warning">${icon('info')}<span>${esc(x)}</span></div>`).join('');const changed=diff.changed&&P.proposal.base_price_list_id;const preview=renderEffectivePreview(proposal,diff);const html=`<div class="sheet-title price-sheet-title"><div><h2>${changed?'Preisänderung erkannt':'Preise erkannt'}</h2><p>Aus ${evidenceCount} Chat${evidenceCount===1?'nachricht':'nachrichten'} abgeleitet</p></div>${icon('sparkles')}</div><div class="price-mode"><span>Art der Änderung</span><select id="priceUpdateMode"><option value="FULL" ${proposal.update_mode==='FULL'?'selected':''}>Komplette Preisliste</option><option value="PARTIAL" ${proposal.update_mode==='PARTIAL'?'selected':''}>Teiländerung</option><option value="UNKNOWN" ${proposal.update_mode==='UNKNOWN'?'selected':''}>Unklar / automatisch entscheiden</option></select></div>${preview}<section class="price-proposal-section"><div class="price-proposal-head"><h3>Erkannte Änderung</h3><button id="addOfferRow" type="button">+ Eintrag</button></div>${offerRows||'<p class="price-empty">Keine Dauer-/Preispaare erkannt.</p>'}</section><section class="price-proposal-section"><div class="price-proposal-head"><h3>Services</h3><button id="addServiceRow" type="button">+ Service</button></div>${serviceRows||'<p class="price-empty">Keine Serviceregeln erkannt.</p>'}</section>${conditions?`<section class="price-proposal-section"><h3>Bedingungen</h3>${conditions}</section>`:''}${uncertainties?`<section class="price-proposal-section">${uncertainties}</section>`:''}<p class="price-review-hint">${icon('info')} Automatisch erkannt – bitte kurz prüfen. Erst mit „Übernehmen“ wird eine neue historische Preislisten-Revision gespeichert.</p><div class="price-proposal-actions"><button id="rejectPriceProposal" class="price-secondary" type="button">Verwerfen</button><button id="acceptPriceProposal" class="price-primary" type="button">${icon('check')} Preisliste übernehmen</button></div>`;openSheet(html);bindProposalEditor()}
-  function syncEditor(){const p=currentProposal();if(!p)return;p.update_mode=q('#priceUpdateMode')?.value||p.update_mode;q('#sheetContent')?.querySelectorAll('[data-offer-index]').forEach(row=>{const i=Number(row.dataset.offerIndex),o=p.offers[i];if(!o)return;const d=row.querySelector('[data-p-field="duration_minutes"]')?.value,a=row.querySelector('[data-p-field="amount_eur"]')?.value;o.duration_minutes=d?Number(d):null;o.amount_cents=a!==''?Math.round(Number(a)*100):null;o.label=o.duration_minutes?`${o.duration_minutes} Minuten`:o.label});q('#sheetContent')?.querySelectorAll('[data-service-index]').forEach(row=>{const i=Number(row.dataset.serviceIndex),s=p.service_rules[i];if(!s)return;s.raw_label=row.querySelector('[data-s-field="raw_label"]')?.value||s.raw_label;s.status=row.querySelector('[data-s-field="status"]')?.value||s.status;const a=row.querySelector('[data-s-field="amount_eur"]')?.value;s.amount_cents=a!==''?Math.round(Number(a)*100):null})}
-  function bindProposalEditor(){q('#addOfferRow')?.addEventListener('click',()=>{syncEditor();currentProposal().offers.push({proposal_key:`manual_offer_${Date.now()}`,duration_minutes:null,duration_max_minutes:null,amount_type:'EXACT',amount_cents:null,amount_max_cents:null,label:'Preis',evidence:[]});renderProposalSheet()});q('#addServiceRow')?.addEventListener('click',()=>{syncEditor();currentProposal().service_rules.push({proposal_key:`manual_service_${Date.now()}`,service_key:null,raw_label:'',status:'UNKNOWN',amount_cents:null,note:null,evidence:[]});renderProposalSheet()});q('#sheetContent')?.querySelectorAll('[data-remove-offer]').forEach(b=>b.onclick=()=>{syncEditor();currentProposal().offers.splice(Number(b.dataset.removeOffer),1);renderProposalSheet()});q('#sheetContent')?.querySelectorAll('[data-remove-service]').forEach(b=>b.onclick=()=>{syncEditor();currentProposal().service_rules.splice(Number(b.dataset.removeService),1);renderProposalSheet()});q('#rejectPriceProposal')?.addEventListener('click',async()=>{try{await req(`/api/pricing/proposals/${P.proposal.price_extraction_id}/reject`,{method:'POST'});closeSheet();q('#priceMagicBar')?.classList.add('hidden');P.proposal=null;scheduleSignal(80);toast('Preisvorschlag verworfen')}catch(e){toast(e.message)}});q('#acceptPriceProposal')?.addEventListener('click',async()=>{syncEditor();try{const result=await req(`/api/pricing/proposals/${P.proposal.price_extraction_id}/accept`,{method:'POST',body:{proposal:currentProposal()}});closeSheet();q('#priceMagicBar')?.classList.add('hidden');toast(result.status==='ACCEPTED_NO_CHANGE'?'Preise waren bereits aktuell':'Preisliste als neue Revision gespeichert');P.proposal=null;scheduleSignal(80)}catch(e){toast(e.message)}})}
+  function serviceStatusLabel(value){return ({INCLUDED:'inklusive',SURCHARGE:'Aufpreis',ON_REQUEST:'auf Anfrage',NEGOTIABLE:'verhandelbar',EXCLUDED:'nicht angeboten',UNKNOWN:'unklar'})[value]||value||'unklar'}
+  function summaryOffers(proposal){const rows=(proposal?.offers||[]).filter(x=>x.amount_cents!=null);if(!rows.length)return'<span class="price-inline-empty">Keine Grundpreise</span>';return rows.map(x=>`<span class="price-summary-chip"><b>${esc(x.label||`${x.duration_minutes??'—'} Min.`)}</b><strong>${euro(x.amount_cents)}</strong></span>`).join('')}
+  function summaryExtras(proposal){const services=(proposal?.service_rules||[]).map(x=>`<span>${esc(x.raw_label)} · ${esc(serviceStatusLabel(x.status))}${x.amount_cents!=null?` · ${euro(x.amount_cents)}`:''}</span>`);const conditions=(proposal?.conditions||[]).map(x=>`<span>${esc(x.label)}${x.amount_cents!=null?` · ${euro(x.amount_cents)}`:''}</span>`);return [...services,...conditions].join('')}
 
-  function injectChatMenuAction(){if(!chatVisible()||!P.threadId)return;const actions=q('#sheetContent .sheet-actions');if(!actions||q('#priceManualDetect'))return;actions.insertAdjacentHTML('afterbegin',`<button class="sheet-action" id="priceManualDetect" type="button">${icon('sparkles')}<span><b>Preise aus Chat erkennen</b><small>Nachrichten und Preisbilder analysieren</small></span>${icon('chevron-right')}</button>`);q('#priceManualDetect').onclick=()=>{closeSheet();createProposal('MANUAL')}}
-  async function injectSettings(){const page=q('#settingsPage');if(!page||q('#pricingSettingsCard'))return;let data;try{data=await req('/api/pricing/runtime/status')}catch{return}const s=data.settings||{};page.insertAdjacentHTML('beforeend',`<section id="pricingSettingsCard" class="settings-card pricing-settings-card"><div class="settings-card-head"><span class="settings-icon">${icon('sparkles')}</span><div><b>Preiserkennung</b><small>Lokale Erkennung aus WhatsApp-Chats</small></div></div><label class="pricing-setting-row"><span><b>Preiserkennung</b><small>Regelbasiert, ohne Cloud</small></span><input type="checkbox" data-pricing-setting="price_intelligence_enabled" ${s.price_intelligence_enabled?'checked':''}></label><label class="pricing-setting-row"><span><b>Magic-Button</b><small>Bei erkannten Preisangaben anzeigen</small></span><input type="checkbox" data-pricing-setting="price_magic_button_enabled" ${s.price_magic_button_enabled?'checked':''}></label><label class="pricing-setting-row"><span><b>OCR für Preisbilder</b><small>${data.ocr?.available?'PP-OCRv6 Tiny bereit':'Optionales OCR-Paket nicht installiert'}</small></span><input type="checkbox" data-pricing-setting="price_ocr_enabled" ${s.price_ocr_enabled?'checked':''}></label><div class="pricing-runtime-row"><span>Semantisches Mini-Modell</span><strong>${data.semantic_model?.available?'FunctionGemma 270M bereit':'nicht installiert · optional'}</strong></div></section>`);page.querySelectorAll('[data-pricing-setting]').forEach(input=>input.onchange=async()=>{const body={};body[input.dataset.pricingSetting]=input.checked;try{await req('/api/pricing/settings',{method:'POST',body})}catch(e){input.checked=!input.checked;toast(e.message)}})}
+  function pendingCard(item){
+    const p=proposalFor(item)||{};
+    const offers=(p.offers||[]).map((o,i)=>`<div class="price-inline-edit-row" data-price-offer-index="${i}"><label><span>Dauer</span><input data-price-field="duration_minutes" inputmode="numeric" type="number" min="1" max="1440" value="${esc(o.duration_minutes??'')}"><em>Min.</em></label><label><span>Preis</span><input data-price-field="amount_eur" inputmode="decimal" type="number" min="0" step="1" value="${o.amount_cents==null?'':esc(o.amount_cents/100)}"><em>€</em></label><button data-price-remove-offer="${i}" type="button" aria-label="Preis entfernen">×</button></div>`).join('');
+    const services=(p.service_rules||[]).map((s,i)=>`<div class="price-inline-service-row" data-price-service-index="${i}"><input data-price-service-field="raw_label" value="${esc(s.raw_label||'')}" aria-label="Service"><select data-price-service-field="status" aria-label="Status">${[['INCLUDED','inklusive'],['SURCHARGE','Aufpreis'],['ON_REQUEST','auf Anfrage'],['NEGOTIABLE','verhandelbar'],['EXCLUDED','nicht angeboten'],['UNKNOWN','unklar']].map(([v,l])=>`<option value="${v}" ${s.status===v?'selected':''}>${l}</option>`).join('')}</select><label><input data-price-service-field="amount_eur" inputmode="decimal" type="number" min="0" step="1" value="${s.amount_cents==null?'':esc(s.amount_cents/100)}"><em>€</em></label><button data-price-remove-service="${i}" type="button" aria-label="Service entfernen">×</button></div>`).join('');
+    const conditions=(p.conditions||[]).map(c=>`<div class="price-inline-condition"><span>${esc(c.label)}</span>${c.amount_cents!=null?`<b>${euro(c.amount_cents)}</b>`:''}</div>`).join('');
+    const uncertainties=(p.uncertainties||[]).map(x=>`<span class="price-inline-warning">${icon('info')}${esc(x)}</span>`).join('');
+    const partial=item.base_price_list_id?`<label class="price-inline-mode"><span>Übernahme</span><select data-price-update-mode><option value="PARTIAL" ${p.update_mode==='PARTIAL'||p.update_mode==='UNKNOWN'?'selected':''}>Teiländerung</option><option value="FULL" ${p.update_mode==='FULL'?'selected':''}>Komplette Liste</option></select></label>`:'';
+    return `<div class="price-inline-card price-inline-editor"><div class="price-inline-head"><span class="price-inline-icon">${icon('sparkles')}</span><div><b>Preise erfassen</b><small>Aus ${sourceCount(item)} Chat${sourceCount(item)===1?'nachricht':'nachrichten'} · nur lokal</small></div><span class="price-local-badge">Lokal</span></div>${partial}<section><div class="price-inline-section-head"><b>Preise</b><button data-price-add-offer type="button">+ Eintrag</button></div>${offers||'<p class="price-inline-empty">Keine Dauer-/Preispaare erkannt.</p>'}</section><section><div class="price-inline-section-head"><b>Services</b><button data-price-add-service type="button">+ Service</button></div>${services||'<p class="price-inline-empty">Keine Services erkannt.</p>'}</section>${conditions?`<section><div class="price-inline-section-head"><b>Bedingungen</b></div>${conditions}</section>`:''}${uncertainties?`<div class="price-inline-warnings">${uncertainties}</div>`:''}<p class="price-inline-note">${icon('info')} Automatisch erkannt. Bitte kurz prüfen – erst „Speichern“ erzeugt eine Preisrevision.</p><div class="price-inline-actions"><button data-price-reject type="button">Verwerfen</button><button class="primary" data-price-save type="button">${icon('check')} Speichern</button></div></div>`;
+  }
 
-  document.addEventListener('ladies:messaging-thread-opened',event=>{const id=Number(event.detail?.threadId||0);if(!id)return;P.threadId=id;ensureMagicBar();scheduleSignal(80)});
-  document.addEventListener('ladies:messaging-thread-updated',event=>{const id=Number(event.detail?.threadId||0);if(id&&id===P.threadId)scheduleSignal(350)});
-  document.addEventListener('ladies:messaging-thread-closed',()=>{P.threadId=null;P.signal=null;clearTimeout(P.signalTimer);q('#priceMagicBar')?.classList.add('hidden')});
-  document.addEventListener('click',e=>{if(e.target.closest('#chatMore'))setTimeout(injectChatMenuAction,0)},true);
-  const observer=new MutationObserver(()=>{if(q('#messagingChatLayer'))ensureMagicBar();if(q('#settingsScreen.active')){clearTimeout(P.mutationTimer);P.mutationTimer=setTimeout(injectSettings,80)}});observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});document.addEventListener('DOMContentLoaded',()=>{ensureMagicBar();if(q('#settingsScreen.active'))injectSettings()});
+  function summaryCard(item){
+    const proposal=proposalFor(item)||{};
+    const stale=item.status==='STALE';
+    const unchanged=item.status==='ACCEPTED_NO_CHANGE';
+    const extras=summaryExtras(proposal);
+    const title=stale?'Preisvorschlag veraltet':unchanged?'Preise geprüft':'Preise gespeichert';
+    const detail=stale?'Nicht übernommen – inzwischen existiert eine neuere Preisrevision.':unchanged?'Die erkannten Werte waren bereits aktuell.':'Als lokale Preisrevision im Profil gespeichert.';
+    return `<div class="price-inline-card price-inline-summary ${stale?'stale':''}"><div class="price-inline-head"><span class="price-inline-icon">${icon(stale?'info':'check')}</span><div><b>${title}</b><small>${detail}</small></div><span class="price-local-badge">Lokal</span></div><div class="price-summary-offers">${summaryOffers(proposal)}</div>${extras?`<div class="price-summary-extras">${extras}</div>`:''}</div>`;
+  }
+
+  function renderArtifact(item){const wrap=document.createElement('div');wrap.className='price-inline-item';wrap.dataset.priceInlineArtifact=String(item.price_extraction_id);wrap.dataset.priceAnchorMessage=String(anchorMessageId(item)||'');wrap.innerHTML=item.status==='PENDING'?pendingCard(item):summaryCard(item);return wrap}
+  function renderMagicTrigger(){
+    const signal=P.signal;
+    if(!signal||signal.enabled===false||signal.magic_button_enabled===false||!signal.strong||pendingItem()||P.busy)return;
+    const seed=Number(signal.seed_message_id||0);if(!seed)return;
+    const line=q(`#chatMessages [data-message-id="${seed}"]`);const bubble=line?.querySelector('.message-bubble');if(!bubble)return;
+    const button=document.createElement('button');button.type='button';button.className='price-inline-trigger';button.dataset.priceMagicTrigger=String(seed);button.innerHTML=`${icon('sparkles')}<span>Preise erfassen</span>`;
+    const footer=[...bubble.children].find(x=>x.tagName==='SMALL');if(footer)bubble.insertBefore(button,footer);else bubble.appendChild(button);
+  }
+  function renderInlinePricing(){
+    if(!chatVisible()||!P.threadId)return clearTimelineUi();
+    clearTimelineUi();
+    const cursors=new Map();
+    for(const item of P.timeline){
+      const anchorId=anchorMessageId(item);if(!anchorId)continue;
+      const message=q(`#chatMessages [data-message-id="${anchorId}"]`);if(!message)continue;
+      const artifact=renderArtifact(item);const cursor=cursors.get(anchorId)||message;cursor.insertAdjacentElement('afterend',artifact);cursors.set(anchorId,artifact);
+    }
+    renderMagicTrigger();
+  }
+
+  function syncDraft(item){
+    const id=Number(item.price_extraction_id),p=proposalFor(item);if(!p)return;
+    const card=q(`[data-price-inline-artifact="${id}"]`);if(!card)return;
+    p.update_mode=card.querySelector('[data-price-update-mode]')?.value||p.update_mode;
+    card.querySelectorAll('[data-price-offer-index]').forEach(row=>{const i=Number(row.dataset.priceOfferIndex),o=p.offers?.[i];if(!o)return;const duration=row.querySelector('[data-price-field="duration_minutes"]')?.value,amount=row.querySelector('[data-price-field="amount_eur"]')?.value;o.duration_minutes=duration?Number(duration):null;o.amount_cents=amount!==''&&amount!=null?Math.round(Number(amount)*100):null;o.label=o.duration_minutes?`${o.duration_minutes} Minuten`:(o.label||'Preis')});
+    card.querySelectorAll('[data-price-service-index]').forEach(row=>{const i=Number(row.dataset.priceServiceIndex),s=p.service_rules?.[i];if(!s)return;const label=row.querySelector('[data-price-service-field="raw_label"]')?.value,status=row.querySelector('[data-price-service-field="status"]')?.value;s.raw_label=label!=null?label:s.raw_label;s.status=status!=null?status:s.status;const amount=row.querySelector('[data-price-service-field="amount_eur"]')?.value;s.amount_cents=amount!==''&&amount!=null?Math.round(Number(amount)*100):null});
+  }
+  function findItemFromTarget(target){const root=target.closest('[data-price-inline-artifact]');if(!root)return null;const id=Number(root.dataset.priceInlineArtifact);return P.timeline.find(x=>Number(x.price_extraction_id)===id)||null}
+  function scrollToArtifact(item){const id=Number(item?.price_extraction_id||0);const el=q(`[data-price-inline-artifact="${id}"]`);if(el)el.scrollIntoView({behavior:'smooth',block:'center'})}
+  function handleInlineInput(e){
+    if(!e.target.closest('[data-price-field], [data-price-service-field], [data-price-update-mode]'))return;
+    const item=findItemFromTarget(e.target);if(item?.status==='PENDING')syncDraft(item);
+  }
+  function chatStructureChanged(records){
+    return records.some(record=>[...record.addedNodes,...record.removedNodes].some(node=>{
+      if(node.nodeType!==1)return false;
+      return node.matches?.('[data-message-id], .chat-day, .chat-empty, .system-message')||Boolean(node.querySelector?.('[data-message-id]'));
+    }));
+  }
+  function observeChatMessages(){
+    const box=q('#chatMessages');if(!box)return;
+    P.chatObserver?.disconnect();
+    P.chatObserver=new MutationObserver(records=>{if(chatStructureChanged(records)&&chatVisible()&&P.threadId)renderInlinePricing()});
+    P.chatObserver.observe(box,{childList:true});
+  }
+
+  async function createProposal(trigger='MANUAL',seedMessageId=null){
+    if(!P.threadId||P.busy)return;
+    const existing=pendingItem();if(existing){renderInlinePricing();scrollToArtifact(existing);return}
+    P.busy=true;renderInlinePricing();
+    try{
+      toast('Preise werden erkannt …');
+      const data=await req(`/api/pricing/threads/${P.threadId}/proposals`,{method:'POST',body:{trigger_type:trigger,seed_message_id:seedMessageId||P.signal?.seed_message_id||null}});
+      data.anchor_message_id=anchorMessageId(data)||seedMessageId||P.signal?.seed_message_id||null;
+      P.timeline=[...P.timeline.filter(x=>Number(x.price_extraction_id)!==Number(data.price_extraction_id)),data];
+      P.drafts.set(Number(data.price_extraction_id),clone(data.proposal));
+      renderInlinePricing();requestAnimationFrame(()=>scrollToArtifact(data));
+    }catch(e){toast(e.message)}finally{P.busy=false;renderInlinePricing()}
+  }
+  async function saveProposal(item){
+    if(!item||P.busy)return;syncDraft(item);P.busy=true;
+    try{
+      const result=await req(`/api/pricing/proposals/${item.price_extraction_id}/accept`,{method:'POST',body:{proposal:proposalFor(item)}});
+      result.anchor_message_id=anchorMessageId(result)||anchorMessageId(item);
+      P.timeline=P.timeline.map(x=>Number(x.price_extraction_id)===Number(item.price_extraction_id)?result:x);P.drafts.delete(Number(item.price_extraction_id));renderInlinePricing();toast(result.status==='ACCEPTED_NO_CHANGE'?'Preise waren bereits aktuell':'Preise gespeichert');
+    }catch(e){toast(e.message);await refreshPricing().catch(()=>{})}finally{P.busy=false;scheduleRefresh(120)}
+  }
+  async function rejectProposal(item){
+    if(!item||P.busy)return;P.busy=true;
+    try{await req(`/api/pricing/proposals/${item.price_extraction_id}/reject`,{method:'POST'});P.timeline=P.timeline.filter(x=>Number(x.price_extraction_id)!==Number(item.price_extraction_id));P.drafts.delete(Number(item.price_extraction_id));renderInlinePricing();toast('Preisvorschlag verworfen')}catch(e){toast(e.message)}finally{P.busy=false;scheduleRefresh(120)}
+  }
+
+  function handleInlineClick(e){
+    const trigger=e.target.closest('[data-price-magic-trigger]');if(trigger){e.preventDefault();return createProposal('AUTO',Number(trigger.dataset.priceMagicTrigger))}
+    const item=findItemFromTarget(e.target);if(!item||item.status!=='PENDING')return;
+    if(e.target.closest('[data-price-add-offer]')){syncDraft(item);proposalFor(item).offers.push({proposal_key:`manual_offer_${Date.now()}`,duration_minutes:null,duration_max_minutes:null,amount_type:'EXACT',amount_cents:null,amount_max_cents:null,label:'Preis',evidence:[]});return renderInlinePricing()}
+    if(e.target.closest('[data-price-add-service]')){syncDraft(item);proposalFor(item).service_rules.push({proposal_key:`manual_service_${Date.now()}`,service_key:null,raw_label:'',status:'UNKNOWN',amount_cents:null,note:null,evidence:[]});return renderInlinePricing()}
+    const removeOffer=e.target.closest('[data-price-remove-offer]');if(removeOffer){syncDraft(item);proposalFor(item).offers.splice(Number(removeOffer.dataset.priceRemoveOffer),1);return renderInlinePricing()}
+    const removeService=e.target.closest('[data-price-remove-service]');if(removeService){syncDraft(item);proposalFor(item).service_rules.splice(Number(removeService.dataset.priceRemoveService),1);return renderInlinePricing()}
+    if(e.target.closest('[data-price-reject]'))return rejectProposal(item);
+    if(e.target.closest('[data-price-save]'))return saveProposal(item);
+  }
+
+  function injectChatMenuAction(){
+    if(!chatVisible()||!P.threadId)return;const actions=q('#sheetContent .sheet-actions');if(!actions||q('#priceManualDetect'))return;
+    const pending=pendingItem();
+    actions.insertAdjacentHTML('afterbegin',`<button class="sheet-action" id="priceManualDetect" type="button">${icon('sparkles')}<span><b>${pending?'Offenen Preisvorschlag anzeigen':'Preise aus Chat erkennen'}</b><small>${pending?'Inline im Chat weiterbearbeiten':'Nachrichten und Preisbilder analysieren'}</small></span>${icon('chevron-right')}</button>`);
+    q('#priceManualDetect').onclick=()=>{closeSheet();if(pending){renderInlinePricing();requestAnimationFrame(()=>scrollToArtifact(pending))}else createProposal('MANUAL',P.signal?.seed_message_id||null)};
+  }
+  async function injectSettings(){const page=q('#settingsPage');if(!page||q('#pricingSettingsCard'))return;let data;try{data=await req('/api/pricing/runtime/status')}catch{return}const s=data.settings||{};page.insertAdjacentHTML('beforeend',`<section id="pricingSettingsCard" class="settings-card pricing-settings-card"><div class="settings-card-head"><span class="settings-icon">${icon('sparkles')}</span><div><b>Preiserkennung</b><small>Lokale Erkennung aus WhatsApp-Chats</small></div></div><label class="pricing-setting-row"><span><b>Preiserkennung</b><small>Regelbasiert, ohne Cloud</small></span><input type="checkbox" data-pricing-setting="price_intelligence_enabled" ${s.price_intelligence_enabled?'checked':''}></label><label class="pricing-setting-row"><span><b>Inline-Hinweis</b><small>Direkt an Nachrichten mit erkannten Preisen</small></span><input type="checkbox" data-pricing-setting="price_magic_button_enabled" ${s.price_magic_button_enabled?'checked':''}></label><label class="pricing-setting-row"><span><b>OCR für Preisbilder</b><small>${data.ocr?.available?'PP-OCRv6 Tiny bereit':'Optionales OCR-Paket nicht installiert'}</small></span><input type="checkbox" data-pricing-setting="price_ocr_enabled" ${s.price_ocr_enabled?'checked':''}></label><div class="pricing-runtime-row"><span>Semantisches Mini-Modell</span><strong>${data.semantic_model?.available?'FunctionGemma 270M bereit':'nicht installiert · optional'}</strong></div></section>`);page.querySelectorAll('[data-pricing-setting]').forEach(input=>input.onchange=async()=>{const body={};body[input.dataset.pricingSetting]=input.checked;try{await req('/api/pricing/settings',{method:'POST',body});if(input.dataset.pricingSetting==='price_magic_button_enabled')scheduleRefresh(50)}catch(e){input.checked=!input.checked;toast(e.message)}})}
+
+  document.addEventListener('ladies:messaging-thread-opened',event=>{const id=Number(event.detail?.threadId||0);if(!id)return;P.threadId=id;P.signal=null;P.timeline=[];P.drafts.clear();observeChatMessages();scheduleRefresh(60)});
+  document.addEventListener('ladies:messaging-thread-updated',event=>{const id=Number(event.detail?.threadId||0);if(id&&id===P.threadId)scheduleRefresh(220)});
+  document.addEventListener('ladies:messaging-thread-closed',()=>{P.threadId=null;P.signal=null;P.timeline=[];P.drafts.clear();clearTimeout(P.signalTimer);clearTimelineUi()});
+  document.addEventListener('input',handleInlineInput,true);
+  document.addEventListener('change',handleInlineInput,true);
+  document.addEventListener('click',e=>{handleInlineClick(e);if(e.target.closest('#chatMore'))setTimeout(injectChatMenuAction,0)},true);
+  const observer=new MutationObserver(()=>{if(q('#settingsScreen.active')){clearTimeout(P.mutationTimer);P.mutationTimer=setTimeout(injectSettings,80)}});observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});
+  document.addEventListener('DOMContentLoaded',()=>{observeChatMessages();if(q('#settingsScreen.active'))injectSettings()});
 })();
