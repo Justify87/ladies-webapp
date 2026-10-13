@@ -1,5 +1,7 @@
 'use strict';
 
+import { state, toast, esc } from './app.js';
+
 (() => {
   const icon = name => `<svg aria-hidden="true"><use href="/static/icons.svg#${name}"/></svg>`;
   const contactCache = new Map();
