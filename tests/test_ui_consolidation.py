@@ -136,6 +136,21 @@ class UiConsolidationTests(unittest.TestCase):
         self.assertIn("ladies:messaging-thread-updated", pricing)
         self.assertIn("ladies:messaging-thread-closed", pricing)
 
+    def test_pricing_review_is_inline_and_not_a_blocking_sheet(self):
+        pricing = (STATIC / "pricing.js").read_text(encoding="utf-8")
+        styles = (STATIC / "pricing.css").read_text(encoding="utf-8")
+
+        self.assertIn("/timeline?limit=40", pricing)
+        self.assertIn("data-price-magic-trigger", pricing)
+        self.assertIn("data-price-inline-artifact", pricing)
+        self.assertIn(".message-bubble", pricing)
+        self.assertNotIn("priceMagicBar", pricing)
+        self.assertNotIn("renderProposalSheet", pricing)
+        self.assertNotIn("openSheet", pricing)
+        self.assertNotIn(".price-magic-bar", styles)
+        self.assertIn(".price-inline-trigger", styles)
+        self.assertIn(".price-inline-card", styles)
+
     def test_messaging_styles_are_static_assets(self):
         index = TEMPLATE.read_text(encoding="utf-8")
         messaging = (STATIC / "messaging.js").read_text(encoding="utf-8")
