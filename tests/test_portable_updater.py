@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 import unittest
 import zipfile
+from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
@@ -150,10 +151,11 @@ class PortableUpdaterTests(unittest.TestCase):
             (legacy / "ladies_data" / "whatsapp" / "auth" / "creds.json").write_text("secret", encoding="utf-8")
             (legacy / "ladies_data" / "lan_access.json").write_text("session", encoding="utf-8")
             legacy_db = legacy / "ladies.sqlite3"
-            with sqlite3.connect(legacy_db) as connection:
+            with closing(sqlite3.connect(legacy_db)) as connection:
                 connection.execute("CREATE TABLE sample(value TEXT NOT NULL)")
                 connection.execute("INSERT INTO sample(value) VALUES ('preserved')")
                 connection.execute("PRAGMA user_version = 7")
+                connection.commit()
             root = base / "LadiesExplorer"
 
             pm.install(source, root, legacy, legacy_stopped=True)
@@ -164,7 +166,7 @@ class PortableUpdaterTests(unittest.TestCase):
             self.assertEqual((root / "data" / "ladies_data" / "lan_access.json").read_text(), "session")
             self.assertFalse((root / "releases" / "v9.6.4" / "ladies_data").exists())
             migrated_db = root / "data" / "ladies.sqlite3"
-            with sqlite3.connect(migrated_db) as connection:
+            with closing(sqlite3.connect(migrated_db)) as connection:
                 self.assertEqual(connection.execute("SELECT value FROM sample").fetchone()[0], "preserved")
                 self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 7)
             self.assertFalse((root / "data" / "ladies.sqlite3-wal").exists())
@@ -272,8 +274,9 @@ class PortableUpdaterTests(unittest.TestCase):
             pm.set_current(root, "v9.7.0")
             db = root / "data" / "ladies.sqlite3"
             db.parent.mkdir(parents=True)
-            with sqlite3.connect(db) as connection:
+            with closing(sqlite3.connect(db)) as connection:
                 connection.execute("PRAGMA user_version = 2")
+                connection.commit()
             with self.assertRaises(pm.PortableError):
                 pm.rollback(root)
             self.assertEqual(pm.read_current(root), "v9.7.0")
