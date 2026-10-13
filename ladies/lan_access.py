@@ -162,7 +162,10 @@ class LanAccessManager:
             except ValueError:
                 previous = None
 
-            row["last_seen_at"] = now.isoformat()
+            # Keep the in-memory timestamp equal to the last persisted touch.
+            # Otherwise frequent requests would continuously move the comparison
+            # point and a busy session might never be written again.
             if previous is None or now - previous.astimezone(timezone.utc) >= SESSION_TOUCH_INTERVAL:
+                row["last_seen_at"] = now.isoformat()
                 self._write(self._state)
             return True
