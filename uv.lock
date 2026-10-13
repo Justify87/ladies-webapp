@@ -176,7 +176,7 @@ wheels = [
 
 [[package]]
 name = "ladies-explorer"
-version = "9.5.0"
+version = "9.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -200,7 +200,7 @@ requires-dist = [
     { name = "pillow", specifier = ">=10,<15" },
     { name = "qrcode", specifier = ">=8,<9" },
     { name = "requests", specifier = ">=2.32,<3" },
-    { name = "sqlalchemy", specifier = ">=2.0,<3" },
+    { name = "sqlalchemy", specifier = ">=2,<3" },
 ]
 
 [[package]]
