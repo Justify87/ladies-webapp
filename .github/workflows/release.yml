@@ -139,6 +139,19 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.prepare.outputs.release_sha }}
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build portable release asset
+        env:
+          RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/build_release.py --output dist --commit "$RELEASE_SHA"
+          unzip -t dist/ladies-explorer-v*.zip
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -149,7 +162,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "$TAG" \
+          ASSET="dist/ladies-explorer-${TAG}.zip"
+          test -f "$ASSET"
+          gh release create "$TAG" "$ASSET" \
             --target "$RELEASE_SHA" \
             --title "Ladies Explorer V${VERSION}" \
             --notes-file "$NOTE_FILE"

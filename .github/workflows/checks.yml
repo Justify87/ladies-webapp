@@ -22,7 +22,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   verify:
@@ -54,9 +54,15 @@ jobs:
 
       - name: Verify Python
         run: |
-          python -m compileall -q ladies ladies_explorer.py
+          python -m compileall -q ladies tools ladies_explorer.py
           python -c "import ladies_v9.app, nodeenv, ladies_explorer; assert ladies_explorer._project_ready()"
           python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Verify portable release package
+        shell: bash
+        run: |
+          python tools/build_release.py --output .release-test --commit "${GITHUB_SHA}"
+          unzip -t .release-test/ladies-explorer-v*.zip
 
       - name: Verify JavaScript and WhatsApp worker
         shell: bash
@@ -71,3 +77,21 @@ jobs:
           python -m venv .bootstrap-test
           LADIES_BOOTSTRAP_CHECK_ONLY=1 .bootstrap-test/bin/python ladies_explorer.py
           .bootstrap-test/bin/python -c "import ladies_v9.app, nodeenv, flask, ladies_explorer; assert ladies_explorer._project_ready()"
+
+  portable-windows:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify portable updater on Windows
+        shell: pwsh
+        run: |
+          python -m compileall -q tools
+          python -m unittest discover -s tests -p 'test_portable_updater.py' -v

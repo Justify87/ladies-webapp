@@ -3,6 +3,8 @@ __pycache__/
 .DS_Store
 .venv/
 .runtime/
+dist/
+.release-test/
 logs/
 ladies.sqlite3
 ladies.sqlite3-wal
