@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -115,7 +116,8 @@ class UiConsolidationTests(unittest.TestCase):
     def test_backend_config_is_filter_and_version_source_of_truth(self):
         config = frontend_config(default_city="leipzig", default_radius=20)
         self.assertEqual(config["defaults"], {"city": "leipzig", "radius_km": 20})
-        self.assertTrue(config["version"].startswith("9.6"))
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(config["version"], project["project"]["version"])
 
         categories = {item["value"] for item in config["categories"]}
         self.assertIn("huren-hostessen", categories)
