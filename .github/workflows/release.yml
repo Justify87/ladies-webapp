@@ -14,15 +14,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  verify:
-    name: Verify release candidate
-    uses: ./.github/workflows/checks.yml
-
-  publish:
-    name: Publish release
-    needs: verify
+  prepare:
+    name: Prepare release candidate
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      exists: ${{ steps.existing.outputs.exists }}
+      note_file: ${{ steps.release.outputs.note_file }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      release_sha: ${{ steps.candidate.outputs.release_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -113,17 +114,42 @@ jobs:
             git push origin HEAD:main
           fi
 
+      - name: Resolve final release commit
+        id: candidate
+        shell: bash
+        run: echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: Verify release candidate
+    needs: prepare
+    if: needs.prepare.outputs.exists != 'true'
+    uses: ./.github/workflows/checks.yml
+    with:
+      checkout_ref: ${{ needs.prepare.outputs.release_sha }}
+
+  publish:
+    name: Publish release
+    needs: [prepare, verify]
+    if: needs.prepare.outputs.exists != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.release_sha }}
+
       - name: Publish GitHub release
-        if: steps.existing.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.release.outputs.tag }}
-          VERSION: ${{ steps.release.outputs.version }}
-          NOTE_FILE: ${{ steps.release.outputs.note_file }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          NOTE_FILE: ${{ needs.prepare.outputs.note_file }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
         shell: bash
         run: |
           set -euo pipefail
           gh release create "$TAG" \
-            --target "$(git rev-parse HEAD)" \
+            --target "$RELEASE_SHA" \
             --title "Ladies Explorer V${VERSION}" \
             --notes-file "$NOTE_FILE"
