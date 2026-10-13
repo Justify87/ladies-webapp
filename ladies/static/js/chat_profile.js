@@ -1,9 +1,6 @@
 'use strict';
 
 (() => {
-  const App = window.LadiesApp;
-  if (!App) return;
-
   let currentChatThreadId = null;
   let profileOpenedFromChat = false;
 
@@ -49,13 +46,13 @@
     if (!layer || layer.classList.contains('hidden')) return;
     const thread = await resolveCurrentThread();
     if (!thread?.person_id) {
-      App.toast('Für diesen Chat ist noch kein Personenprofil zugeordnet.');
+      toast('Für diesen Chat ist noch kein Personenprofil zugeordnet.');
       return;
     }
     profileOpenedFromChat = true;
     document.body.classList.add('chat-profile-open');
     try {
-      await App.openPerson(Number(thread.person_id));
+      await openPerson(Number(thread.person_id));
       const profileLayer = document.querySelector('#profileLayer');
       const showTop = () => {
         if (profileOpenedFromChat && profileLayer && !profileLayer.classList.contains('hidden')) {
@@ -71,7 +68,7 @@
     } catch (error) {
       profileOpenedFromChat = false;
       document.body.classList.remove('chat-profile-open');
-      App.toast(error?.message || 'Profil konnte nicht geöffnet werden');
+      toast(error?.message || 'Profil konnte nicht geöffnet werden');
     }
   }
 
