@@ -87,6 +87,6 @@ jobs:
       - name: Check worker and browser JavaScript syntax
         run: |
           node --check worker.mjs
-          find ../../static -type f \( -name '*.js' -o -name '*.mjs' \) -print -exec node --check {} \;
+          find ../../static -type f \( -name '*.js' -o -name '*.mjs' \) -print -exec node --experimental-default-type=module --check {} \;
       - name: Verify pinned Baileys 7 version
         run: node -e "const p=require('./node_modules/@whiskeysockets/baileys/package.json'); if(p.version!=='7.0.0-rc14') throw new Error('Unexpected Baileys '+p.version); console.log(p.version)"
