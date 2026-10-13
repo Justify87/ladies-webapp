@@ -20,6 +20,8 @@ class ReleasePackageTests(unittest.TestCase):
                 self.assertIn("pyproject.toml", names)
                 self.assertIn("uv.lock", names)
                 self.assertIn("tools/portable_manager.py", names)
+                self.assertIn("tools/launcher_manager.py", names)
+                self.assertIn("tools/launcher_manager.html", names)
                 self.assertIn("packaging/start.command", names)
                 self.assertIn("packaging/update.command", names)
                 self.assertIn("release-manifest.json", names)
