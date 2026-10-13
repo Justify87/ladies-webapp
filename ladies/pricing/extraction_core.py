@@ -13,7 +13,7 @@ from ladies_v9.database import Database
 from ladies_v9.models import AppSetting, IdentityEvent, Person, PriceItem, PriceList, utcnow
 from ladies_v9.messaging.models import ChatMessage, ChatThread
 
-from .context import ContextMessage, build_context
+from .context import ContextMessage
 from .media_locator import PricingMediaLocator
 from .model_runtime import FunctionGemmaRuntime
 from .models import (
@@ -28,7 +28,7 @@ from .models import (
 )
 from .normalize import extract_durations, extract_money
 from .ocr import PaddleOcrV6TinyEngine
-from .rules import extract_with_rules, merge_partial, proposal_diff
+from .rules import merge_partial, proposal_diff
 from .schema import empty_proposal, validate_proposal
 
 LOGGER = logging.getLogger("ladies_explorer.pricing")
@@ -67,13 +67,12 @@ def iso(value: datetime | None) -> str | None:
 
 
 class PriceExtractionCore:
-    """Extraction, OCR, proposal and persistence primitives for the pricing service."""
+    """Extraction, OCR and persistence primitives for the canonical pricing service."""
 
-    def __init__(self, database: Database | str | Path, data_dir: str | Path):
-        owns_database = not isinstance(database, Database)
-        self.database = database if isinstance(database, Database) else Database(database)
-        if owns_database:
-            self.database.create_schema()
+    def __init__(self, database: Database, data_dir: str | Path):
+        if not isinstance(database, Database):
+            raise TypeError("Pricing benötigt die gemeinsame Application-Database")
+        self.database = database
         self.data_dir = Path(data_dir)
         self.media_locator = PricingMediaLocator(self.data_dir)
         self.ocr = PaddleOcrV6TinyEngine()
@@ -200,54 +199,6 @@ class PriceExtractionCore:
                 ocr_text=derived.ocr_text,
             ))
         return out
-
-    def create_proposal(self, thread_id: int, *, trigger_type: str = "MANUAL", seed_message_id: int | None = None) -> dict[str, Any]:
-        if not self.settings()[SETTING_ENABLED]:
-            raise ValueError("Preiserkennung ist deaktiviert")
-        if seed_message_id is None:
-            signal = self.signal(thread_id)
-            seed_message_id = signal.get("seed_message_id")
-        with self.database.session() as db:
-            thread = db.get(ChatThread, int(thread_id))
-            if thread is None:
-                raise KeyError(thread_id)
-            if thread.person_id is None:
-                raise ValueError("Chat ist keiner Person zugeordnet")
-            context = build_context(
-                thread_id=thread.thread_id,
-                person_id=int(thread.person_id),
-                rows=self._context_rows(db, thread),
-                seed_message_id=seed_message_id,
-            )
-            current_id, current = self._current_proposal(db, int(thread.person_id))
-            proposal = extract_with_rules(context, has_existing_price_list=current_id is not None)
-            if not (proposal["offers"] or proposal["service_rules"] or proposal["conditions"]):
-                raise ValueError("In diesem Chatabschnitt wurden keine ausreichend strukturierten Preisangaben erkannt")
-
-            extraction = PriceExtraction(
-                person_id=thread.person_id,
-                thread_id=thread.thread_id,
-                status="PENDING",
-                trigger_type=str(trigger_type or "MANUAL").upper()[:24],
-                schema_version=proposal["schema_version"],
-                extractor_name="rules",
-                extractor_version="1",
-                original_proposal_json=dumps(proposal),
-                context_fingerprint=context.fingerprint,
-                base_price_list_id=current_id,
-            )
-            db.add(extraction)
-            db.flush()
-            for position, message in enumerate(context.messages):
-                role = "PRIMARY" if message.message_id == seed_message_id else "IMAGE_OCR" if message.message_type == "IMAGE" and message.ocr_text else "QUESTION" if message.direction == "OUT" else "CONTEXT"
-                db.add(PriceExtractionMessage(
-                    price_extraction_id=extraction.price_extraction_id,
-                    message_id=message.message_id,
-                    role=role,
-                    position=position,
-                ))
-            db.flush()
-            return self._extraction_payload(db, extraction, current=current)
 
     def proposal(self, extraction_id: int) -> dict[str, Any]:
         with self.database.session() as db:
