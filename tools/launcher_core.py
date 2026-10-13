@@ -346,19 +346,27 @@ def _data_paths(root: Path) -> tuple[Path, Path, Path]:
 def _copy_tree(source: Path, destination: Path) -> None:
     source = source.resolve()
     destination = destination.resolve()
-    patterns = [
-        ".git", ".github", ".venv", ".runtime", ".state", "node_modules", "__pycache__",
-        "tests", "dist", "releases", "data", "logs", "ladies.sqlite3", "ladies.sqlite3-wal",
-        "ladies.sqlite3-shm", "ladies_data",
-    ]
+    ignored = shutil.ignore_patterns(
+        ".git", ".github", ".venv", ".runtime", "node_modules", "__pycache__",
+        "tests", "dist", "logs", "ladies.sqlite3", "ladies.sqlite3-wal", "ladies.sqlite3-shm", "ladies_data",
+    )
+    root_only = {RELEASES_DIR, DATA_DIR, STATE_DIR}
     try:
         relative_destination = destination.relative_to(source)
     except ValueError:
-        pass
+        nested_root = None
     else:
-        if relative_destination.parts:
-            patterns.append(relative_destination.parts[0])
-    shutil.copytree(source, destination, ignore=shutil.ignore_patterns(*patterns))
+        nested_root = relative_destination.parts[0] if relative_destination.parts else None
+
+    def ignore(path: str, names: list[str]) -> set[str]:
+        matches = set(ignored(path, names))
+        if Path(path).resolve() == source:
+            matches.update(name for name in names if name in root_only)
+            if nested_root and nested_root in names:
+                matches.add(nested_root)
+        return matches
+
+    shutil.copytree(source, destination, ignore=ignore)
 
 
 def _copy_if_exists(source: Path, destination: Path) -> None:
