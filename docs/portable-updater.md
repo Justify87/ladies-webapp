@@ -32,6 +32,8 @@ LadiesExplorer/
 
 `releases/` enthält austauschbaren Programmcode und pro Release ein eigenes reproduzierbares `.venv`. `.runtime/python/` enthält das von `uv` verwaltete app-lokale Python. `.state/` enthält Manager-/Prozesszustand und Sicherungen. `data/` enthält den permanenten Nutzerdatenbestand.
 
+Das System-Python von macOS oder Windows ist **nicht** die App-Runtime.
+
 ## Erstinstallation
 
 GitHub-Releases stellen das kanonische Asset `ladies-explorer-vX.Y.Z.zip` bereit.
