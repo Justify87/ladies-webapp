@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -206,7 +207,7 @@ def create_app(
 
     @app.get("/api/status-targets")
     def api_status_targets():
-        return jsonify(items=repos.persons.status_targets())
+        return jsonify(repos.persons.status_targets())
 
     @app.post("/api/profile-status/<advert_id>")
     def api_profile_status(advert_id: str):
@@ -266,6 +267,7 @@ def create_app(
         url = safe_media_url(str(request.args.get("url") or ""))
         if not url:
             raise ValidationError("Ungültige Media-URL")
+        spool = None
         try:
             upstream = http.get(
                 url,
@@ -273,36 +275,60 @@ def create_app(
                 timeout=30,
                 stream=True,
             )
-            upstream.raise_for_status()
-            content_length = upstream.headers.get("Content-Length")
-            if content_length and int(content_length) > MEDIA_PROXY_LIMIT:
+            try:
+                upstream.raise_for_status()
+                declared_length = None
+                raw_length = upstream.headers.get("Content-Length")
+                if raw_length:
+                    try:
+                        declared_length = int(raw_length)
+                    except (TypeError, ValueError):
+                        declared_length = None
+                if declared_length is not None and declared_length >= 0 and declared_length > MEDIA_PROXY_LIMIT:
+                    return jsonify(error="Media-Datei ist zu groß"), 413
+
+                content_type = str(upstream.headers.get("Content-Type") or "application/octet-stream").split(";", 1)[0].lower()
+                if not (content_type.startswith("image/") or content_type.startswith("video/")):
+                    raise ValidationError("Nicht unterstützter Media-Typ")
+
+                spool = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
+                total = 0
+                for chunk in upstream.iter_content(chunk_size=128 * 1024):
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > MEDIA_PROXY_LIMIT:
+                        LOGGER.warning("Media proxy response exceeded limit")
+                        spool.close()
+                        spool = None
+                        return jsonify(error="Media-Datei ist zu groß"), 413
+                    spool.write(chunk)
+            finally:
                 upstream.close()
-                raise ValidationError("Media-Datei ist zu groß")
-            content_type = str(upstream.headers.get("Content-Type") or "application/octet-stream").split(";", 1)[0].lower()
-            if not (content_type.startswith("image/") or content_type.startswith("video/")):
-                upstream.close()
-                raise ValidationError("Nicht unterstützter Media-Typ")
+
+            spool.seek(0)
 
             def chunks():
-                total = 0
                 try:
-                    for chunk in upstream.iter_content(chunk_size=128 * 1024):
+                    while True:
+                        chunk = spool.read(128 * 1024)
                         if not chunk:
-                            continue
-                        total += len(chunk)
-                        if total > MEDIA_PROXY_LIMIT:
-                            LOGGER.warning("Media proxy response exceeded limit")
                             break
                         yield chunk
                 finally:
-                    upstream.close()
+                    spool.close()
 
             response = Response(stream_with_context(chunks()), content_type=content_type)
+            response.content_length = total
             response.headers["Cache-Control"] = "private, max-age=3600"
             return response
         except ValidationError:
+            if spool is not None:
+                spool.close()
             raise
         except Exception as exc:
+            if spool is not None:
+                spool.close()
             LOGGER.exception("Media proxy failed")
             raise ExternalServiceError("Media-Datei konnte nicht geladen werden.") from exc
 
