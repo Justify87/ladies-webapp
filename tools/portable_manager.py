@@ -18,7 +18,7 @@ from typing import Any
 
 REPOSITORY = "Justify87/ladies-webapp"
 LATEST_RELEASE_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
-ASSET_PREFIX = "ladies-explorer-v"
+ASSET_PREFIX = "ladies-explorer-"
 ASSET_SUFFIX = ".zip"
 CURRENT_FILE = "current"
 RELEASES_DIR = "releases"
