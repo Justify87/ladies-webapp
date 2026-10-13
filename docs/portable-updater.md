@@ -1,34 +1,42 @@
-# Portable Installation und Updater
+# Portable Installation und Local Web Launcher Manager
 
-Der Ladies Explorer kann als portable, release-basierte Installation betrieben werden. Programmcode, reproduzierbare Runtime und persistente Daten sind dabei getrennt:
+Der Ladies Explorer wird portabel und release-basiert betrieben. Für den Benutzer existiert genau **ein** Manager: der lokale Web Launcher Manager. Er übernimmt Start, Stop, Updates, Datenmigration, Recovery, Logs und das Öffnen der Anwendung im Standardbrowser.
+
+`tools/portable_manager.py` existiert nicht mehr. Wiederverwendbare technische Primitiven für Installation, Release-Download, Digest-/ZIP-Prüfung, Lifecycle-Lock und Legacy-Datenübernahme liegen in `tools/launcher_core.py`. Dieses Modul besitzt keine eigene CLI und ist kein zweiter Manager.
 
 ```text
 LadiesExplorer/
 ├── start.command / start.cmd
-├── update.command / update.cmd
+├── update.command / update.cmd      # Kompatibilitätsalias zum selben Manager
 ├── current
 ├── .runtime/
-│   └── python/                 # von uv verwaltetes app-lokales Python 3.12
+│   └── python/
+├── .state/
+│   ├── launcher_manager.py
+│   ├── launcher_core.py
+│   ├── launcher_manager.html
+│   ├── manager.json
+│   ├── manager.log
+│   ├── app.pid
+│   ├── app-console.log
+│   └── backups/
 ├── releases/
-│   ├── v9.7.0/
-│   │   └── .venv/             # releasebezogene Python-Umgebung
-│   └── v9.7.1/
-│       └── .venv/
+│   ├── vX.Y.Z/
+│   │   └── .venv/
+│   └── ...
 └── data/
     ├── ladies.sqlite3
     ├── ladies_data/
     └── logs/
 ```
 
-`releases/` enthält austauschbaren Programmcode und pro Release ein eigenes reproduzierbares `.venv`. `.runtime/python/` enthält das von `uv` verwaltete app-lokale Python und bleibt beim Wechsel zwischen Releases erhalten. `data/` enthält ausschließlich den permanenten Nutzerdatenbestand und wird von Updates nicht ersetzt.
+`releases/` enthält austauschbaren Programmcode und pro Release ein eigenes reproduzierbares `.venv`. `.runtime/python/` enthält das von `uv` verwaltete app-lokale Python. `.state/` enthält Manager-/Prozesszustand und Sicherungen. `data/` enthält den permanenten Nutzerdatenbestand.
 
-Das System-Python von macOS oder Windows ist **nicht** die App-Runtime. Die Portable-Launcher verwenden ein vorhandenes Release-venv oder provisionieren über `uv` zuerst Python 3.12 unter `<root>/.runtime/python` und bauen daraus das Release-venv auf.
+Das System-Python von macOS oder Windows ist **nicht** die App-Runtime.
 
 ## Erstinstallation
 
-GitHub-Releases stellen ein kanonisches Asset `ladies-explorer-vX.Y.Z.zip` bereit. Nach dem Entpacken kann die portable Installation angelegt werden.
-
-Für die einmalige Runtime-Provisionierung wird `uv` verwendet. Dadurch muss insbesondere das von macOS mitgelieferte System-Python nicht verändert oder als App-Runtime verwendet werden.
+GitHub-Releases stellen das kanonische Asset `ladies-explorer-vX.Y.Z.zip` bereit.
 
 macOS/Linux:
 
@@ -42,56 +50,66 @@ Windows:
 packaging\install.cmd
 ```
 
-Ohne weitere Argumente wird neben dem entpackten Release ein Ordner `LadiesExplorer` erzeugt. Ein anderer Zielpfad ist möglich:
+Die Installer starten `launcher_manager.py install`. Wenn kein Release-venv vorhanden ist, wird Python 3.12 über `uv` provisioniert; das Betriebssystem-Python wird nicht als App-Runtime vorausgesetzt.
+
+Ein eigener Zielpfad ist möglich:
 
 ```bash
 ./packaging/install.command --root /pfad/zu/LadiesExplorer
 ```
 
-## Bestehende lokale Daten übernehmen
-
-Eine bisherige entpackte Installation kann einmalig als Legacy-Quelle angegeben werden:
+### Bestehende Daten einmalig übernehmen
 
 ```bash
 ./packaging/install.command --legacy-root /pfad/zur/alten/installation
 ```
 
-Die alte Ladies-Explorer-App muss dafür vollständig beendet sein. Bei interaktiver Ausführung fordert der Installer dafür eine ausdrückliche Bestätigung an. Für bewusst nicht-interaktive Migrationen kann nach dem Beenden der Altinstallation zusätzlich `--legacy-stopped` angegeben werden.
+Die alte App muss vollständig beendet sein. Übernommen werden, sofern vorhanden:
 
-Übernommen werden, sofern vorhanden:
-
-- `ladies.sqlite3` über die SQLite-Backup-API als konsistenter Datenbank-Snapshot; WAL/SHM-Sidecars werden nicht roh kopiert;
-- `ladies_data/` inklusive WhatsApp-Auth, WhatsApp-Medien, Recent-History und LAN-Gerätesessions;
+- `ladies.sqlite3` als konsistenter SQLite-Backup-Snapshot;
+- `ladies_data/` einschließlich WhatsApp-Auth, Medien, Recent-History und LAN-Gerätesessions;
 - `logs/`.
 
-Nicht aus einer Legacy-Installation übernommen werden reproduzierbare Runtime-Daten wie `.venv/`, `.runtime` oder `node_modules/`. Die Portable-Installation erzeugt ihre eigene Runtime neu.
+WAL-/SHM-Dateien werden nicht roh kopiert. Reproduzierbare Runtime-Daten wie `.venv/`, `.runtime/` oder `node_modules/` werden nicht migriert.
 
-Die alte Installation wird nicht gelöscht.
-
-## Start
-
-Nach der Installation wird die aktive Version ausschließlich über die Launcher im Installationsroot gestartet:
+## Zentraler Start
 
 ```bash
 ./start.command
 ```
 
-beziehungsweise unter Windows:
+beziehungsweise:
 
 ```cmd
 start.cmd
 ```
 
-Der Launcher löst die Python-Runtime in dieser Reihenfolge auf:
+Der Root-Launcher spiegelt `launcher_manager.py`, `launcher_core.py` und `launcher_manager.html` gemeinsam aus dem aktiven Release nach `.state/`. Danach startet er ausschließlich den Local Web Launcher Manager.
 
-1. vorhandenes `<root>/releases/<current>/.venv` verwenden;
-2. falls es fehlt, über `uv` ein app-lokales Python 3.12 unter `<root>/.runtime/python` provisionieren;
-3. daraus das Release-venv synchronisieren;
-4. erst danach den Portable Manager und `ladies_explorer.py` starten.
+Der Manager bindet nur an `127.0.0.1`, verwendet pro Start ein zufälliges Zugriffstoken und öffnet seine Oberfläche automatisch im Standardbrowser. Ein erneuter Launcher-Aufruf öffnet die bereits laufende Manager-Instanz, statt eine zweite zu erzeugen.
 
-Dadurch kann beispielsweise ein macOS-System-Python 3.9 vorhanden sein, ohne dass es für die Anwendung benutzt wird.
+## Manager-Oberfläche
 
-Der Launcher übergibt der aktiven Release-Version immer dieselben persistenten Pfade:
+Die Oberfläche stellt nur die betrieblich relevanten Funktionen bereit:
+
+- installierte Version und App-Status;
+- **Starten** / **Stoppen** / **App öffnen**;
+- **Update prüfen** / **Aktualisieren**;
+- DB- und Release-Schema;
+- letzten Pre-Update-Backupstand;
+- Datenordner;
+- Manager-/App-Aktivität und Logs;
+- Manager beenden.
+
+### App starten
+
+Der Manager:
+
+1. verwendet ein vorhandenes Release-venv oder provisioniert Python 3.12 über `uv`;
+2. synchronisiert das Release-venv reproduzierbar aus `pyproject.toml` und `uv.lock`;
+3. startet `ladies_explorer.py` mit den persistenten Pfaden;
+4. wartet auf `/api/config`;
+5. öffnet erst nach erfolgreicher Readiness die Anwendung im Standardbrowser.
 
 ```text
 --db       <root>/data/ladies.sqlite3
@@ -99,53 +117,77 @@ Der Launcher übergibt der aktiven Release-Version immer dieselben persistenten 
 --log      <root>/data/logs/ladies_explorer.log
 ```
 
-Dadurch bleiben insbesondere WhatsApp-Kopplung, Chats, Medien, Profile, Preise und LAN-Gerätesessions über Releases hinweg erhalten.
+Bei einem Readiness-Timeout wird der gestartete Prozess wieder beendet, damit kein verwaister App-Prozess zurückbleibt.
 
-## Update
+### App stoppen
 
-Updates werden bewusst nur manuell gestartet:
+Die PID liegt unter `.state/app.pid`. Der Manager beendet die zugehörige Prozessgruppe zunächst sauber und erzwingt das Beenden nur nach Ablauf des Stop-Timeouts. Der Web-Manager selbst bleibt dabei verfügbar.
 
-```bash
-./update.command
-```
+## Updates
 
-Auch der Updater läuft über die app-eigene Runtime des aktuell aktiven Releases und nicht über das System-Python.
+`update.command` und `update.cmd` sind nur Kompatibilitäts-Entrypoints und öffnen denselben Web-Manager. Es existiert kein separater Updater und keine zweite Manager-CLI.
 
-Der Updater:
+### Update prüfen
 
-1. liest die aktive Version aus `current`;
-2. fragt den neuesten stabilen GitHub-Release ab;
-3. erwartet exakt `ladies-explorer-vX.Y.Z.zip`;
-4. prüft den von GitHub gelieferten SHA-256-Digest;
-5. validiert ZIP-Pfade und `release-manifest.json`;
-6. entpackt zunächst nach `releases/.staging-vX.Y.Z`;
-7. aktiviert den neuen Release erst nach vollständiger Validierung atomar über `current`;
-8. behält den neuen Release und den unmittelbar zuvor aktiven Release für einen gezielten Rollback.
+**Update prüfen** liest nur den neuesten stabilen GitHub-Release. Eine laufende App wird dabei nicht gestoppt oder verändert.
 
-Wenn Download, Digest, ZIP oder Manifest fehlschlagen, bleibt `current` unverändert.
+### Aktualisieren
 
-`start`, `update` und `rollback` teilen sich einen atomaren Lifecycle-Lock. Dadurch kann während eines laufenden Starts beziehungsweise einer laufenden App kein Update/Rollback beginnen und während eines Updates/Rollbacks kein paralleler Start dazwischenlaufen. Unter Windows prüft der Manager Prozesszustände read-only über die Windows-Prozess-API und sendet dabei kein Signal an den Prozess.
+Der kontrollierte Update-Ablauf ist:
 
-## Rollback
+1. neuesten stabilen Release bestimmen;
+2. zuvor laufende App stoppen;
+3. vorhandene SQLite-Datenbank konsistent nach `.state/backups/` sichern;
+4. Release-Asset laden;
+5. GitHub-SHA-256-Digest prüfen;
+6. ZIP-Pfade und `release-manifest.json` validieren;
+7. in ein Staging-Verzeichnis entpacken;
+8. neuen Release atomar aktivieren und Root-Launcher aktualisieren;
+9. Release-venv synchronisieren;
+10. kanonische `Database.create_schema()`-Migration ausführen;
+11. eine zuvor laufende App wieder starten und öffnen;
+12. Manager, Core und UI nach `.state/` übernehmen;
+13. den laufenden Web-Manager kontrolliert mit der neuen Manager-Version neu starten und die neue Manager-Oberfläche öffnen.
 
-Über den Manager kann auf die vorherige installierte Version zurückgeschaltet werden:
+Die Release-Download-, Digest-, ZIP-, Manifest-, Staging- und Retention-Logik liegt als interne Core-Funktionalität in `launcher_core.py` und ist nur über den Web-Manager erreichbar.
 
-```bash
-python3 releases/<aktuell>/tools/portable_manager.py rollback --root .
-```
+### Fehlerfall und Recovery
 
-Ein Rollback wird blockiert, wenn das vorhandene SQLite-Schema neuer ist als das Schema der Zielversion. Datenbank-Backups und eigentliche Schema-Migrationen bleiben Verantwortung der bestehenden `Database`-Schicht; der Updater führt keine eigenen SQL-Migrationen oder automatischen Daten-Rollbacks aus.
+Stop, Backup, Aktivierung, Runtime-Synchronisierung und Migration liegen im selben geschützten Ablauf. Scheitert ein Schritt, versucht der Manager **jeden Recovery-Schritt unabhängig**, sodass ein einzelner Recovery-Fehler spätere Rückrollschritte nicht blockiert:
 
-## Status
+1. eventuell noch laufende neue App stoppen;
+2. vorhandenen Pre-Update-Datenbankstand wiederherstellen;
+3. wenn vor dem Update noch keine DB existierte, eine während der fehlgeschlagenen Migration neu erzeugte DB samt WAL/SHM entfernen;
+4. `current` auf den vorherigen Release zurücksetzen;
+5. die Root-Launcher aus dem vorherigen Release wiederherstellen;
+6. Manager, Core und UI des vorherigen Releases wieder nach `.state/` spiegeln;
+7. eine zuvor laufende App nach Möglichkeit mit der vorherigen Version neu starten.
 
-```bash
-python3 releases/<aktuell>/tools/portable_manager.py status --root .
-```
+Fehlschläge einzelner Recovery-Schritte werden gesammelt und sichtbar gemeldet. Die letzten drei Pre-Update-Datenbankbackups werden aufbewahrt.
 
-zeigt unter anderem aktive Version, persistente Pfade, DB-Schema-Version und gegebenenfalls die laufende PID.
+## Laufzeit- und Sicherheitsmodell
+
+- Manager-Webserver ausschließlich auf `127.0.0.1` mit dynamischem Port;
+- zufälliges Zugriffstoken pro Manager-Start;
+- keine externe JavaScript-/CSS-Abhängigkeit;
+- `Cache-Control: no-store`, `X-Frame-Options: DENY`, restriktive CSP;
+- Start/Stop/Update werden serialisiert;
+- parallele Manager-Aktionen werden abgewiesen;
+- Prozess- und Managerzustand ausschließlich unter `.state/`;
+- Nutzerdaten ausschließlich unter `data/`;
+- System-Python wird nicht als App-Runtime verwendet.
 
 ## Release-Erzeugung
 
-`tools/build_release.py` erstellt das kanonische Distributions-ZIP aus getrackten Runtime-Dateien und erzeugt darin `release-manifest.json` mit App-Version, Tag, Commit, Entrypoint und DB-Schema-Version. Persistente Daten, Tests, CI-Dateien und lokale Runtime-Caches werden nicht in das Paket aufgenommen.
+`tools/build_release.py` erstellt das kanonische ZIP und `release-manifest.json` mit App-Version, Tag, Commit, Entrypoint und DB-Schema-Version.
 
-Der GitHub-Release-Workflow baut und validiert dieses Paket erst nach erfolgreicher Verifikation des exakten Release-Commits und lädt es anschließend als Release-Asset hoch.
+Ein gültiges Paket muss enthalten:
+
+- `tools/launcher_manager.py`;
+- `tools/launcher_core.py`;
+- `tools/launcher_manager.html`;
+- `packaging/install.command` / `install.cmd`;
+- `packaging/start.command` / `start.cmd`;
+- `packaging/update.command` / `update.cmd`.
+
+`tools/portable_manager.py` ist ausdrücklich verboten und wird durch die Release-Validierung abgelehnt. Persistente Daten, lokale Runtime-Caches, Tests und CI-Dateien werden nicht ausgeliefert.

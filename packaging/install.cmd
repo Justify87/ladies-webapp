@@ -1,7 +1,7 @@
 @echo off
 setlocal
 set "SOURCE=%~dp0.."
-set "MANAGER=%SOURCE%\tools\portable_manager.py"
+set "MANAGER=%SOURCE%\tools\launcher_manager.py"
 set "VENV_PYTHON=%SOURCE%\.venv\Scripts\python.exe"
 
 if exist "%VENV_PYTHON%" (

@@ -13,96 +13,103 @@ PACKAGING = ROOT / "packaging"
 
 
 class PortableLauncherContractTests(unittest.TestCase):
-    def test_unix_launchers_use_release_venv_or_uv_managed_runtime(self):
-        for name in ("start.command", "update.command"):
-            text = (PACKAGING / name).read_text(encoding="utf-8")
-            with self.subTest(name=name):
-                self.assertIn('.venv/bin/python', text)
-                self.assertIn('UV_PYTHON_INSTALL_DIR="$ROOT/.runtime/python"', text)
-                self.assertIn('UV_PROJECT_ENVIRONMENT="$RELEASE/.venv"', text)
-                self.assertIn('uv python install 3.12', text)
-                self.assertIn('uv python find 3.12', text)
-                self.assertIn('uv run --locked --project "$RELEASE"', text)
-                self.assertNotIn('exec python3 ', text)
+    def test_unix_start_launcher_opens_single_manager_and_copies_runtime_files(self):
+        text = (PACKAGING / "start.command").read_text(encoding="utf-8")
+        for name in ("launcher_manager.py", "launcher_core.py", "launcher_manager.html"):
+            self.assertIn(name, text)
+        self.assertIn('STATE_DIR="$ROOT/.state"', text)
+        self.assertIn('.venv/bin/python', text)
+        self.assertIn('UV_PYTHON_INSTALL_DIR="$ROOT/.runtime/python"', text)
+        self.assertIn('uv python install 3.12', text)
+        self.assertIn(' launch --root "$ROOT"', text)
+        self.assertNotIn("portable_manager.py", text)
+        self.assertNotIn("PYTHONPATH", text)
 
-    def test_windows_launchers_use_release_venv_or_uv_managed_runtime(self):
-        for name in ("start.cmd", "update.cmd"):
-            text = (PACKAGING / name).read_text(encoding="utf-8")
-            with self.subTest(name=name):
-                self.assertIn('.venv\\Scripts\\python.exe', text)
-                self.assertIn('UV_PYTHON_INSTALL_DIR=%ROOT%.runtime\\python', text)
-                self.assertIn('UV_PROJECT_ENVIRONMENT=%RELEASE%\\.venv', text)
-                self.assertIn('uv python install 3.12', text)
-                self.assertIn('uv python find 3.12', text)
-                self.assertIn('uv run --locked --project "%RELEASE%"', text)
+    def test_windows_start_launcher_opens_single_manager_and_copies_runtime_files(self):
+        text = (PACKAGING / "start.cmd").read_text(encoding="utf-8")
+        for name in ("launcher_manager.py", "launcher_core.py", "launcher_manager.html"):
+            self.assertIn(name, text)
+        self.assertIn('set "STATE_DIR=%ROOT%.state"', text)
+        self.assertIn('.venv\\Scripts\\python.exe', text)
+        self.assertIn('UV_PYTHON_INSTALL_DIR=%ROOT%.runtime\\python', text)
+        self.assertIn('uv python install 3.12', text)
+        self.assertIn(' launch --root "%ROOT%"', text)
+        self.assertNotIn("portable_manager.py", text)
+        self.assertNotIn("PYTHONPATH", text)
 
-    def test_installers_bootstrap_through_uv_instead_of_system_python(self):
+    def test_update_launchers_delegate_to_central_manager(self):
+        unix = (PACKAGING / "update.command").read_text(encoding="utf-8")
+        windows = (PACKAGING / "update.cmd").read_text(encoding="utf-8")
+        self.assertIn('exec "$ROOT/start.command"', unix)
+        self.assertIn('call "%ROOT%start.cmd"', windows)
+        self.assertNotIn("portable_manager.py", unix)
+        self.assertNotIn("portable_manager.py", windows)
+
+    def test_installers_use_launcher_manager_and_uv_bootstrap(self):
         unix = (PACKAGING / "install.command").read_text(encoding="utf-8")
         windows = (PACKAGING / "install.cmd").read_text(encoding="utf-8")
+        self.assertIn("tools/launcher_manager.py", unix)
+        self.assertIn("tools\\launcher_manager.py", windows)
         self.assertIn('uv run --locked --project "$SOURCE" --python 3.12', unix)
-        self.assertNotIn('exec python3 ', unix)
         self.assertIn('uv run --locked --project "%SOURCE%" --python 3.12', windows)
+        self.assertNotIn("portable_manager.py", unix)
+        self.assertNotIn("portable_manager.py", windows)
 
     @unittest.skipIf(os.name == "nt", "POSIX launcher execution test")
-    def test_start_launcher_prefers_existing_release_venv(self):
+    def test_start_launcher_prefers_existing_release_venv_and_copies_manager_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "LadiesExplorer"
-            release = root / "releases" / "v9.7.1"
-            manager = release / "tools" / "portable_manager.py"
+            release = root / "releases" / "v9.8.0"
+            tools = release / "tools"
             python = release / ".venv" / "bin" / "python"
-            manager.parent.mkdir(parents=True)
+            tools.mkdir(parents=True)
             python.parent.mkdir(parents=True)
-            manager.write_text("# manager\n", encoding="utf-8")
-            (root / "current").write_text("v9.7.1\n", encoding="utf-8")
+            (tools / "launcher_manager.py").write_text("# manager\n", encoding="utf-8")
+            (tools / "launcher_core.py").write_text("# core\n", encoding="utf-8")
+            (tools / "launcher_manager.html").write_text("<html></html>\n", encoding="utf-8")
+            (root / "current").write_text("v9.8.0\n", encoding="utf-8")
             shutil.copy2(PACKAGING / "start.command", root / "start.command")
             capture = root / "capture.txt"
-            python.write_text(
-                '#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE"\n',
-                encoding="utf-8",
-            )
+            python.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE"\n', encoding="utf-8")
             python.chmod(0o755)
             env = os.environ.copy()
             env["CAPTURE"] = str(capture)
 
             result = subprocess.run(
-                ["sh", str(root / "start.command"), "--port", "9876"],
-                env=env,
-                text=True,
-                capture_output=True,
-                check=False,
+                ["sh", str(root / "start.command")], env=env, text=True, capture_output=True, check=False
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
+            state = root / ".state"
+            for name in ("launcher_manager.py", "launcher_core.py", "launcher_manager.html"):
+                self.assertTrue((state / name).is_file())
             args = capture.read_text(encoding="utf-8").splitlines()
-            self.assertEqual(args[0], str(manager))
-            self.assertEqual(args[1:4], ["start", "--root", str(root)])
-            self.assertEqual(args[4:], ["--port", "9876"])
+            self.assertEqual(args, [str(state / "launcher_manager.py"), "launch", "--root", str(root)])
 
     @unittest.skipIf(os.name == "nt", "POSIX launcher execution test")
-    def test_start_launcher_uv_fallback_uses_install_local_python_dir(self):
+    def test_start_launcher_uv_fallback_uses_install_local_python(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "LadiesExplorer"
-            release = root / "releases" / "v9.7.1"
-            manager = release / "tools" / "portable_manager.py"
-            manager.parent.mkdir(parents=True)
-            manager.write_text("# manager\n", encoding="utf-8")
-            (root / "current").write_text("v9.7.1\n", encoding="utf-8")
+            release = root / "releases" / "v9.8.0"
+            tools = release / "tools"
+            tools.mkdir(parents=True)
+            (tools / "launcher_manager.py").write_text("# manager\n", encoding="utf-8")
+            (tools / "launcher_core.py").write_text("# core\n", encoding="utf-8")
+            (tools / "launcher_manager.html").write_text("<html></html>\n", encoding="utf-8")
+            (root / "current").write_text("v9.8.0\n", encoding="utf-8")
             shutil.copy2(PACKAGING / "start.command", root / "start.command")
 
             fake_bin = Path(tmp) / "bin"
             fake_bin.mkdir()
-            capture = root / "uv-run.txt"
-            env_capture = root / "uv-env.txt"
+            capture = root / "python-run.txt"
             uv = fake_bin / "uv"
+            managed_python = fake_bin / "managed-python"
+            managed_python.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE"\n', encoding="utf-8")
+            managed_python.chmod(0o755)
             uv.write_text(
                 "#!/bin/sh\n"
                 "if [ \"$1\" = python ] && [ \"$2\" = install ]; then exit 0; fi\n"
-                "if [ \"$1\" = python ] && [ \"$2\" = find ]; then echo /managed/python3.12; exit 0; fi\n"
-                "if [ \"$1\" = run ]; then\n"
-                "  printf '%s\\n' \"$@\" > \"$CAPTURE\"\n"
-                "  printf '%s\\n%s\\n' \"$UV_PYTHON_INSTALL_DIR\" \"$UV_PROJECT_ENVIRONMENT\" > \"$ENV_CAPTURE\"\n"
-                "  exit 0\n"
-                "fi\n"
+                "if [ \"$1\" = python ] && [ \"$2\" = find ]; then echo \"$MANAGED_PYTHON\"; exit 0; fi\n"
                 "exit 1\n",
                 encoding="utf-8",
             )
@@ -110,32 +117,21 @@ class PortableLauncherContractTests(unittest.TestCase):
             env = os.environ.copy()
             env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
             env["CAPTURE"] = str(capture)
-            env["ENV_CAPTURE"] = str(env_capture)
+            env["MANAGED_PYTHON"] = str(managed_python)
 
             result = subprocess.run(
-                ["sh", str(root / "start.command")],
-                env=env,
-                text=True,
-                capture_output=True,
-                check=False,
+                ["sh", str(root / "start.command")], env=env, text=True, capture_output=True, check=False
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            uv_args = capture.read_text(encoding="utf-8").splitlines()
-            self.assertIn("--python", uv_args)
-            self.assertIn("/managed/python3.12", uv_args)
-            runtime_dir, project_env = env_capture.read_text(encoding="utf-8").splitlines()
-            self.assertEqual(runtime_dir, str(root / ".runtime" / "python"))
-            self.assertEqual(project_env, str(release / ".venv"))
+            args = capture.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(args[0], str(root / ".state" / "launcher_manager.py"))
+            self.assertEqual(args[1:], ["launch", "--root", str(root)])
 
     @unittest.skipIf(os.name == "nt", "POSIX launcher execution test")
     def test_distribution_start_launcher_fails_with_install_guidance(self):
         result = subprocess.run(
-            ["sh", str(PACKAGING / "start.command")],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
+            ["sh", str(PACKAGING / "start.command")], cwd=ROOT, text=True, capture_output=True, check=False
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Portable Installation ist noch nicht eingerichtet", result.stderr)

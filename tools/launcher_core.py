@@ -1,14 +1,10 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
 import shutil
 import sqlite3
-import subprocess
-import sys
 import tempfile
 import urllib.error
 import urllib.request
@@ -36,13 +32,6 @@ class PortableError(RuntimeError):
     pass
 
 
-def _console(text: str = "", *, file=None) -> None:
-    stream = file or sys.stdout
-    encoding = getattr(stream, "encoding", None) or "utf-8"
-    safe = str(text).encode(encoding, errors="replace").decode(encoding, errors="replace")
-    print(safe, file=stream)
-
-
 def _semver(value: str) -> tuple[int, int, int]:
     match = SEMVER_RE.fullmatch(str(value).strip())
     if not match:
@@ -53,17 +42,6 @@ def _semver(value: str) -> tuple[int, int, int]:
 def _tag(value: str) -> str:
     major, minor, patch = _semver(value)
     return f"v{major}.{minor}.{patch}"
-
-
-def infer_install_root(script: Path | None = None) -> Path:
-    path = (script or Path(__file__)).resolve()
-    for candidate in (path.parent, *path.parents):
-        if (candidate / RELEASES_DIR).is_dir() and (candidate / CURRENT_FILE).exists():
-            return candidate
-    try:
-        return path.parents[2]
-    except IndexError as exc:
-        raise PortableError("Installationsverzeichnis konnte nicht bestimmt werden") from exc
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -110,7 +88,15 @@ def _manifest(path: Path) -> dict[str, Any]:
 
 
 def validate_release_dir(path: Path, expected_tag: str | None = None) -> dict[str, Any]:
-    required = ["ladies_explorer.py", "pyproject.toml", "uv.lock", "ladies", "tools/portable_manager.py"]
+    required = [
+        "ladies_explorer.py",
+        "pyproject.toml",
+        "uv.lock",
+        "ladies",
+        "tools/launcher_manager.py",
+        "tools/launcher_core.py",
+        "tools/launcher_manager.html",
+    ]
     missing = [item for item in required if not (path / item).exists()]
     if missing:
         raise PortableError("Release ist unvollständig: " + ", ".join(missing))
@@ -357,37 +343,6 @@ def _data_paths(root: Path) -> tuple[Path, Path, Path]:
     return data_root / "ladies.sqlite3", data_root / "ladies_data", data_root / "logs" / "ladies_explorer.log"
 
 
-def start(root: Path, extra_args: list[str] | None = None) -> int:
-    root = root.resolve()
-    with lifecycle_lock(root, "start"):
-        if active_pid(root) is not None:
-            raise PortableError("Ladies Explorer läuft bereits")
-        current = read_current(root)
-        release_dir = root / RELEASES_DIR / current
-        validate_release_dir(release_dir, current)
-        db_path, data_dir, log_path = _data_paths(root)
-        data_dir.mkdir(parents=True, exist_ok=True)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        command = [
-            sys.executable,
-            str(release_dir / "ladies_explorer.py"),
-            "--host", "0.0.0.0",
-            "--db", str(db_path),
-            "--data-dir", str(data_dir),
-            "--log", str(log_path),
-            *(extra_args or []),
-        ]
-        process = subprocess.Popen(command, cwd=release_dir)
-        _atomic_write(_pid_path(root), f"{process.pid}\n")
-        try:
-            return int(process.wait())
-        finally:
-            try:
-                _pid_path(root).unlink()
-            except OSError:
-                pass
-
-
 def _copy_tree(source: Path, destination: Path) -> None:
     ignored = shutil.ignore_patterns(
         ".git", ".github", ".venv", ".runtime", "node_modules", "__pycache__",
@@ -549,11 +504,6 @@ def _db_schema_version(root: Path) -> int:
         raise PortableError(f"Datenbank-Schema konnte nicht gelesen werden: {exc}") from exc
 
 
-def _release_schema(root: Path, tag: str) -> int:
-    data = validate_release_dir(root / RELEASES_DIR / _tag(tag), tag)
-    return int(data["db_schema_version"])
-
-
 def prune_releases(
     root: Path,
     keep: int = MAX_RELEASES,
@@ -599,7 +549,7 @@ def _activate_staged(root: Path, staging: Path, tag: str, *, previous: str) -> N
     prune_releases(root, preserve={tag, previous})
 
 
-def update(root: Path) -> str:
+def update_release(root: Path) -> str:
     root = root.resolve()
     with lifecycle_lock(root, "update"):
         _ensure_not_running(root)
@@ -607,18 +557,12 @@ def update(root: Path) -> str:
         release = latest_release()
         latest = _tag(str(release.get("tag_name") or ""))
         if _semver(latest) <= _semver(current):
-            _console(f"Ladies Explorer {current} ist bereits aktuell.")
             return current
 
         asset = _asset_for_release(release)
         url = str(asset.get("browser_download_url") or "")
         if not url.startswith("https://"):
             raise PortableError("Release-Asset besitzt keine gültige Download-URL")
-
-        _console(f"Update verfügbar: {current} -> {latest}")
-        notes = str(release.get("body") or "").strip()
-        if notes:
-            _console("\n" + notes + "\n")
 
         state = root / STATE_DIR
         downloads = state / "downloads"
@@ -641,64 +585,22 @@ def update(root: Path) -> str:
             except OSError:
                 pass
             shutil.rmtree(staging, ignore_errors=True)
-        _console(f"[OK] {latest} installiert. Persistente Daten wurden nicht verändert.")
         return latest
 
 
-def rollback(root: Path) -> str:
-    root = root.resolve()
-    with lifecycle_lock(root, "rollback"):
-        _ensure_not_running(root)
-        current = read_current(root)
-        current_key = _semver(current)
-        candidates: list[tuple[tuple[int, int, int], str]] = []
-        for path in (root / RELEASES_DIR).iterdir():
-            if not path.is_dir() or path.name == current or path.name.startswith("."):
-                continue
-            try:
-                key = _semver(path.name)
-                if key < current_key:
-                    candidates.append((key, _tag(path.name)))
-            except PortableError:
-                continue
-        if not candidates:
-            raise PortableError("Keine vorherige Release-Version für Rollback vorhanden")
-        candidates.sort(reverse=True)
-        target = candidates[0][1]
-        db_schema = _db_schema_version(root)
-        target_schema = _release_schema(root, target)
-        if db_schema > target_schema:
-            raise PortableError(
-                f"Rollback auf {target} blockiert: Datenbank-Schema {db_schema} ist neuer als Release-Schema {target_schema}."
-            )
-        set_current(root, target)
-        _copy_launchers(root / RELEASES_DIR / target, root)
-        _console(f"[OK] {target} ist wieder aktiv.")
-        return target
-
-
-def status(root: Path) -> dict[str, Any]:
-    root = root.resolve()
-    current = read_current(root)
-    db_path, data_dir, log_path = _data_paths(root)
-    result = {
-        "root": str(root),
-        "current": current,
-        "db": str(db_path),
-        "data_dir": str(data_dir),
-        "log": str(log_path),
-        "running_pid": active_pid(root),
-        "db_schema_version": _db_schema_version(root),
-    }
-    _console(json.dumps(result, ensure_ascii=False, indent=2))
-    return result
+def restore_release(root: Path, tag: str) -> None:
+    """Restore the selected installed release including root launchers."""
+    target = root / RELEASES_DIR / _tag(tag)
+    validate_release_dir(target, tag)
+    set_current(root, tag)
+    _copy_launchers(target, root)
 
 
 def _confirm_legacy_stopped(legacy_root: Path) -> bool:
     pid = _portable_legacy_pid(legacy_root)
     if pid is not None:
         raise PortableError(f"Die alte Ladies-Explorer-Installation läuft noch (PID {pid}). Bitte zuerst beenden.")
-    if not sys.stdin.isatty():
+    if not os.isatty(0):
         raise PortableError(
             "Legacy-Migration ist nicht interaktiv. Alte App beenden und mit --legacy-stopped ausdrücklich bestätigen."
         )
@@ -708,65 +610,3 @@ def _confirm_legacy_stopped(legacy_root: Path) -> bool:
     if answer not in {"j", "ja", "y", "yes"}:
         raise PortableError("Legacy-Migration abgebrochen")
     return True
-
-
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Ladies Explorer Portable Release Manager")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    install_cmd = sub.add_parser("install", help="Portable Installation anlegen")
-    install_cmd.add_argument("--source", type=Path, default=Path(__file__).resolve().parents[1])
-    install_cmd.add_argument("--root", type=Path)
-    install_cmd.add_argument("--legacy-root", type=Path)
-    install_cmd.add_argument(
-        "--legacy-stopped",
-        action="store_true",
-        help="Bestätigt für nicht-interaktive Migrationen ausdrücklich, dass die alte App beendet ist",
-    )
-
-    for name in ("start", "update", "rollback", "status"):
-        command = sub.add_parser(name)
-        command.add_argument("--root", type=Path)
-        if name == "start":
-            command.add_argument("args", nargs=argparse.REMAINDER)
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = _parser()
-    args = parser.parse_args(argv)
-    try:
-        if args.command == "install":
-            source = args.source.resolve()
-            root = (args.root or (source.parent / "LadiesExplorer")).resolve()
-            legacy_root = args.legacy_root
-            if legacy_root is None:
-                legacy_root = detect_legacy_root(source, root)
-                if legacy_root is not None:
-                    _console(f"Bestehende Installation erkannt: {legacy_root}")
-            legacy_stopped = bool(args.legacy_stopped)
-            if legacy_root is not None and not legacy_stopped:
-                legacy_stopped = _confirm_legacy_stopped(legacy_root.resolve())
-            tag = install(source, root, legacy_root, legacy_stopped=legacy_stopped)
-            _console(f"[OK] Ladies Explorer {tag} installiert: {root}")
-            return 0
-        root = (args.root or infer_install_root()).resolve()
-        if args.command == "start":
-            return start(root, args.args)
-        if args.command == "update":
-            update(root)
-            return 0
-        if args.command == "rollback":
-            rollback(root)
-            return 0
-        if args.command == "status":
-            status(root)
-            return 0
-    except PortableError as exc:
-        _console(f"Fehler: {exc}", file=sys.stderr)
-        return 2
-    return 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

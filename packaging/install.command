@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 SOURCE="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-MANAGER="$SOURCE/tools/portable_manager.py"
+MANAGER="$SOURCE/tools/launcher_manager.py"
 VENV_PYTHON="$SOURCE/.venv/bin/python"
 
 if [ -x "$VENV_PYTHON" ]; then

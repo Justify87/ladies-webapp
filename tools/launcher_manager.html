@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ladies Explorer Manager</title>
+<style>
+:root{color-scheme:dark;--bg:#0d0d0f;--panel:#17171a;--panel2:#1d1d21;--line:#2b2b30;--text:#f5f5f6;--muted:#9b9ba4;--accent:#f43f5e;--accent2:#fb7185;--good:#34d399;--warn:#fbbf24;--bad:#fb7185;--shadow:0 18px 55px rgba(0,0,0,.32)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh}.wrap{width:min(760px,calc(100% - 28px));margin:34px auto 50px}.top{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:18px}.brand{display:flex;align-items:center;gap:12px}.mark{width:38px;height:38px;border-radius:12px;background:var(--accent);display:grid;place-items:center;font-weight:800;box-shadow:0 8px 28px rgba(244,63,94,.24)}h1{font-size:18px;margin:0;letter-spacing:-.02em}.sub{font-size:12px;color:var(--muted);margin-top:2px}.pill{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:7px 10px;color:var(--muted);font-size:12px;white-space:nowrap}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--muted);margin-right:6px}.pill.on .dot{background:var(--good)}.pill.busy .dot{background:var(--warn)}.grid{display:grid;grid-template-columns:1.25fr .75fr;gap:14px}.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--shadow)}.card h2{font-size:13px;margin:0 0 14px;color:#d9d9de;font-weight:650}.hero{grid-column:1/-1;padding:20px}.hero-row{display:flex;align-items:center;justify-content:space-between;gap:18px}.state-title{font-size:25px;font-weight:720;letter-spacing:-.035em}.state-copy{color:var(--muted);margin-top:4px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}button{appearance:none;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:11px;padding:9px 13px;font:inherit;font-weight:620;cursor:pointer;transition:.15s ease}button:hover:not(:disabled){border-color:#46464e;transform:translateY(-1px)}button.primary{background:var(--accent);border-color:var(--accent);color:white}button.primary:hover:not(:disabled){background:var(--accent2)}button.danger{color:#fecdd3}button:disabled{opacity:.42;cursor:not-allowed}.kv{display:grid;grid-template-columns:1fr auto;gap:9px 18px}.kv div:nth-child(odd){color:var(--muted)}.kv div:nth-child(even){text-align:right;font-variant-numeric:tabular-nums}.version{font-weight:700;color:#fff}.update-note{font-size:12px;color:var(--muted);margin-top:12px;max-height:92px;overflow:auto;white-space:pre-wrap}.activity{grid-column:1/-1}.progress{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:#121214;border:1px solid var(--line);border-radius:12px;margin-bottom:12px}.spinner{width:14px;height:14px;border:2px solid #484850;border-top-color:var(--accent);border-radius:50%;margin-top:2px;display:none;animation:spin .8s linear infinite}.progress.busy .spinner{display:block}@keyframes spin{to{transform:rotate(360deg)}}.progress-text{min-width:0}.progress-title{font-weight:650}.progress-error{font-size:12px;color:var(--bad);margin-top:3px}.log{margin:0;background:#0b0b0d;border:1px solid #242429;border-radius:12px;padding:12px;height:190px;overflow:auto;color:#b8b8c0;font:11.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap}.footer{display:flex;justify-content:space-between;align-items:center;gap:15px;color:var(--muted);font-size:11px;margin-top:13px;padding:0 4px}.quiet{background:transparent;border-color:transparent;color:var(--muted);padding:5px 7px}.quiet:hover:not(:disabled){transform:none;border-color:var(--line)}@media(max-width:620px){.wrap{margin-top:18px}.grid{grid-template-columns:1fr}.hero-row{align-items:flex-start;flex-direction:column}.card{border-radius:15px}.footer{align-items:flex-start;flex-direction:column}.pill{max-width:42vw;overflow:hidden;text-overflow:ellipsis}}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header class="top">
+    <div class="brand"><div class="mark">L</div><div><h1>Ladies Explorer</h1><div class="sub">Local Manager</div></div></div>
+    <div id="statusPill" class="pill"><span class="dot"></span><span id="statusPillText">Verbinde …</span></div>
+  </header>
+
+  <section class="grid">
+    <article class="card hero">
+      <div class="hero-row">
+        <div><div id="stateTitle" class="state-title">Status wird geladen …</div><div id="stateCopy" class="state-copy">Lokaler Dienst · 127.0.0.1</div></div>
+        <div id="versionBadge" class="pill">—</div>
+      </div>
+      <div class="actions">
+        <button id="startBtn" class="primary">Starten</button>
+        <button id="stopBtn" class="danger">Stoppen</button>
+        <button id="openBtn">App öffnen</button>
+      </div>
+    </article>
+
+    <article class="card">
+      <h2>Version & Update</h2>
+      <div class="kv">
+        <div>Installiert</div><div id="installed" class="version">—</div>
+        <div>Neueste</div><div id="latest">Nicht geprüft</div>
+        <div>Status</div><div id="updateStatus">—</div>
+      </div>
+      <div class="actions">
+        <button id="checkBtn">Update prüfen</button>
+        <button id="updateBtn" class="primary">Aktualisieren</button>
+      </div>
+      <div id="releaseNotes" class="update-note"></div>
+    </article>
+
+    <article class="card">
+      <h2>Daten</h2>
+      <div class="kv">
+        <div>DB-Schema</div><div id="dbSchema">—</div>
+        <div>Release-Schema</div><div id="releaseSchema">—</div>
+        <div>Letztes Backup</div><div id="backup">—</div>
+        <div>uv Runtime</div><div id="uvState">—</div>
+      </div>
+      <div class="actions"><button id="dataBtn">Datenordner öffnen</button></div>
+    </article>
+
+    <article class="card activity">
+      <h2>Aktivität</h2>
+      <div id="progress" class="progress"><div class="spinner"></div><div class="progress-text"><div id="progressTitle" class="progress-title">Bereit</div><div id="progressError" class="progress-error"></div></div></div>
+      <pre id="log" class="log">Noch keine Logausgabe.</pre>
+    </article>
+  </section>
+
+  <footer class="footer"><span>Manager nur lokal erreichbar · keine Cloud-Komponente</span><button id="quitBtn" class="quiet">Manager beenden</button></footer>
+</main>
+<script>
+const token=new URLSearchParams(location.search).get('token')||'';
+let state=null,first=true;
+const $=id=>document.getElementById(id);
+async function api(path,method='GET'){
+  const r=await fetch(path,{method,headers:{'X-Ladies-Manager-Token':token}});
+  let body={};try{body=await r.json()}catch{}
+  if(!r.ok)throw new Error(body.error||`HTTP ${r.status}`);return body;
+}
+function busy(){return !!state?.operation?.active}
+function setButtons(){
+  const b=busy(),running=!!state?.running,available=!!state?.latest?.available;
+  $('startBtn').disabled=b||running;$('stopBtn').disabled=b||!running;$('openBtn').disabled=b||!running;
+  $('checkBtn').disabled=b;$('updateBtn').disabled=b||!available;$('dataBtn').disabled=b;$('quitBtn').disabled=b;
+}
+function render(s){
+  state=s;const running=!!s.running,b=busy(),op=s.operation||{};
+  $('statusPill').className='pill '+(b?'busy':running?'on':'');
+  $('statusPillText').textContent=b?'Beschäftigt':running?'App läuft':'App gestoppt';
+  $('stateTitle').textContent=b?(op.message||'Wird ausgeführt …'):running?'Ladies Explorer läuft':'Ladies Explorer ist gestoppt';
+  $('stateCopy').textContent=running?`PID ${s.pid} · ${s.app_url}`:'Start und Updates werden hier zentral verwaltet.';
+  $('versionBadge').textContent=s.version;$('installed').textContent=s.version;
+  $('latest').textContent=s.latest?.version||'Nicht geprüft';
+  $('updateStatus').textContent=s.latest?(s.latest.available?'Update verfügbar':'Aktuell'):'—';
+  $('releaseNotes').textContent=s.latest?.notes||'';
+  $('dbSchema').textContent=s.db_schema;$('releaseSchema').textContent=s.release_schema;
+  $('backup').textContent=s.last_backup||'Noch keines';$('uvState').textContent=s.uv_available?'bereit':'fehlt';
+  $('progress').className='progress '+(b?'busy':'');$('progressTitle').textContent=op.message||'Bereit';$('progressError').textContent=op.error||'';
+  const entries=[...(op.messages||[]),...(s.console||[]).slice(-12),...(s.logs||[]).slice(-30)];
+  $('log').textContent=entries.length?entries.join('\n'):'Noch keine Logausgabe.';$('log').scrollTop=$('log').scrollHeight;
+  setButtons();
+}
+async function refresh(){try{render(await api('/api/status'))}catch(e){$('stateTitle').textContent='Manager nicht erreichbar';$('stateCopy').textContent=e.message}finally{if(first){first=false;if(!state?.latest)action('/api/update/check')}}}
+async function action(path){try{await api(path,'POST');setTimeout(refresh,150)}catch(e){alert(e.message)}}
+$('startBtn').onclick=()=>action('/api/app/start');$('stopBtn').onclick=()=>action('/api/app/stop');$('openBtn').onclick=()=>action('/api/app/open');
+$('checkBtn').onclick=()=>action('/api/update/check');$('updateBtn').onclick=()=>{if(confirm('Update installieren? Eine laufende App wird automatisch gestoppt und danach wieder gestartet. Vor der Migration wird ein Datenbank-Backup erstellt.'))action('/api/update/apply')};
+$('dataBtn').onclick=()=>action('/api/data/open');$('quitBtn').onclick=async()=>{if(confirm('Nur den Manager beenden? Eine laufende Ladies-Explorer-App bleibt geöffnet.')){try{await api('/api/manager/quit','POST');window.close()}catch(e){alert(e.message)}}};
+refresh();setInterval(refresh,1400);
+</script>
+</body>
+</html>

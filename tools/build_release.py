@@ -59,7 +59,9 @@ def _validate_file_set(files: list[Path]) -> None:
         "pyproject.toml",
         "uv.lock",
         "README.md",
-        "tools/portable_manager.py",
+        "tools/launcher_manager.py",
+        "tools/launcher_core.py",
+        "tools/launcher_manager.html",
         "tools/build_release.py",
         "packaging/install.command",
         "packaging/start.command",
@@ -71,6 +73,8 @@ def _validate_file_set(files: list[Path]) -> None:
     missing = sorted(required - names)
     if missing:
         raise RuntimeError("Release-Dateien fehlen: " + ", ".join(missing))
+    if "tools/portable_manager.py" in names:
+        raise RuntimeError("Veralteter Portable Manager darf nicht mehr ausgeliefert werden")
     forbidden = [
         name for name in names
         if name in FORBIDDEN_NAMES or any(name.startswith(prefix) for prefix in FORBIDDEN_PREFIXES)
