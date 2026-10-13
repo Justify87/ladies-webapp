@@ -23,7 +23,9 @@ from .service import MessagingService
 
 LOGGER = logging.getLogger("ladies_explorer.messaging.routes")
 MAX_MEDIA_BYTES = 100 * 1024 * 1024
+MAX_MEDIA_REQUEST_BYTES = MAX_MEDIA_BYTES + (2 * 1024 * 1024)
 ALLOWED_MEDIA_TYPES = {"IMAGE", "VIDEO", "AUDIO", "VOICE", "DOCUMENT"}
+VIEW_ONCE_MEDIA_TYPES = {"IMAGE", "VIDEO", "AUDIO", "VOICE"}
 
 
 def _qr_data_uri(value: str) -> str:
@@ -51,6 +53,10 @@ def install_messaging(app, *, data_dir, database: Database | None = None, db_pat
         database.create_schema()
     service = MessagingService(database, data_dir)
     app.extensions["ladies_messaging"] = service
+
+    configured_limit = app.config.get("MAX_CONTENT_LENGTH")
+    if configured_limit is None or int(configured_limit) > MAX_MEDIA_REQUEST_BYTES:
+        app.config["MAX_CONTENT_LENGTH"] = MAX_MEDIA_REQUEST_BYTES
 
     @app.before_request
     def block_legacy_whatsapp_archive():
@@ -166,14 +172,19 @@ def install_messaging(app, *, data_dir, database: Database | None = None, db_pat
 
     @app.post("/api/messaging/threads/<int:thread_id>/media")
     def messaging_send_media(thread_id: int):
+        if request.content_length and request.content_length > MAX_MEDIA_REQUEST_BYTES:
+            return jsonify(error="Datei ist zu groß (maximal 100 MB)"), 413
         upload = request.files.get("file")
         if upload is None or not upload.filename:
             raise ValidationError("Datei fehlt")
         media_type = str(request.form.get("media_type") or "").upper()
         if media_type not in ALLOWED_MEDIA_TYPES:
             raise ValidationError("Ungültiger Medientyp")
-        if request.content_length and request.content_length > MAX_MEDIA_BYTES + (2 * 1024 * 1024):
-            return jsonify(error="Datei ist zu groß (maximal 100 MB)"), 413
+        view_once = read_bool(request.form, "view_once", default=False)
+        if view_once and media_type not in VIEW_ONCE_MEDIA_TYPES:
+            raise ValidationError("Einmal ansehen ist für diesen Medientyp nicht verfügbar")
+        endpoint_id = read_int(request.form, "endpoint_id", minimum=1) if request.form.get("endpoint_id") else None
+        reply_to = read_int(request.form, "reply_to_message_id", minimum=1) if request.form.get("reply_to_message_id") else None
         mime_type = str(upload.mimetype or "application/octet-stream")
         original_name = secure_filename(upload.filename) or f"upload{_extension(upload.filename, mime_type)}"
         archive_name = f"upload-{uuid.uuid4().hex}{_extension(original_name, mime_type)}"
@@ -190,14 +201,22 @@ def install_messaging(app, *, data_dir, database: Database | None = None, db_pat
                 mime_type=mime_type,
                 file_name=original_name,
                 caption=request.form.get("caption"),
-                endpoint_id=read_int(request.form, "endpoint_id", minimum=1) if request.form.get("endpoint_id") else None,
-                reply_to=read_int(request.form, "reply_to_message_id", minimum=1) if request.form.get("reply_to_message_id") else None,
-                view_once=read_bool(request.form, "view_once", default=False),
+                endpoint_id=endpoint_id,
+                reply_to=reply_to,
+                view_once=view_once,
             ))
         except KeyError as exc:
             target.unlink(missing_ok=True)
             raise NotFoundError("Chat nicht gefunden") from exc
-        except (TypeError, ValueError, RuntimeError) as exc:
+        except (TypeError, ValueError) as exc:
+            # These failures occur before a retryable outgoing message exists.
+            # Remove the uploaded blob so validation/conversion failures cannot
+            # accumulate orphaned files.
+            target.unlink(missing_ok=True)
+            raise ValidationError(str(exc)) from exc
+        except RuntimeError as exc:
+            # Gateway failures leave a FAILED message intentionally; its media
+            # must stay available for the existing retry action.
             raise ValidationError(str(exc)) from exc
 
     @app.post("/api/messaging/messages/<int:message_id>/retry")
