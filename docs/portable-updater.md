@@ -48,13 +48,15 @@ Eine bisherige entpackte Installation kann einmalig als Legacy-Quelle angegeben 
 ./packaging/install.command --legacy-root /pfad/zur/alten/installation
 ```
 
+Die alte Ladies-Explorer-App muss dafür vollständig beendet sein. Bei interaktiver Ausführung fordert der Installer dafür eine ausdrückliche Bestätigung an. Für bewusst nicht-interaktive Migrationen kann nach dem Beenden der Altinstallation zusätzlich `--legacy-stopped` angegeben werden.
+
 Übernommen werden, sofern vorhanden:
 
-- `ladies.sqlite3` inklusive WAL/SHM-Sidecars;
+- `ladies.sqlite3` über die SQLite-Backup-API als konsistenter Datenbank-Snapshot; WAL/SHM-Sidecars werden nicht roh kopiert;
 - `ladies_data/` inklusive WhatsApp-Auth, WhatsApp-Medien, Recent-History und LAN-Gerätesessions;
 - `logs/`.
 
-Nicht übernommen werden reproduzierbare Runtime-Daten wie `.venv/`, `.runtime/` oder `node_modules/`.
+Nicht übernommen werden reproduzierbare Runtime-Daten wie `.venv/`, `.runtime` oder `node_modules/`.
 
 Die alte Installation wird nicht gelöscht.
 
@@ -99,11 +101,11 @@ Der Updater:
 5. validiert ZIP-Pfade und `release-manifest.json`;
 6. entpackt zunächst nach `releases/.staging-vX.Y.Z`;
 7. aktiviert den neuen Release erst nach vollständiger Validierung atomar über `current`;
-8. behält standardmäßig die zwei neuesten Release-Verzeichnisse.
+8. behält den neuen Release und den unmittelbar zuvor aktiven Release für einen gezielten Rollback.
 
 Wenn Download, Digest, ZIP oder Manifest fehlschlagen, bleibt `current` unverändert.
 
-Ein Update wird verweigert, solange eine über den Portable Launcher gestartete App noch läuft.
+`start`, `update` und `rollback` teilen sich einen atomaren Lifecycle-Lock. Dadurch kann während eines laufenden Starts beziehungsweise einer laufenden App kein Update/Rollback beginnen und während eines Updates/Rollbacks kein paralleler Start dazwischenlaufen. Unter Windows prüft der Manager Prozesszustände read-only über die Windows-Prozess-API und sendet dabei kein Signal an den Prozess.
 
 ## Rollback
 
