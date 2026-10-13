@@ -59,6 +59,25 @@ class PortableUpdaterTests(unittest.TestCase):
                 pm.safe_extract(archive, root / "out")
             self.assertFalse((root / "escape.txt").exists())
 
+    def test_safe_extract_rejects_windows_parent_traversal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / "bad-windows.zip"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("..\\escape.txt", "bad")
+            with self.assertRaises(pm.PortableError):
+                pm.safe_extract(archive, root / "out")
+
+    def test_manifest_requires_matching_version_and_tag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            release = make_release(Path(tmp) / "release", "9.6.4")
+            manifest_path = release / "release-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["tag"] = "v9.6.5"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaises(pm.PortableError):
+                pm.validate_release_dir(release)
+
     def test_digest_mismatch_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "release.zip"
@@ -88,8 +107,7 @@ class PortableUpdaterTests(unittest.TestCase):
     def test_update_keeps_current_when_digest_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "LadiesExplorer"
-            current = make_release(root / "releases" / "v9.6.3", "9.6.3")
-            del current
+            make_release(root / "releases" / "v9.6.3", "9.6.3")
             pm.set_current(root, "v9.6.3")
             root.joinpath("data", "ladies_data", "whatsapp", "auth").mkdir(parents=True)
             creds = root / "data" / "ladies_data" / "whatsapp" / "auth" / "creds.json"
@@ -155,6 +173,38 @@ class PortableUpdaterTests(unittest.TestCase):
             self.assertTrue((root / "releases" / "v9.6.3").exists())
             self.assertTrue((root / "releases" / "v9.6.4").exists())
 
+    def test_update_replaces_preexisting_inactive_target_with_verified_package(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "LadiesExplorer"
+            make_release(root / "releases" / "v9.6.3", "9.6.3")
+            stale = make_release(root / "releases" / "v9.6.4", "9.6.4")
+            (stale / "stale.txt").write_text("old", encoding="utf-8")
+            pm.set_current(root, "v9.6.3")
+            candidate = make_release(Path(tmp) / "candidate", "9.6.4")
+            (candidate / "fresh.txt").write_text("new", encoding="utf-8")
+            archive = Path(tmp) / "candidate.zip"
+            digest = zip_release(candidate, archive)
+            release = {
+                "tag_name": "v9.6.4",
+                "draft": False,
+                "prerelease": False,
+                "assets": [{
+                    "name": "ladies-explorer-v9.6.4.zip",
+                    "browser_download_url": "https://example.invalid/release.zip",
+                    "digest": "sha256:" + digest,
+                }],
+            }
+
+            def fake_download(_url, destination):
+                destination.write_bytes(archive.read_bytes())
+
+            with mock.patch.object(pm, "latest_release", return_value=release), mock.patch.object(pm, "_download", side_effect=fake_download):
+                pm.update(root)
+
+            target = root / "releases" / "v9.6.4"
+            self.assertTrue((target / "fresh.txt").exists())
+            self.assertFalse((target / "stale.txt").exists())
+
     def test_rollback_refuses_newer_database_schema(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -169,6 +219,16 @@ class PortableUpdaterTests(unittest.TestCase):
             with self.assertRaises(pm.PortableError):
                 pm.rollback(root)
             self.assertEqual(pm.read_current(root), "v9.7.0")
+
+    def test_rollback_never_moves_forward(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            make_release(root / "releases" / "v9.6.3", "9.6.3")
+            make_release(root / "releases" / "v9.6.4", "9.6.4")
+            pm.set_current(root, "v9.6.3")
+            with self.assertRaises(pm.PortableError):
+                pm.rollback(root)
+            self.assertEqual(pm.read_current(root), "v9.6.3")
 
     def test_prune_keeps_two_latest_releases(self):
         with tempfile.TemporaryDirectory() as tmp:
