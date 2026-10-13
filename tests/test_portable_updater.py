@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import sqlite3
 import tempfile
 import unittest
 import zipfile
@@ -40,8 +42,21 @@ def zip_release(source: Path, archive: Path) -> str:
         for file in source.rglob("*"):
             if file.is_file():
                 bundle.write(file, file.relative_to(source).as_posix())
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    return digest
+    return hashlib.sha256(archive.read_bytes()).hexdigest()
+
+
+def release_payload(version: str, digest: str, *, body: str = "notes") -> dict:
+    return {
+        "tag_name": f"v{version}",
+        "draft": False,
+        "prerelease": False,
+        "body": body,
+        "assets": [{
+            "name": f"ladies-explorer-v{version}.zip",
+            "browser_download_url": "https://example.invalid/release.zip",
+            "digest": "sha256:" + digest,
+        }],
+    }
 
 
 class PortableUpdaterTests(unittest.TestCase):
@@ -49,6 +64,28 @@ class PortableUpdaterTests(unittest.TestCase):
         self.assertEqual(pm._semver("v9.6.3"), (9, 6, 3))
         with self.assertRaises(pm.PortableError):
             pm._semver("9.6")
+
+    def test_process_running_probe_is_read_only_for_current_process(self):
+        self.assertTrue(pm._process_running(os.getpid()))
+
+    def test_lifecycle_lock_blocks_concurrent_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with pm.lifecycle_lock(root, "outer"):
+                with self.assertRaises(pm.PortableError):
+                    with pm.lifecycle_lock(root, "inner"):
+                        self.fail("concurrent lifecycle action unexpectedly acquired the lock")
+
+    def test_stale_lifecycle_lock_is_recovered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock = root / pm.STATE_DIR / pm.LIFECYCLE_LOCK_FILE
+            lock.parent.mkdir(parents=True)
+            lock.write_text("999999999\nstale\n", encoding="ascii")
+            with mock.patch.object(pm, "_process_running", return_value=False):
+                with pm.lifecycle_lock(root, "new"):
+                    self.assertTrue(lock.exists())
+            self.assertFalse(lock.exists())
 
     def test_safe_extract_rejects_parent_traversal(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -86,7 +123,25 @@ class PortableUpdaterTests(unittest.TestCase):
             with self.assertRaises(pm.PortableError):
                 pm.verify_asset_digest(path, {"digest": "sha256:" + "0" * 64})
 
-    def test_install_separates_release_and_persistent_data(self):
+    def test_legacy_migration_requires_stopped_confirmation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            legacy = base / "legacy"
+            (legacy / "ladies_data").mkdir(parents=True)
+            with self.assertRaises(pm.PortableError):
+                pm.migrate_legacy_data(legacy, base / "install")
+
+    def test_legacy_migration_rejects_known_running_portable_instance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            legacy = base / "legacy"
+            state = legacy / pm.STATE_DIR
+            state.mkdir(parents=True)
+            (state / pm.PID_FILE).write_text(f"{os.getpid()}\n", encoding="ascii")
+            with self.assertRaises(pm.PortableError):
+                pm.migrate_legacy_data(legacy, base / "install", confirmed_stopped=True)
+
+    def test_install_separates_release_and_persistent_data_with_sqlite_backup(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             source = make_release(base / "source", "9.6.4")
@@ -94,16 +149,26 @@ class PortableUpdaterTests(unittest.TestCase):
             (legacy / "ladies_data" / "whatsapp" / "auth").mkdir(parents=True)
             (legacy / "ladies_data" / "whatsapp" / "auth" / "creds.json").write_text("secret", encoding="utf-8")
             (legacy / "ladies_data" / "lan_access.json").write_text("session", encoding="utf-8")
-            (legacy / "ladies.sqlite3").write_bytes(b"db")
+            legacy_db = legacy / "ladies.sqlite3"
+            with sqlite3.connect(legacy_db) as connection:
+                connection.execute("CREATE TABLE sample(value TEXT NOT NULL)")
+                connection.execute("INSERT INTO sample(value) VALUES ('preserved')")
+                connection.execute("PRAGMA user_version = 7")
             root = base / "LadiesExplorer"
 
-            pm.install(source, root, legacy)
+            pm.install(source, root, legacy, legacy_stopped=True)
 
             self.assertEqual(pm.read_current(root), "v9.6.4")
             self.assertTrue((root / "releases" / "v9.6.4" / "ladies_explorer.py").is_file())
             self.assertEqual((root / "data" / "ladies_data" / "whatsapp" / "auth" / "creds.json").read_text(), "secret")
             self.assertEqual((root / "data" / "ladies_data" / "lan_access.json").read_text(), "session")
             self.assertFalse((root / "releases" / "v9.6.4" / "ladies_data").exists())
+            migrated_db = root / "data" / "ladies.sqlite3"
+            with sqlite3.connect(migrated_db) as connection:
+                self.assertEqual(connection.execute("SELECT value FROM sample").fetchone()[0], "preserved")
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 7)
+            self.assertFalse((root / "data" / "ladies.sqlite3-wal").exists())
+            self.assertFalse((root / "data" / "ladies.sqlite3-shm").exists())
 
     def test_update_keeps_current_when_digest_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -116,17 +181,7 @@ class PortableUpdaterTests(unittest.TestCase):
             candidate = make_release(Path(tmp) / "candidate", "9.6.4")
             archive = Path(tmp) / "candidate.zip"
             zip_release(candidate, archive)
-            release = {
-                "tag_name": "v9.6.4",
-                "draft": False,
-                "prerelease": False,
-                "body": "notes",
-                "assets": [{
-                    "name": "ladies-explorer-v9.6.4.zip",
-                    "browser_download_url": "https://example.invalid/release.zip",
-                    "digest": "sha256:" + "0" * 64,
-                }],
-            }
+            release = release_payload("9.6.4", "0" * 64)
 
             def fake_download(_url, destination):
                 destination.write_bytes(archive.read_bytes())
@@ -151,17 +206,7 @@ class PortableUpdaterTests(unittest.TestCase):
             candidate = make_release(Path(tmp) / "candidate", "9.6.4")
             archive = Path(tmp) / "candidate.zip"
             digest = zip_release(candidate, archive)
-            release = {
-                "tag_name": "v9.6.4",
-                "draft": False,
-                "prerelease": False,
-                "body": "notes",
-                "assets": [{
-                    "name": "ladies-explorer-v9.6.4.zip",
-                    "browser_download_url": "https://example.invalid/release.zip",
-                    "digest": "sha256:" + digest,
-                }],
-            }
+            release = release_payload("9.6.4", digest)
 
             def fake_download(_url, destination):
                 destination.write_bytes(archive.read_bytes())
@@ -185,16 +230,7 @@ class PortableUpdaterTests(unittest.TestCase):
             (candidate / "fresh.txt").write_text("new", encoding="utf-8")
             archive = Path(tmp) / "candidate.zip"
             digest = zip_release(candidate, archive)
-            release = {
-                "tag_name": "v9.6.4",
-                "draft": False,
-                "prerelease": False,
-                "assets": [{
-                    "name": "ladies-explorer-v9.6.4.zip",
-                    "browser_download_url": "https://example.invalid/release.zip",
-                    "digest": "sha256:" + digest,
-                }],
-            }
+            release = release_payload("9.6.4", digest)
 
             def fake_download(_url, destination):
                 destination.write_bytes(archive.read_bytes())
@@ -206,6 +242,28 @@ class PortableUpdaterTests(unittest.TestCase):
             self.assertTrue((target / "fresh.txt").exists())
             self.assertFalse((target / "stale.txt").exists())
 
+    def test_update_retention_preserves_previous_active_release(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "LadiesExplorer"
+            make_release(root / "releases" / "v9.6.3", "9.6.3")
+            make_release(root / "releases" / "v9.6.4", "9.6.4")
+            pm.set_current(root, "v9.6.3")
+            candidate = make_release(Path(tmp) / "candidate", "9.6.5")
+            archive = Path(tmp) / "candidate.zip"
+            digest = zip_release(candidate, archive)
+            release = release_payload("9.6.5", digest)
+
+            def fake_download(_url, destination):
+                destination.write_bytes(archive.read_bytes())
+
+            with mock.patch.object(pm, "latest_release", return_value=release), mock.patch.object(pm, "_download", side_effect=fake_download):
+                pm.update(root)
+
+            self.assertEqual(pm.read_current(root), "v9.6.5")
+            self.assertTrue((root / "releases" / "v9.6.3").exists())
+            self.assertFalse((root / "releases" / "v9.6.4").exists())
+            self.assertTrue((root / "releases" / "v9.6.5").exists())
+
     def test_rollback_refuses_newer_database_schema(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -214,7 +272,6 @@ class PortableUpdaterTests(unittest.TestCase):
             pm.set_current(root, "v9.7.0")
             db = root / "data" / "ladies.sqlite3"
             db.parent.mkdir(parents=True)
-            import sqlite3
             with sqlite3.connect(db) as connection:
                 connection.execute("PRAGMA user_version = 2")
             with self.assertRaises(pm.PortableError):
@@ -231,7 +288,7 @@ class PortableUpdaterTests(unittest.TestCase):
                 pm.rollback(root)
             self.assertEqual(pm.read_current(root), "v9.6.3")
 
-    def test_prune_keeps_two_latest_releases(self):
+    def test_prune_keeps_current_and_one_latest_release_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for version in ("9.6.2", "9.6.3", "9.6.4"):
