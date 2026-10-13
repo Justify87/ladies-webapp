@@ -103,6 +103,11 @@ def _python_version_supported() -> bool:
 def _project_ready() -> bool:
     if not _python_version_supported() or importlib.util.find_spec("ladies_v9") is None:
         return False
+    try:
+        if importlib.metadata.version("ladies-explorer") != VERSION:
+            return False
+    except importlib.metadata.PackageNotFoundError:
+        return False
     for dist_name, (module_name, spec) in PYTHON_REQUIREMENTS.items():
         if importlib.util.find_spec(module_name) is None:
             return False
