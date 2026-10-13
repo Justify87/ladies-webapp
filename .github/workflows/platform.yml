@@ -1,0 +1,75 @@
+name: Platform
+
+on:
+  pull_request:
+    paths:
+      - 'packaging/**'
+      - 'tools/launcher_*.py'
+      - 'tools/build_release.py'
+      - 'tests/test_portable_*.py'
+      - 'ladies_explorer.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/platform.yml'
+      - '.github/workflows/release.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'packaging/**'
+      - 'tools/launcher_*.py'
+      - 'tools/build_release.py'
+      - 'tests/test_portable_*.py'
+      - 'ladies_explorer.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/platform.yml'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  portable:
+    name: Portable / ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows 2025
+            os: windows-2025
+          - name: macOS 15 arm64
+            os: macos-15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: latest-known
+          enable-cache: false
+
+      - name: Verify macOS command syntax
+        if: runner.os == 'macOS'
+        shell: bash
+        run: sh -n packaging/install.command packaging/start.command packaging/update.command
+
+      - name: Compile launcher tools
+        run: python -m compileall -q tools
+
+      - name: Run portable launcher and updater tests
+        run: python -m unittest discover -s tests -p 'test_portable_*.py' -v
