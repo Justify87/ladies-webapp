@@ -2,12 +2,12 @@ name: CI
 
 on:
   pull_request:
+    paths-ignore:
+      - '**/*.md'
   push:
     branches: [main]
     paths-ignore:
-      - README.md
-      - docs/**
-      - .github/release-notes/**
+      - '**/*.md'
   workflow_dispatch:
   workflow_call:
     inputs:
