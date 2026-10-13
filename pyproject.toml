@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ladies-explorer"
-version = "9.7.1"
+version = "9.8.0"
 description = "Local Ladies.de explorer with identity, history and media archiving"
 requires-python = ">=3.12,<3.14"
 dependencies = [
