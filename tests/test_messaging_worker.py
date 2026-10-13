@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from ladies_v9.identity import normalize_phone_number
@@ -36,6 +38,15 @@ class WorkerManagerTests(unittest.TestCase):
         masked = self.manager._safe_worker_log("jid=4917612345678@s.whatsapp.net")
         self.assertNotIn("4917612345678@s.whatsapp.net", masked)
         self.assertIn("WHATSAPP_ADDRESS", masked)
+
+    def test_worker_command_error_is_not_exposed_to_caller(self):
+        secret_detail = "send failed for 4917612345678@s.whatsapp.net auth=/private/session"
+        self.manager.proc = SimpleNamespace(poll=lambda: None, stdin=io.StringIO())
+        with patch("ladies_v9.messaging.gateway.queue.Queue.get", return_value={"ok": False, "message": secret_detail}):
+            with self.assertRaisesRegex(RuntimeError, "^WhatsApp-Aktion konnte nicht ausgeführt werden$") as raised:
+                self.manager.command("send_text", jid="4917612345678@s.whatsapp.net", text="Hallo")
+        self.assertNotIn("4917612345678", str(raised.exception))
+        self.assertNotIn("/private/session", str(raised.exception))
 
 
 class PhoneNormalizationTests(unittest.TestCase):
