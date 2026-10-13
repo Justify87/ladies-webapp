@@ -13,7 +13,7 @@ import tempfile
 import urllib.error
 import urllib.request
 import zipfile
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
 
@@ -34,6 +34,13 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.I)
 
 class PortableError(RuntimeError):
     pass
+
+
+def _console(text: str = "", *, file=None) -> None:
+    stream = file or sys.stdout
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    safe = str(text).encode(encoding, errors="replace").decode(encoding, errors="replace")
+    print(safe, file=stream)
 
 
 def _semver(value: str) -> tuple[int, int, int]:
@@ -424,7 +431,9 @@ def _backup_sqlite(source: Path, destination: Path) -> bool:
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
         source_uri = f"file:{source.as_posix()}?mode=ro"
-        with sqlite3.connect(source_uri, uri=True, timeout=30) as source_db, sqlite3.connect(str(destination)) as target_db:
+        with closing(sqlite3.connect(source_uri, uri=True, timeout=30)) as source_db, closing(
+            sqlite3.connect(str(destination))
+        ) as target_db:
             source_db.backup(target_db)
     except sqlite3.Error as exc:
         try:
@@ -533,7 +542,7 @@ def _db_schema_version(root: Path) -> int:
     if not db_path.exists():
         return 0
     try:
-        with sqlite3.connect(str(db_path)) as connection:
+        with closing(sqlite3.connect(str(db_path))) as connection:
             row = connection.execute("PRAGMA user_version").fetchone()
             return int((row or [0])[0] or 0)
     except sqlite3.Error as exc:
@@ -598,7 +607,7 @@ def update(root: Path) -> str:
         release = latest_release()
         latest = _tag(str(release.get("tag_name") or ""))
         if _semver(latest) <= _semver(current):
-            print(f"Ladies Explorer {current} ist bereits aktuell.")
+            _console(f"Ladies Explorer {current} ist bereits aktuell.")
             return current
 
         asset = _asset_for_release(release)
@@ -606,10 +615,10 @@ def update(root: Path) -> str:
         if not url.startswith("https://"):
             raise PortableError("Release-Asset besitzt keine gültige Download-URL")
 
-        print(f"Update verfügbar: {current} → {latest}")
+        _console(f"Update verfügbar: {current} -> {latest}")
         notes = str(release.get("body") or "").strip()
         if notes:
-            print("\n" + notes + "\n")
+            _console("\n" + notes + "\n")
 
         state = root / STATE_DIR
         downloads = state / "downloads"
@@ -632,7 +641,7 @@ def update(root: Path) -> str:
             except OSError:
                 pass
             shutil.rmtree(staging, ignore_errors=True)
-        print(f"✓ {latest} installiert. Persistente Daten wurden nicht verändert.")
+        _console(f"[OK] {latest} installiert. Persistente Daten wurden nicht verändert.")
         return latest
 
 
@@ -664,7 +673,7 @@ def rollback(root: Path) -> str:
             )
         set_current(root, target)
         _copy_launchers(root / RELEASES_DIR / target, root)
-        print(f"✓ {target} ist wieder aktiv.")
+        _console(f"[OK] {target} ist wieder aktiv.")
         return target
 
 
@@ -681,7 +690,7 @@ def status(root: Path) -> dict[str, Any]:
         "running_pid": active_pid(root),
         "db_schema_version": _db_schema_version(root),
     }
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    _console(json.dumps(result, ensure_ascii=False, indent=2))
     return result
 
 
@@ -734,12 +743,12 @@ def main(argv: list[str] | None = None) -> int:
             if legacy_root is None:
                 legacy_root = detect_legacy_root(source, root)
                 if legacy_root is not None:
-                    print(f"Bestehende Installation erkannt: {legacy_root}")
+                    _console(f"Bestehende Installation erkannt: {legacy_root}")
             legacy_stopped = bool(args.legacy_stopped)
             if legacy_root is not None and not legacy_stopped:
                 legacy_stopped = _confirm_legacy_stopped(legacy_root.resolve())
             tag = install(source, root, legacy_root, legacy_stopped=legacy_stopped)
-            print(f"✓ Ladies Explorer {tag} installiert: {root}")
+            _console(f"[OK] Ladies Explorer {tag} installiert: {root}")
             return 0
         root = (args.root or infer_install_root()).resolve()
         if args.command == "start":
@@ -754,7 +763,7 @@ def main(argv: list[str] | None = None) -> int:
             status(root)
             return 0
     except PortableError as exc:
-        print(f"Fehler: {exc}", file=sys.stderr)
+        _console(f"Fehler: {exc}", file=sys.stderr)
         return 2
     return 1
 
