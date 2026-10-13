@@ -9,13 +9,10 @@ from ladies_v9.request_parsing import read_int
 from .service import PriceIntelligenceService
 
 
-def install_pricing(app, *, data_dir, database: Database | None = None, db_path=None) -> PriceIntelligenceService:
+def install_pricing(app, *, data_dir, database: Database | None = None) -> PriceIntelligenceService:
     database = database or app.extensions.get("ladies_database")
-    if database is None:
-        if db_path is None:
-            raise RuntimeError("Pricing benötigt database oder db_path")
-        database = Database(db_path)
-        database.create_schema()
+    if not isinstance(database, Database):
+        raise RuntimeError("Pricing benötigt die gemeinsame Application-Database")
     service = PriceIntelligenceService(database, data_dir)
     app.extensions["ladies_pricing"] = service
 
