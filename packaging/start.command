@@ -9,23 +9,24 @@ fi
 
 CURRENT="$(tr -d '\r\n' < "$ROOT/current")"
 RELEASE="$ROOT/releases/$CURRENT"
-SOURCE_MANAGER="$RELEASE/tools/launcher_manager.py"
 STATE_DIR="$ROOT/.state"
 MANAGER="$STATE_DIR/launcher_manager.py"
 VENV_PYTHON="$RELEASE/.venv/bin/python"
 
 mkdir -p "$STATE_DIR"
-if [ -f "$SOURCE_MANAGER" ]; then
-  cp "$SOURCE_MANAGER" "$MANAGER.tmp"
-  mv "$MANAGER.tmp" "$MANAGER"
-fi
+for NAME in launcher_manager.py launcher_core.py launcher_manager.html; do
+  SOURCE="$RELEASE/tools/$NAME"
+  TARGET="$STATE_DIR/$NAME"
+  if [ -f "$SOURCE" ]; then
+    cp "$SOURCE" "$TARGET.tmp"
+    mv "$TARGET.tmp" "$TARGET"
+  fi
+done
 
-if [ ! -f "$MANAGER" ]; then
-  echo "Fehler: Launcher Manager fehlt. Bitte die Portable-Installation mit einem aktuellen Release reparieren." >&2
+if [ ! -f "$MANAGER" ] || [ ! -f "$STATE_DIR/launcher_core.py" ] || [ ! -f "$STATE_DIR/launcher_manager.html" ]; then
+  echo "Fehler: Launcher Manager ist unvollständig. Bitte die Portable-Installation mit einem aktuellen Release reparieren." >&2
   exit 1
 fi
-
-export PYTHONPATH="$RELEASE${PYTHONPATH:+:$PYTHONPATH}"
 
 if [ -x "$VENV_PYTHON" ]; then
   exec "$VENV_PYTHON" "$MANAGER" launch --root "$ROOT" "$@"

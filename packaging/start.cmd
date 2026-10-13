@@ -9,20 +9,27 @@ if not exist "%ROOT%current" (
 
 set /p CURRENT=<"%ROOT%current"
 set "RELEASE=%ROOT%releases\%CURRENT%"
-set "SOURCE_MANAGER=%RELEASE%\tools\launcher_manager.py"
 set "STATE_DIR=%ROOT%.state"
 set "MANAGER=%STATE_DIR%\launcher_manager.py"
 set "VENV_PYTHON=%RELEASE%\.venv\Scripts\python.exe"
 
 if not exist "%STATE_DIR%" mkdir "%STATE_DIR%"
-if exist "%SOURCE_MANAGER%" copy /Y "%SOURCE_MANAGER%" "%MANAGER%" >nul
-
-if not exist "%MANAGER%" (
-  echo Fehler: Launcher Manager fehlt. Bitte die Portable-Installation mit einem aktuellen Release reparieren. 1>&2
-  exit /b 1
+for %%F in (launcher_manager.py launcher_core.py launcher_manager.html) do (
+  if exist "%RELEASE%\tools\%%F" copy /Y "%RELEASE%\tools\%%F" "%STATE_DIR%\%%F" >nul
 )
 
-set "PYTHONPATH=%RELEASE%;%PYTHONPATH%"
+if not exist "%MANAGER%" (
+  echo Fehler: Launcher Manager ist unvollstaendig. Bitte die Portable-Installation mit einem aktuellen Release reparieren. 1>&2
+  exit /b 1
+)
+if not exist "%STATE_DIR%\launcher_core.py" (
+  echo Fehler: Launcher Manager Core fehlt. 1>&2
+  exit /b 1
+)
+if not exist "%STATE_DIR%\launcher_manager.html" (
+  echo Fehler: Launcher Manager UI fehlt. 1>&2
+  exit /b 1
+)
 
 if exist "%VENV_PYTHON%" (
   "%VENV_PYTHON%" "%MANAGER%" launch --root "%ROOT%" %*

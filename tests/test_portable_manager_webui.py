@@ -11,51 +11,53 @@ from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
+from tools import launcher_core as core
 from tools import launcher_manager as lm
-from tools import portable_manager as pm
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def make_release(path: Path, version: str, schema: int = 1, *, with_manager: bool = True) -> Path:
+def make_release(path: Path, version: str, schema: int = 1) -> Path:
     tag = f"v{version}"
     path.mkdir(parents=True, exist_ok=True)
     (path / "ladies").mkdir()
     (path / "ladies" / "__init__.py").write_text("\n", encoding="utf-8")
     (path / "tools").mkdir()
+    (path / "packaging").mkdir()
     (path / "ladies_explorer.py").write_text("print('ok')\n", encoding="utf-8")
     (path / "pyproject.toml").write_text(f'[project]\nversion = "{version}"\n', encoding="utf-8")
     (path / "uv.lock").write_text("version = 1\n", encoding="utf-8")
-    (path / "tools" / "portable_manager.py").write_text("# manager\n", encoding="utf-8")
-    if with_manager:
-        (path / "tools" / "launcher_manager.py").write_text("# launcher manager\n", encoding="utf-8")
-        (path / "tools" / "launcher_manager.html").write_text("<html>manager</html>\n", encoding="utf-8")
+    (path / "tools" / "launcher_manager.py").write_text(f"# manager {version}\n", encoding="utf-8")
+    (path / "tools" / "launcher_core.py").write_text(f"# core {version}\n", encoding="utf-8")
+    (path / "tools" / "launcher_manager.html").write_text(f"<html>{version}</html>\n", encoding="utf-8")
+    for name in ("start.command", "update.command", "start.cmd", "update.cmd"):
+        (path / "packaging" / name).write_text(f"launcher-{version}\n", encoding="utf-8")
     (path / "release-manifest.json").write_text(
-        json.dumps(
-            {
-                "format_version": 1,
-                "app_version": version,
-                "tag": tag,
-                "commit": "deadbeef",
-                "entrypoint": "ladies_explorer.py",
-                "db_schema_version": schema,
-            }
-        ),
+        json.dumps({
+            "format_version": 1,
+            "app_version": version,
+            "tag": tag,
+            "commit": "deadbeef",
+            "entrypoint": "ladies_explorer.py",
+            "db_schema_version": schema,
+        }),
         encoding="utf-8",
     )
     return path
 
 
-def make_root(base: Path, version: str = "9.8.0", schema: int = 1) -> Path:
+def make_root(base: Path, version: str = "9.8.0", schema: int = 1, *, with_db: bool = True) -> Path:
     root = base / "LadiesExplorer"
-    make_release(root / "releases" / f"v{version}", version, schema)
-    pm.set_current(root, version)
-    db = root / "data" / "ladies.sqlite3"
-    db.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(db)) as connection:
-        connection.execute(f"PRAGMA user_version = {schema}")
-        connection.commit()
+    release = make_release(root / "releases" / f"v{version}", version, schema)
+    core.set_current(root, version)
+    core._copy_launchers(release, root)
+    if with_db:
+        db = root / "data" / "ladies.sqlite3"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(db)) as connection:
+            connection.execute(f"PRAGMA user_version = {schema}")
+            connection.commit()
     return root
 
 
@@ -64,7 +66,7 @@ class ManagerWebUiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = make_root(Path(tmp))
             controller = lm.Controller(root)
-            with mock.patch.object(pm, "active_pid", return_value=4242), mock.patch.object(
+            with mock.patch.object(core, "active_pid", return_value=4242), mock.patch.object(
                 lm.shutil, "which", return_value="/usr/bin/uv"
             ):
                 status = controller.status()
@@ -79,7 +81,9 @@ class ManagerWebUiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = make_root(Path(tmp))
             controller = lm.Controller(root)
-            server = lm.ThreadingHTTPServer((lm.MANAGER_HOST, 0), lm.make_handler(controller, "secret-token", "<html>ok</html>"))
+            server = lm.ThreadingHTTPServer(
+                (lm.MANAGER_HOST, 0), lm.make_handler(controller, "secret-token", "<html>ok</html>")
+            )
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             base = f"http://{lm.MANAGER_HOST}:{server.server_port}"
@@ -87,7 +91,6 @@ class ManagerWebUiTests(unittest.TestCase):
                 with self.assertRaises(urllib.error.HTTPError) as denied:
                     urllib.request.urlopen(base + "/api/ping", timeout=2)
                 self.assertEqual(denied.exception.code, 403)
-
                 request = urllib.request.Request(
                     base + "/api/ping", headers={"X-Ladies-Manager-Token": "secret-token"}
                 )
@@ -101,34 +104,35 @@ class ManagerWebUiTests(unittest.TestCase):
 
     def test_update_check_does_not_stop_running_app(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = make_root(Path(tmp), "9.8.0")
+            root = make_root(Path(tmp))
             controller = lm.Controller(root)
             release = {"tag_name": "v9.8.1", "draft": False, "prerelease": False, "body": "notes"}
-            with mock.patch.object(pm, "latest_release", return_value=release), mock.patch.object(
+            with mock.patch.object(core, "latest_release", return_value=release), mock.patch.object(
                 lm, "stop_app"
             ) as stop:
                 controller.check_update()
             stop.assert_not_called()
             self.assertTrue(controller.status()["latest"]["available"])
 
-    def test_managed_update_stops_migrates_and_restarts_running_app(self):
+    def test_managed_update_stops_migrates_restarts_app_and_requests_manager_restart(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = make_root(Path(tmp), "9.8.0")
-            make_release(root / "releases" / "v9.8.1", "9.8.1")
+            root = make_root(Path(tmp))
+            new_release = make_release(root / "releases" / "v9.8.1", "9.8.1")
             controller = lm.Controller(root)
             release = {"tag_name": "v9.8.1", "draft": False, "prerelease": False, "body": "notes"}
 
             def activate(_root):
-                pm.set_current(controller.root, "v9.8.1")
+                core.set_current(controller.root, "v9.8.1")
+                core._copy_launchers(new_release, controller.root)
                 return "v9.8.1"
 
-            with mock.patch.object(pm, "latest_release", return_value=release), mock.patch.object(
-                pm, "active_pid", return_value=222
+            with mock.patch.object(core, "latest_release", return_value=release), mock.patch.object(
+                core, "active_pid", return_value=222
             ), mock.patch.object(lm, "stop_app") as stop, mock.patch.object(
-                pm, "update", side_effect=activate
-            ), mock.patch.object(lm, "_copy_manager_to_state"), mock.patch.object(
-                lm, "ensure_release_environment", return_value=Path("python")
-            ), mock.patch.object(lm, "migrate_database", return_value=1) as migrate, mock.patch.object(
+                core, "update_release", side_effect=activate
+            ), mock.patch.object(
+                lm, "ensure_release_environment", return_value=Path("new-python")
+            ), mock.patch.object(lm, "migrate_database", return_value=2) as migrate, mock.patch.object(
                 lm, "start_app"
             ) as start:
                 controller.apply_update()
@@ -136,15 +140,17 @@ class ManagerWebUiTests(unittest.TestCase):
             stop.assert_called_once()
             migrate.assert_called_once_with(controller.root, "v9.8.1", controller.emit)
             start.assert_called_once_with(controller.root, controller.emit, open_browser=True)
-            self.assertEqual(pm.read_current(controller.root), "v9.8.1")
-            self.assertTrue(any((controller.root / pm.STATE_DIR / "backups").glob("pre-update-*.sqlite3")))
+            self.assertEqual(core.read_current(controller.root), "v9.8.1")
+            self.assertEqual(controller._restart_python, Path("new-python"))
+            self.assertTrue(any((controller.root / core.STATE_DIR / "backups").glob("pre-update-*.sqlite3")))
 
-    def test_failed_migration_restores_database_and_previous_release(self):
+    def test_failed_migration_restores_database_release_launchers_and_manager_copy(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = make_root(Path(tmp), "9.8.0")
-            make_release(root / "releases" / "v9.8.1", "9.8.1", schema=2)
+            root = make_root(Path(tmp))
+            old_release = root / "releases" / "v9.8.0"
+            new_release = make_release(root / "releases" / "v9.8.1", "9.8.1", schema=2)
             controller = lm.Controller(root)
-            db = controller.root / "data" / "ladies.sqlite3"
+            db = root / "data" / "ladies.sqlite3"
             with closing(sqlite3.connect(db)) as connection:
                 connection.execute("CREATE TABLE keep_me(value TEXT)")
                 connection.execute("INSERT INTO keep_me(value) VALUES ('original')")
@@ -152,34 +158,113 @@ class ManagerWebUiTests(unittest.TestCase):
             release = {"tag_name": "v9.8.1", "draft": False, "prerelease": False, "body": "notes"}
 
             def activate(_root):
-                pm.set_current(controller.root, "v9.8.1")
+                core.set_current(root, "v9.8.1")
+                core._copy_launchers(new_release, root)
                 with closing(sqlite3.connect(db)) as connection:
                     connection.execute("UPDATE keep_me SET value='changed'")
                     connection.commit()
                 return "v9.8.1"
 
-            with mock.patch.object(pm, "latest_release", return_value=release), mock.patch.object(
-                pm, "active_pid", return_value=None
-            ), mock.patch.object(pm, "update", side_effect=activate), mock.patch.object(
-                lm, "_copy_manager_to_state"
-            ), mock.patch.object(lm, "ensure_release_environment", return_value=Path("python")), mock.patch.object(
-                lm, "migrate_database", side_effect=RuntimeError("migration failed")
-            ):
+            with mock.patch.object(core, "latest_release", return_value=release), mock.patch.object(
+                core, "active_pid", return_value=None
+            ), mock.patch.object(core, "update_release", side_effect=activate), mock.patch.object(
+                lm, "ensure_release_environment", return_value=Path("python")
+            ), mock.patch.object(lm, "migrate_database", side_effect=RuntimeError("migration failed")):
                 with self.assertRaises(RuntimeError):
                     controller.apply_update()
 
-            self.assertEqual(pm.read_current(controller.root), "v9.8.0")
+            self.assertEqual(core.read_current(root), "v9.8.0")
+            self.assertEqual((root / "start.command").read_text(), "launcher-9.8.0\n")
+            self.assertEqual((root / core.STATE_DIR / lm.MANAGER_COPY).read_text(), "# manager 9.8.0\n")
+            self.assertEqual((root / core.STATE_DIR / lm.MANAGER_CORE).read_text(), "# core 9.8.0\n")
+            self.assertTrue(old_release.is_dir())
             with closing(sqlite3.connect(db)) as connection:
                 self.assertEqual(connection.execute("SELECT value FROM keep_me").fetchone()[0], "original")
 
-    def test_copy_manager_to_state_keeps_script_and_ui_together(self):
+    def test_backup_failure_restores_previous_runtime_state_and_restarts_app(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = make_root(Path(tmp), "9.8.0")
-            release = root / "releases" / "v9.8.0"
-            manager = lm._copy_manager_to_state(root, release)
-            expected = root / pm.STATE_DIR / lm.MANAGER_COPY
+            root = make_root(Path(tmp))
+            controller = lm.Controller(root)
+            release = {"tag_name": "v9.8.1", "draft": False, "prerelease": False, "body": "notes"}
+            with mock.patch.object(core, "latest_release", return_value=release), mock.patch.object(
+                core, "active_pid", side_effect=[222, None]
+            ), mock.patch.object(lm, "stop_app") as stop, mock.patch.object(
+                lm, "_backup_database", side_effect=OSError("disk full")
+            ), mock.patch.object(lm, "start_app") as start:
+                with self.assertRaises(OSError):
+                    controller.apply_update()
+            stop.assert_called_once()
+            start.assert_called_once_with(controller.root, controller.emit, open_browser=True)
+            self.assertEqual(core.read_current(root), "v9.8.0")
+            self.assertEqual((root / "start.command").read_text(), "launcher-9.8.0\n")
+
+    def test_failed_first_database_migration_removes_new_database_and_sidecars(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_root(Path(tmp), with_db=False)
+            make_release(root / "releases" / "v9.8.1", "9.8.1", schema=2)
+            controller = lm.Controller(root)
+            db = root / "data" / "ladies.sqlite3"
+            release = {"tag_name": "v9.8.1", "draft": False, "prerelease": False, "body": "notes"}
+
+            def activate(_root):
+                core.set_current(root, "v9.8.1")
+                return "v9.8.1"
+
+            def fail_migration(*_args):
+                db.parent.mkdir(parents=True, exist_ok=True)
+                db.write_bytes(b"partial")
+                Path(str(db) + "-wal").write_bytes(b"wal")
+                Path(str(db) + "-shm").write_bytes(b"shm")
+                raise RuntimeError("migration failed")
+
+            with mock.patch.object(core, "latest_release", return_value=release), mock.patch.object(
+                core, "active_pid", return_value=None
+            ), mock.patch.object(core, "update_release", side_effect=activate), mock.patch.object(
+                lm, "ensure_release_environment", return_value=Path("python")
+            ), mock.patch.object(lm, "migrate_database", side_effect=fail_migration):
+                with self.assertRaises(RuntimeError):
+                    controller.apply_update()
+
+            self.assertFalse(db.exists())
+            self.assertFalse(Path(str(db) + "-wal").exists())
+            self.assertFalse(Path(str(db) + "-shm").exists())
+            self.assertEqual(core.read_current(root), "v9.8.0")
+
+    def test_recovery_continues_when_database_restore_itself_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_root(Path(tmp))
+            make_release(root / "releases" / "v9.8.1", "9.8.1", schema=2)
+            controller = lm.Controller(root)
+            release = {"tag_name": "v9.8.1", "draft": False, "prerelease": False, "body": "notes"}
+
+            def activate(_root):
+                core.set_current(root, "v9.8.1")
+                return "v9.8.1"
+
+            with mock.patch.object(core, "latest_release", return_value=release), mock.patch.object(
+                core, "active_pid", side_effect=[222, None]
+            ), mock.patch.object(lm, "stop_app"), mock.patch.object(
+                core, "update_release", side_effect=activate
+            ), mock.patch.object(lm, "ensure_release_environment", return_value=Path("python")), mock.patch.object(
+                lm, "migrate_database", side_effect=RuntimeError("migration failed")
+            ), mock.patch.object(lm, "_restore_database", side_effect=OSError("restore failed")), mock.patch.object(
+                core, "restore_release"
+            ) as restore_release, mock.patch.object(lm, "_copy_manager_to_state"), mock.patch.object(
+                lm, "start_app"
+            ) as start:
+                with self.assertRaises(core.PortableError) as failure:
+                    controller.apply_update()
+            self.assertIn("Recovery unvollständig", str(failure.exception))
+            restore_release.assert_called_once_with(controller.root, "v9.8.0")
+            start.assert_called_once_with(controller.root, controller.emit, open_browser=True)
+
+    def test_copy_manager_to_state_keeps_script_core_and_ui_together(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_root(Path(tmp))
+            manager = lm._copy_manager_to_state(root, root / "releases" / "v9.8.0")
+            expected = root / core.STATE_DIR / lm.MANAGER_COPY
             self.assertEqual(manager.resolve(), expected.resolve())
-            self.assertTrue(manager.is_file())
+            self.assertTrue((manager.parent / lm.MANAGER_CORE).is_file())
             self.assertTrue((manager.parent / lm.MANAGER_UI).is_file())
 
     def test_manager_ui_contains_core_controls(self):

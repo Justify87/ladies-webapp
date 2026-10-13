@@ -13,56 +13,60 @@ PACKAGING = ROOT / "packaging"
 
 
 class PortableLauncherContractTests(unittest.TestCase):
-    def test_unix_start_launcher_opens_manager_with_embedded_python(self):
+    def test_unix_start_launcher_opens_single_manager_and_copies_runtime_files(self):
         text = (PACKAGING / "start.command").read_text(encoding="utf-8")
-        self.assertIn('tools/launcher_manager.py', text)
+        for name in ("launcher_manager.py", "launcher_core.py", "launcher_manager.html"):
+            self.assertIn(name, text)
         self.assertIn('STATE_DIR="$ROOT/.state"', text)
-        self.assertIn('MANAGER="$STATE_DIR/launcher_manager.py"', text)
         self.assertIn('.venv/bin/python', text)
         self.assertIn('UV_PYTHON_INSTALL_DIR="$ROOT/.runtime/python"', text)
         self.assertIn('uv python install 3.12', text)
-        self.assertIn('uv python find 3.12', text)
         self.assertIn(' launch --root "$ROOT"', text)
-        self.assertNotIn('exec python3 ', text)
-        self.assertNotIn('portable_manager.py" start', text)
+        self.assertNotIn("portable_manager.py", text)
+        self.assertNotIn("PYTHONPATH", text)
 
-    def test_windows_start_launcher_opens_manager_with_embedded_python(self):
+    def test_windows_start_launcher_opens_single_manager_and_copies_runtime_files(self):
         text = (PACKAGING / "start.cmd").read_text(encoding="utf-8")
-        self.assertIn('tools\\launcher_manager.py', text)
+        for name in ("launcher_manager.py", "launcher_core.py", "launcher_manager.html"):
+            self.assertIn(name, text)
         self.assertIn('set "STATE_DIR=%ROOT%.state"', text)
-        self.assertIn('set "MANAGER=%STATE_DIR%\\launcher_manager.py"', text)
         self.assertIn('.venv\\Scripts\\python.exe', text)
         self.assertIn('UV_PYTHON_INSTALL_DIR=%ROOT%.runtime\\python', text)
         self.assertIn('uv python install 3.12', text)
-        self.assertIn('uv python find 3.12', text)
         self.assertIn(' launch --root "%ROOT%"', text)
-        self.assertNotIn('portable_manager.py" start', text)
+        self.assertNotIn("portable_manager.py", text)
+        self.assertNotIn("PYTHONPATH", text)
 
     def test_update_launchers_delegate_to_central_manager(self):
         unix = (PACKAGING / "update.command").read_text(encoding="utf-8")
         windows = (PACKAGING / "update.cmd").read_text(encoding="utf-8")
         self.assertIn('exec "$ROOT/start.command"', unix)
         self.assertIn('call "%ROOT%start.cmd"', windows)
-        self.assertNotIn('portable_manager.py', unix)
-        self.assertNotIn('portable_manager.py', windows)
+        self.assertNotIn("portable_manager.py", unix)
+        self.assertNotIn("portable_manager.py", windows)
 
-    def test_installers_bootstrap_through_uv_instead_of_system_python(self):
+    def test_installers_use_launcher_manager_and_uv_bootstrap(self):
         unix = (PACKAGING / "install.command").read_text(encoding="utf-8")
         windows = (PACKAGING / "install.cmd").read_text(encoding="utf-8")
+        self.assertIn("tools/launcher_manager.py", unix)
+        self.assertIn("tools\\launcher_manager.py", windows)
         self.assertIn('uv run --locked --project "$SOURCE" --python 3.12', unix)
-        self.assertNotIn('exec python3 ', unix)
         self.assertIn('uv run --locked --project "%SOURCE%" --python 3.12', windows)
+        self.assertNotIn("portable_manager.py", unix)
+        self.assertNotIn("portable_manager.py", windows)
 
     @unittest.skipIf(os.name == "nt", "POSIX launcher execution test")
-    def test_start_launcher_prefers_existing_release_venv_and_copies_manager(self):
+    def test_start_launcher_prefers_existing_release_venv_and_copies_manager_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "LadiesExplorer"
             release = root / "releases" / "v9.8.0"
-            source_manager = release / "tools" / "launcher_manager.py"
+            tools = release / "tools"
             python = release / ".venv" / "bin" / "python"
-            source_manager.parent.mkdir(parents=True)
+            tools.mkdir(parents=True)
             python.parent.mkdir(parents=True)
-            source_manager.write_text("# manager\n", encoding="utf-8")
+            (tools / "launcher_manager.py").write_text("# manager\n", encoding="utf-8")
+            (tools / "launcher_core.py").write_text("# core\n", encoding="utf-8")
+            (tools / "launcher_manager.html").write_text("<html></html>\n", encoding="utf-8")
             (root / "current").write_text("v9.8.0\n", encoding="utf-8")
             shutil.copy2(PACKAGING / "start.command", root / "start.command")
             capture = root / "capture.txt"
@@ -76,19 +80,22 @@ class PortableLauncherContractTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            manager = root / ".state" / "launcher_manager.py"
-            self.assertTrue(manager.is_file())
+            state = root / ".state"
+            for name in ("launcher_manager.py", "launcher_core.py", "launcher_manager.html"):
+                self.assertTrue((state / name).is_file())
             args = capture.read_text(encoding="utf-8").splitlines()
-            self.assertEqual(args, [str(manager), "launch", "--root", str(root)])
+            self.assertEqual(args, [str(state / "launcher_manager.py"), "launch", "--root", str(root)])
 
     @unittest.skipIf(os.name == "nt", "POSIX launcher execution test")
     def test_start_launcher_uv_fallback_uses_install_local_python(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "LadiesExplorer"
             release = root / "releases" / "v9.8.0"
-            manager = release / "tools" / "launcher_manager.py"
-            manager.parent.mkdir(parents=True)
-            manager.write_text("# manager\n", encoding="utf-8")
+            tools = release / "tools"
+            tools.mkdir(parents=True)
+            (tools / "launcher_manager.py").write_text("# manager\n", encoding="utf-8")
+            (tools / "launcher_core.py").write_text("# core\n", encoding="utf-8")
+            (tools / "launcher_manager.html").write_text("<html></html>\n", encoding="utf-8")
             (root / "current").write_text("v9.8.0\n", encoding="utf-8")
             shutil.copy2(PACKAGING / "start.command", root / "start.command")
 
