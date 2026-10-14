@@ -47,14 +47,23 @@
 .discover-delta-pill svg { width: 14px; height: 14px; flex: 0 0 14px; }
 .grid-screen .discover-intelligence-bar {
   position: sticky; z-index: 12; top: 0; margin: -4px 0 10px; padding: 4px 0 6px;
-  background: linear-gradient(to bottom, rgba(250,250,254,.98) 72%, rgba(250,250,254,0));
+  background: transparent;
 }
 .swipe-shell > .discover-intelligence-bar {
-  position: absolute; z-index: 30; top: 31px; left: 50%; transform: translateX(-50%);
+  position: absolute; z-index: 30; top: 12px; left: 50%; transform: translateX(-50%);
   width: max-content; max-width: calc(100% - 42px); pointer-events: auto;
 }
 .swipe-shell > .discover-intelligence-bar .discover-mode-pills,
 .swipe-shell > .discover-intelligence-bar .discover-delta-pill { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+
+.grid-card-chips { display: none !important; }
+.requested-profile-availability {
+  width: max-content; max-width: 100%; margin-top: 6px; display: inline-flex; align-items: center; gap: 6px;
+}
+.requested-profile-availability svg { width: 14px; height: 14px; }
+.requested-data-note { margin: -2px 0 12px; line-height: 1.45; }
+.requested-data-card > .price-list-block { margin-top: 10px; }
+.requested-encounter-form { padding-top: 12px; }
 
 @media (max-width: 430px) {
   .saved-search-entry { grid-template-columns: 1fr; }
