@@ -55,6 +55,16 @@ export function reducer(state=initialState, action={}) {
     case 'THREADS': next.messaging.threads = action.items || []; next.messaging.loading = false; return next;
     case 'THREADS_LOADING': next.messaging.loading = Boolean(action.value); return next;
     case 'CURRENT_THREAD': next.messaging.currentThread = action.value; next.messaging.threadLoading = false; return next;
+    case 'THREAD_ENDPOINT': {
+      const thread=next.messaging.currentThread;
+      if(!thread)return state;
+      const endpointId=Number(action.endpointId||0);
+      const endpoints=Array.isArray(thread.endpoints)?thread.endpoints:[];
+      const endpoint=endpoints.find(item=>Number(item.endpoint_id)===endpointId) || (Number(thread.endpoint?.endpoint_id)===endpointId?thread.endpoint:null);
+      if(!endpoint)return state;
+      thread.selected_endpoint=endpoint;
+      return next;
+    }
     case 'THREAD_LOADING': next.messaging.threadLoading = Boolean(action.value); return next;
     case 'REPLY_TO': next.messaging.replyTo = action.value || null; return next;
     case 'EDITING': next.messaging.editing = action.value || null; return next;
