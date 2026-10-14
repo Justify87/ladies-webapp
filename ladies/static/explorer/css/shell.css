@@ -20,6 +20,11 @@
   grid-template-rows: var(--status-h) var(--header-h) minmax(0, 1fr);
 }
 .phone.chat-mode .bottom-nav { display: none; }
+.phone.detail-mode {
+  grid-template-rows: var(--status-h) minmax(0, 1fr);
+}
+.phone.detail-mode .app-header,
+.phone.detail-mode .bottom-nav { display: none; }
 
 .statusbar {
   position: relative;
