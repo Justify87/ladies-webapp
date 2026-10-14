@@ -5,7 +5,7 @@ from typing import Any
 
 from ladies_v9.errors import ExternalServiceError, ValidationError
 from ladies_v9.request_parsing import read_int, read_mapping
-from ladies_v9.source import fetch_search_configured, resolve_location
+from ladies_v9.source import build_filter_path, fetch_search_configured, resolve_location
 from ladies_v9.utils import clean_text
 
 LOGGER = logging.getLogger("ladies_explorer.search")
@@ -85,18 +85,53 @@ class SearchService:
                     "selected": params["selected"],
                 },
             )
-            profiles, meta = fetch_search_configured(
-                session=self.http,
-                city_slug=city_slug,
-                city_display=city_display,
-                radius_km=params["radius"],
-                category=params["category"],
-                age_min=params["age_min"],
-                age_max=params["age_max"],
-                height_min=params["height_min"],
-                height_max=params["height_max"],
-                selected=params["selected"],
-            )
+            try:
+                profiles, meta = fetch_search_configured(
+                    session=self.http,
+                    city_slug=city_slug,
+                    city_display=city_display,
+                    radius_km=params["radius"],
+                    category=params["category"],
+                    age_min=params["age_min"],
+                    age_max=params["age_max"],
+                    height_min=params["height_min"],
+                    height_max=params["height_max"],
+                    selected=params["selected"],
+                )
+            except RuntimeError as exc:
+                # The upstream site sometimes auto-expands sparse searches beyond
+                # the requested radius. Keep the hard-radius contract: do not accept
+                # widened cards, but finish the search cleanly with zero trusted
+                # results instead of turning a valid filter combination into HTTP 400.
+                if "meldet Radius" not in str(exc):
+                    raise
+                filter_path = build_filter_path(
+                    params["category"],
+                    params["age_min"],
+                    params["age_max"],
+                    params["height_min"],
+                    params["height_max"],
+                    params["selected"],
+                )
+                LOGGER.info(
+                    "Search hard-radius boundary treated as empty requested_radius=%s filter_path=%s detail=%s",
+                    params["radius"],
+                    filter_path or "<none>",
+                    exc,
+                )
+                profiles = []
+                meta = {
+                    "city": city_slug,
+                    "city_display": city_display,
+                    "radius_km": params["radius"],
+                    "filter_path": filter_path,
+                    "total_pages": 0,
+                    "server_advert_count": 0,
+                    "distance_searched": str(params["radius"]),
+                    "pagination_source": "radius-boundary-empty",
+                    "radius_boundary_stopped": True,
+                    "unique_count": 0,
+                }
             results = self.repository.finish_search_run(run_id, profiles, meta)
             LOGGER.info(
                 "Search complete run_id=%s results=%s city=%s radius=%s",
