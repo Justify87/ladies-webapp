@@ -18,6 +18,7 @@ DEFAULT_SETTINGS = {
     "autoplay_videos": False,
     "reduced_motion": False,
     "default_filters": None,
+    "saved_searches": [],
 }
 
 
