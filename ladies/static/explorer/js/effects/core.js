@@ -1,6 +1,6 @@
 import { api } from '../api/client.js';
 import * as S from '../app/selectors.js';
-import { filterPayload, profileBundleVm } from '../data/adapters.js';
+import { filterPayload, profileBundleVm, formEnumWireValue } from '../data/adapters.js';
 
 export function createCoreEffects({store,router}) {
   let previewAbort=null, previewTimer=null, previewSeq=0;
@@ -166,9 +166,9 @@ export function createCoreEffects({store,router}) {
     const choice=name=>form.querySelector(`[data-choice-name="${name}"] .selected`)?.dataset.value || 'UNKNOWN';
     const rating=name=>form.querySelector(`[data-rating-name="${name}"] .selected`)?.dataset.value || null;
     try {
-      const user=await api.personState(personId,{repeat_interest:choice('repeat_interest'),private_note:String(fd.get('private_note')||'')});
+      const user=await api.personState(personId,{repeat_interest:formEnumWireValue('repeat_interest',choice('repeat_interest')),private_note:String(fd.get('private_note')||'')});
       store.dispatch({type:'PERSON_STATE_SYNC',personId,userState:user?.user_state || {}});
-      const payload={duration_minutes:fd.get('duration_minutes')||null,total_price_eur:fd.get('total_price_eur')||null,overall_rating:rating('overall_rating'),sympathy_rating:rating('sympathy_rating'),photo_status:choice('photo_status'),service_accuracy:choice('service_accuracy'),hygiene:choice('hygiene'),kissing:choice('kissing'),negotiable:choice('negotiable')};
+      const payload={duration_minutes:fd.get('duration_minutes')||null,total_price_eur:fd.get('total_price_eur')||null,overall_rating:rating('overall_rating'),sympathy_rating:rating('sympathy_rating'),photo_status:formEnumWireValue('photo_status',choice('photo_status')),service_accuracy:formEnumWireValue('service_accuracy',choice('service_accuracy')),hygiene:formEnumWireValue('hygiene',choice('hygiene')),kissing:formEnumWireValue('kissing',choice('kissing')),negotiable:formEnumWireValue('negotiable',choice('negotiable'))};
       if(encounterId) await api.updateEncounter(personId,encounterId,payload); else if(Object.values(payload).some(v=>v&&v!=='UNKNOWN')) await api.addEncounter(personId,payload);
       await loadPerson(personId,{force:true}); toast('Meine Daten gespeichert'); loadDashboard();
     } catch(error){toast(error.message);}
