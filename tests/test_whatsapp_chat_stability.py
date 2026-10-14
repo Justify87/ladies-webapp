@@ -65,9 +65,14 @@ class WhatsAppChatStabilityTests(unittest.TestCase):
         self.assertIn("profilePictureUrl(target, 'preview', 5000)", source)
         self.assertIn("Diese Nummer ist nicht bei WhatsApp registriert", source)
 
-    def test_chat_layer_sits_above_generic_full_layers(self):
-        css = (Path(__file__).parents[1] / "ladies" / "static" / "messaging.css").read_text(encoding="utf-8")
-        self.assertIn(".messaging-chat-layer{z-index:140", css)
+    def test_chat_layer_owns_the_explorer_content_area(self):
+        root = Path(__file__).parents[1] / "ladies" / "static" / "explorer" / "css"
+        shell = (root / "shell.css").read_text(encoding="utf-8")
+        screens = (root / "screens" / "02a.css").read_text(encoding="utf-8")
+        self.assertIn(".phone.chat-mode", shell)
+        self.assertIn(".phone.chat-mode .bottom-nav { display: none; }", shell)
+        self.assertIn(".chat-screen{display:grid;grid-template-rows:minmax(0,1fr) auto auto}", screens)
+        self.assertIn(".chat-scroll{display:flex;flex-direction:column;overflow:auto", screens)
 
     def test_profile_contact_probe_returns_registration_and_picture(self):
         with tempfile.TemporaryDirectory() as td, patch("ladies_v9.messaging.service.WhatsAppGateway", ProbeWorker):
