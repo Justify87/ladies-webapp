@@ -2,6 +2,25 @@ import { firstValue, flatten, mediaUrl, mediaPoster, relativeAge, todayish } fro
 
 const asArray = value => Array.isArray(value) ? value : [];
 const asObject = value => value && typeof value === 'object' ? value : {};
+const FORM_ENUM_LABELS=Object.freeze({
+  photo_status:{AS_AD:'Wie auf Anzeige',BETTER:'Besser',WORSE:'Schlechter'},
+  service_accuracy:{GOOD:'Ja',PARTLY:'Teilweise',BAD:'Nein'},
+  hygiene:{GOOD:'Sehr gut',OK:'Okay',BAD:'Schlecht'},
+  kissing:{YES:'Ja',ON_REQUEST:'Teilweise',NO:'Nein'},
+  negotiable:{YES:'Ja',PARTLY:'Teilweise',NO:'Nein'},
+  repeat_interest:{YES:'Ja',MAYBE:'Vielleicht',NO:'Nein'}
+});
+const FORM_ENUM_WIRE=Object.freeze({
+  photo_status:{'Wie auf Anzeige':'AS_AD','Besser':'BETTER','Schlechter':'WORSE'},
+  service_accuracy:{'Ja':'GOOD','Teilweise':'PARTLY','Nein':'BAD'},
+  hygiene:{'Sehr gut':'GOOD','Gut':'GOOD','Okay':'OK','Schlecht':'BAD'},
+  kissing:{'Ja':'YES','Teilweise':'ON_REQUEST','Auf Wunsch':'ON_REQUEST','Nein':'NO'},
+  negotiable:{'Ja':'YES','Teilweise':'PARTLY','Nein':'NO'},
+  repeat_interest:{'Ja':'YES','Vielleicht':'MAYBE','Nein':'NO'}
+});
+const uiEnumValue=(field,value)=>FORM_ENUM_LABELS[field]?.[String(value||'')] || value || 'UNKNOWN';
+export function formEnumWireValue(field,value){const text=String(value||'UNKNOWN');if(text==='UNKNOWN'||Object.hasOwn(FORM_ENUM_LABELS[field]||{},text))return text;return FORM_ENUM_WIRE[field]?.[text] || text;}
+const encounterVm=item=>{const x=asObject(item);return {...x,photo_status:uiEnumValue('photo_status',x.photo_status),service_accuracy:uiEnumValue('service_accuracy',x.service_accuracy),hygiene:uiEnumValue('hygiene',x.hygiene),kissing:uiEnumValue('kissing',x.kissing),negotiable:uiEnumValue('negotiable',x.negotiable)};};
 
 export function searchResultVm(row) {
   const source = asObject(row);
@@ -93,13 +112,13 @@ export function personDetailVm(raw) {
     sourceUrl:snapshot.source_url || latestListing.current_url || '',
     changes:asArray(d.timeline || d.changes || d.history),
     prices:asArray(d.price_lists || d.prices),
-    encounters:asArray(d.encounters),
+    encounters:asArray(d.encounters).map(encounterVm),
     analytics:asObject(d.analytics),
     identifiers:asArray(d.identifiers),
     sourceProfiles:asArray(d.source_profiles),
     preference:user.preference || 'NONE',
     favorite:Boolean(user.favorite),
-    repeatInterest:user.repeat_interest || 'UNKNOWN',
+    repeatInterest:uiEnumValue('repeat_interest',user.repeat_interest),
     privateNote:user.private_note || ''
   };
 }
