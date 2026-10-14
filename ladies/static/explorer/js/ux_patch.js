@@ -109,14 +109,9 @@ export function installUxPatch({store}){
   },true);
 
   store.subscribe(()=>{
-    const search=document.querySelector('#screenHost .search-screen [data-scroll-root]');
-    const settings=document.querySelector('#screenHost .settings-screen [data-scroll-root]');
-    const current=search||settings,view=search?'search':settings?'settings':null,targetScroll=current?.scrollTop??0,focus=search?focusSnapshot():null;
+    const focus=focusSnapshot();
     queueMicrotask(()=>requestAnimationFrame(()=>{
       enhancePricingUi();
-      if(!view)return;
-      const scroller=document.querySelector(`#screenHost .${view}-screen [data-scroll-root]`);if(!scroller)return;
-      scroller.scrollTop=targetScroll;
       if(!focus)return;
       const input=focus.filterSearch?document.querySelector('#screenHost .search-screen [data-filter-search]'):focus.filterInput?document.querySelector(`#screenHost .search-screen [data-filter-input="${CSS.escape(focus.filterInput)}"]`):null;
       if(input){input.focus({preventScroll:true});if(focus.start!=null&&typeof input.setSelectionRange==='function')try{input.setSelectionRange(focus.start,focus.end??focus.start);}catch{}}
