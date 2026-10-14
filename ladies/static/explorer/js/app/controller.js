@@ -5,8 +5,11 @@ import { captureScrollState, updateScrollableRegion } from './scroll_state.js';
 function sheetRenderKey(sheet){
   if(!sheet?.kind)return null;
   const payload=sheet.payload||{};
-  const identity=payload.personId??payload.threadId??payload.endpointId??payload.messageId??payload.listingId??payload.extractionId??payload.message?.id??payload.proposal?.price_extraction_id??payload.encounter?.encounter_id??payload.kind??'';
-  return identity===''?String(sheet.kind):`${sheet.kind}:${identity}`;
+  const identity=[
+    payload.personId,payload.threadId,payload.endpointId,payload.messageId,payload.listingId,payload.extractionId,
+    payload.message?.id,payload.proposal?.price_extraction_id,payload.encounter?.encounter_id,payload.kind
+  ].filter(value=>value!==undefined&&value!==null&&value!=='').join(':');
+  return identity?`${sheet.kind}:${identity}`:String(sheet.kind);
 }
 
 export function createController({store,router,effects,commands}) {
