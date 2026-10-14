@@ -25,7 +25,6 @@ export function createEncounterEffects({store,getEffects}) {
       listing_id:fd.get('listing_id')||null,
       occurred_at:fd.get('occurred_at')||null,
       duration_minutes:fd.get('duration_minutes')||null,
-      base_price_eur:fd.get('base_price_eur')||null,
       total_price_eur:fd.get('total_price_eur')||null,
       overall_rating:selected('rating','overall_rating'),
       sympathy_rating:selected('rating','sympathy_rating'),
@@ -35,10 +34,14 @@ export function createEncounterEffects({store,getEffects}) {
       hygiene:enumChoice('hygiene'),
       kissing:enumChoice('kissing'),
       negotiable:enumChoice('negotiable'),
-      private_note:String(fd.get('private_note')||'').trim()||null,
-      note:String(fd.get('note')||'').trim()||null,
-      services:servicesFrom(form)
+      private_note:String(fd.get('private_note')||'').trim()||null
     };
+    // The consolidated "Daten erfassen" form intentionally does not expose
+    // base price, generic encounter note or service rows. Omit those keys when
+    // the controls are absent so editing ratings cannot erase existing data.
+    if(form.querySelector('[name="base_price_eur"]'))payload.base_price_eur=fd.get('base_price_eur')||null;
+    if(form.querySelector('[name="note"]'))payload.note=String(fd.get('note')||'').trim()||null;
+    if(form.querySelector('[data-encounter-service-row]'))payload.services=servicesFrom(form);
     try {
       if(encounterId)await api.updateEncounter(personId,encounterId,payload);
       else await api.addEncounter(personId,payload);
