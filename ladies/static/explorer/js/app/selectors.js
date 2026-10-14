@@ -2,7 +2,7 @@ import { searchResultVm, profileBundleVm, personDetailVm, listItemVm, threadVm, 
 
 export const currentRoute = state => state.navigation.stack.at(-1) || {name:'search',params:{}};
 
-function businessProfileEvidence(row,bundle) {
+export function businessProfileEvidence(row,bundle) {
   const profile=bundle?.profile || bundle?.snapshot || bundle?.latest_snapshot || {};
   const storedAuxiliary=profile?.auxiliary && typeof profile.auxiliary==='object' ? profile.auxiliary : {};
   const nestedAuxiliary=storedAuxiliary?.auxiliary && typeof storedAuxiliary.auxiliary==='object' ? storedAuxiliary.auxiliary : storedAuxiliary;
@@ -13,10 +13,14 @@ function businessProfileEvidence(row,bundle) {
     ''
   ).trim();
   const explicit=profile?.is_business_profile ?? row?.is_business_profile;
+  const knownFlag=profile?.business_profile_known ?? row?.business_profile_known;
+  const known=knownFlag===undefined
+    ? (Boolean(bundle) || explicit !== undefined || Boolean(website))
+    : Boolean(knownFlag);
   return {
-    isBusinessProfile:Boolean(explicit ?? website),
+    isBusinessProfile:Boolean(explicit || website),
     businessWebsiteUrl:website,
-    businessProfileKnown:Boolean(bundle) || explicit !== undefined || Boolean(row?.business_website_url)
+    businessProfileKnown:known
   };
 }
 
