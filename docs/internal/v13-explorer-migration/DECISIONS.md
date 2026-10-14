@@ -11,6 +11,7 @@
 7. Messaging keeps the productive feature surface; the prototype demo chat is not a replacement contract.
 8. Pricing is integrated inline with the message that produced the price signal/proposal.
 9. Ladies Manager is out of migration scope and must remain functionally unchanged.
-10. CI integrity is part of the product contract: no skipped tests, reduced matrices, ignored exits or artificial success.
-11. PR workflow concurrency must use `cancel-in-progress: false`. The former architecture test that required automatic PR cancellation was intentionally updated because that contract is now invalid.
-12. `VERIFIED` is used only when concrete test/diff/runtime evidence exists; implementation alone remains `IMPLEMENTED` until verification is recorded.
+10. Development CI is intentionally minimal and static only: Python compilation, Explorer JavaScript syntax, and TOML/JSON syntax. It must not import or start the application, open HTTP endpoints, launch browsers, run E2E/visual tests, or maintain compatibility/platform matrices.
+11. Release workflows are separate from development CI and only prepare version metadata, build the release artifact, verify release metadata/archive integrity, tag and publish the release.
+12. Functional UI verification is performed manually during development; no browser-smoke, E2E or visual-regression CI gate is part of the V13 migration contract.
+13. `VERIFIED` is used only when concrete source/diff/manual/release evidence exists; implementation alone remains `IMPLEMENTED` until verification is recorded.

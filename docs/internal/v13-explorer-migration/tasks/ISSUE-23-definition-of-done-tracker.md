@@ -2,24 +2,28 @@
 
 - **Status:** PARTIAL
 - **Issue:** #23
-- **Goal:** Keep the 44 V13 migration acceptance items synchronized with code, tests, release validation and PR #69.
+- **Goal:** Keep the active V13 migration acceptance items synchronized with code, manual verification, release validation and PR #69.
 
 ## Open implementation steps
-- [ ] Complete and verify all remaining child tasks #26–#36, #38–#59 and #63–#68.
+- [ ] Complete and verify remaining child tasks #26–#36, #38–#59 and #67–#68.
+- [ ] Keep the lightweight static CI green.
 - [ ] Update tracker checkboxes only when evidence exists.
 
 ## Acceptance Criteria
-- [ ] Every DoD item has real verification evidence.
-- [ ] Final PR head is green and release install/start is verified.
+- [ ] Every active DoD item has real verification evidence.
+- [ ] Release package content and fresh install/start are verified.
 
 ## Verification
-Current source audit and Actions runs establish only partial completion.
+Development CI is intentionally limited to static syntax checks. Explorer runtime behavior is verified manually; release behavior is verified by the dedicated release workflows.
 
-## Relevant commits
-- `721b3b1` — CI contract updated for non-cancelling V13 PR checks.
+## Retired items
+- #63 — Browser smoke tests: retired.
+- #64 — Functional E2E tests: retired.
+- #65 — Visual reference tests: retired.
+- #66 — heavyweight/final CI gate: retired.
 
 ## PR / review notes
-PR #69 remains open/draft; no current unresolved review thread was found.
+PR #69 remains open/draft and is the sole V13 migration PR.
 
 ## Result
-PARTIAL — tracker remains the migration-level gate.
+PARTIAL — tracker remains the migration-level gate for the active functional and release items.
