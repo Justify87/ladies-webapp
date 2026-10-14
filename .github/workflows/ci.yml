@@ -47,6 +47,50 @@ jobs:
           set -euo pipefail
           find ladies/static/explorer -type f \( -name '*.js' -o -name '*.mjs' \) -print -exec node --experimental-default-type=module --check {} \;
 
+      - name: Focused behavior smoke checks
+        run: |
+          python - <<'PY'
+          import runpy
+          import sys
+          import types
+
+          normalize = runpy.run_path('ladies/pricing/normalize.py')
+          text = '10045 Minuten\n130 Std'
+          pairs = {(row['duration_minutes'], row['amount_cents']) for row in normalize['extract_price_duration_pairs'](text)}
+          durations = {row['minutes'] for row in normalize['extract_durations'](text)}
+          amounts = {row['amount_cents'] for row in normalize['extract_money'](text)}
+          assert (45, 10000) in pairs and (60, 13000) in pairs
+          assert {45, 60}.issubset(durations)
+          assert {10000, 13000}.issubset(amounts)
+
+          class ValidationError(ValueError):
+              pass
+          errors = types.ModuleType('ladies_v9.errors')
+          errors.ExternalServiceError = RuntimeError
+          errors.ValidationError = ValidationError
+          parsing = types.ModuleType('ladies_v9.request_parsing')
+          parsing.read_int = lambda payload, key, default, minimum, maximum: max(minimum, min(maximum, int(payload.get(key, default))))
+          parsing.read_mapping = lambda payload, key: payload.get(key, {}) or {}
+          source = types.ModuleType('ladies_v9.source')
+          source.build_filter_path = lambda *args, **kwargs: ''
+          source.fetch_search_configured = lambda *args, **kwargs: ([], {})
+          source.resolve_location = lambda session, city: ('leipzig', city)
+          utils = types.ModuleType('ladies_v9.utils')
+          utils.clean_text = lambda value: str(value).strip()
+          package = types.ModuleType('ladies_v9')
+          sys.modules.update({'ladies_v9': package, 'ladies_v9.errors': errors, 'ladies_v9.request_parsing': parsing, 'ladies_v9.source': source, 'ladies_v9.utils': utils})
+          search = runpy.run_path('ladies/core/services/search.py')
+          parse = search['parse_search_request']
+          assert parse({'radius': 20}, default_city='leipzig', default_radius=20)['radius'] == 20
+          try:
+              parse({'radius': 25}, default_city='leipzig', default_radius=20)
+          except ValidationError:
+              pass
+          else:
+              raise AssertionError('Unsupported radius must be rejected')
+          assert search['_RADIUS_RE'].search('meldet Radius 70 km, angefordert waren 20 km').group(1) == '70'
+          PY
+
       - name: Check project metadata syntax
         run: |
           python - <<'PY'
