@@ -40,7 +40,12 @@ def create_app(
     limiter = FixedRateLimiter(profile_delay)
     status_limiter = BatchRateLimiter(batch_size=3, pause_seconds=0.8)
     search_service = SearchService(repos.search, http, default_city=default_city, default_radius=default_radius)
-    profile_service = ProfileService(repos.persons, http, limiter)
+    profile_service = ProfileService(
+        repos.persons,
+        http,
+        limiter,
+        classification_repository=repos.search,
+    )
     app.extensions["ladies_database"] = database
     app.extensions["ladies_archive"] = archive
     app.extensions["ladies_repositories"] = repos
@@ -165,6 +170,10 @@ def create_app(
     @app.get("/api/profile/<advert_id>")
     def api_profile(advert_id: str):
         return jsonify(**profile_service.load(advert_id))
+
+    @app.get("/api/profile-classification/<advert_id>")
+    def api_profile_classification(advert_id: str):
+        return jsonify(**profile_service.classify_business_profile(advert_id))
 
     @app.get("/api/snapshot/<int:snapshot_id>")
     def api_snapshot(snapshot_id: int):
