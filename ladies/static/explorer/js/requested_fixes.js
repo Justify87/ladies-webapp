@@ -7,6 +7,7 @@ const stateOf=store=>store.getState();
 const localDateTime=value=>{if(!value)return '';const d=new Date(value);if(Number.isNaN(d.getTime()))return '';const z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}T${z(d.getHours())}:${z(d.getMinutes())}`;};
 const ratingButtons=(name,value)=>`<div class="rating-row" data-rating-name="${a(name)}">${[1,2,3,4,5].map(n=>`<button type="button" class="${Number(value)===n?'selected':''}" data-action="rating-select" data-name="${a(name)}" data-value="${n}">${n}</button>`).join('')}</div>`;
 const choice=(name,value,options)=>`<div class="choice-field" data-choice-name="${a(name)}">${options.map(opt=>`<button type="button" class="${String(value||'UNKNOWN')===opt?'selected':''}" data-action="choice-select" data-name="${a(name)}" data-value="${a(opt)}">${e(opt)}</button>`).join('')}</div>`;
+const repeatInterestLabel=value=>({YES:'Ja',MAYBE:'Vielleicht',NO:'Nein'}[String(value||'').toUpperCase()]||value||'UNKNOWN');
 
 export function createRequestedEffects({store,core}) {
   let discoverBusy=false;
@@ -65,13 +66,14 @@ export function createRequestedEffects({store,core}) {
 
 function encounterForm(detail,encounter={}) {
   const listingId=encounter.listing_id||detail.listings?.[0]?.listing_id||'';
+  const repeatInterest=repeatInterestLabel(encounter.repeat_interest);
   return `<form class="my-data-form requested-encounter-form" data-encounter-services-form data-full-encounter="true" data-person-id="${a(detail.personId)}" data-encounter-id="${a(encounter.encounter_id||'')}">
     <input type="hidden" name="listing_id" value="${a(listingId)}">
     <label class="field-input"><span>Zeitpunkt</span><input name="occurred_at" type="datetime-local" value="${a(localDateTime(encounter.occurred_at))}"></label>
     <label><span>Gesamteindruck</span>${ratingButtons('overall_rating',encounter.overall_rating)}</label>
     <label><span>Sympathie</span>${ratingButtons('sympathy_rating',encounter.sympathy_rating)}</label>
     <label><span>Fotos</span>${choice('photo_status',encounter.photo_status,['UNKNOWN','Wie auf Anzeige','Besser','Schlechter'])}</label>
-    <label><span>Wiederholungsinteresse</span>${choice('repeat_interest',encounter.repeat_interest,['UNKNOWN','Ja','Vielleicht','Nein'])}</label>
+    <label><span>Wiederholungsinteresse</span>${choice('repeat_interest',repeatInterest,['UNKNOWN','Ja','Vielleicht','Nein'])}</label>
     <label><span>Service korrekt</span>${choice('service_accuracy',encounter.service_accuracy,['UNKNOWN','Ja','Teilweise','Nein'])}</label>
     <label><span>Hygiene</span>${choice('hygiene',encounter.hygiene,['UNKNOWN','Sehr gut','Okay','Schlecht'])}</label>
     <label><span>Küssen</span>${choice('kissing',encounter.kissing,['UNKNOWN','Ja','Auf Wunsch','Nein'])}</label>
@@ -107,8 +109,11 @@ function addHideLikesOption(store) {
   row.insertAdjacentElement('afterend',label);
 }
 
-function cleanGrid() {
+function cleanGrid(hiddenAdverts) {
   document.querySelectorAll('#screenHost .grid-card-chips').forEach(node=>node.remove());
+  document.querySelectorAll('#screenHost .grid-card[data-advert-id]').forEach(card=>{
+    if(hiddenAdverts.has(String(card.dataset.advertId||'')))card.remove();
+  });
 }
 
 function cleanSwipe(store) {
@@ -158,10 +163,11 @@ function consolidateDataTab(store) {
 
 export function installRequestedFixes({store,effects}) {
   const gridBusy=new Set();
+  const hiddenLikedAdverts=new Set();
 
   function enhanceDom() {
     addHideLikesOption(store);
-    cleanGrid();
+    cleanGrid(hiddenLikedAdverts);
     cleanSwipe(store);
     consolidateDataTab(store);
   }
@@ -176,21 +182,27 @@ export function installRequestedFixes({store,effects}) {
     gridBusy.add(advertId);
     button.disabled=true;
     const snapshot=stateOf(store);
-    const vm=S.searchRows(snapshot).find(row=>row.advertId===advertId) || null;
-    const rawIndex=(snapshot.search.results||[]).findIndex(row=>String(row.advert_id??row.external_listing_id??row.id??'')===advertId);
-    const rawRow=rawIndex>=0?structuredClone(snapshot.search.results[rawIndex]):null;
+    const vm=S.searchRows(snapshot).find(row=>row.advertId===advertId)||null;
     const addingLike=vm?.preference!=='LIKE';
-    if(addingLike&&rawRow)store.dispatch({type:'SEARCH_RESULT_REMOVE',advertId});
+    const card=button.closest('.grid-card');
+    const parent=card?.parentElement||null;
+    const nextSibling=card?.nextSibling||null;
+    if(addingLike) {
+      hiddenLikedAdverts.add(advertId);
+      card?.remove();
+    }
     try {
       if(!vm)throw new Error('Profil konnte nicht aufgelöst werden');
       const bundle=await effects.loadBundle(vm,{detail:false,quiet:true});
       const personId=Number(bundle?.personId||vm.personId||0);
       if(!personId)throw new Error('Person konnte nicht aufgelöst werden');
       await effects.mutatePerson(personId,{preference:addingLike?'LIKE':'NONE'});
-      if(!addingLike)store.dispatch({type:'SEARCH_RESULT_PREFERENCE',advertId,preference:'NONE'});
       effects.loadDashboard();
     } catch(error) {
-      if(addingLike&&rawRow)store.dispatch({type:'SEARCH_RESULT_RESTORE',index:rawIndex,row:rawRow});
+      if(addingLike) {
+        hiddenLikedAdverts.delete(advertId);
+        if(card&&parent?.isConnected&&!card.isConnected)parent.insertBefore(card,nextSibling?.parentNode===parent?nextSibling:null);
+      }
       effects.toast(error.message||String(error));
     } finally {
       gridBusy.delete(advertId);
