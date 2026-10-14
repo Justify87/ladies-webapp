@@ -6,13 +6,13 @@
 
 ## Open implementation steps
 - [x] Profile price-list UI/API path present.
-- [ ] E2E create/display verification.
+- [ ] Manually verify create → display → reload persistence in the running Explorer.
 
 ## Acceptance Criteria
 - [ ] Manual price list persists and displays correctly.
 
 ## Verification
-Source/API evidence; UI E2E pending.
+Source/API contract audit completed. Runtime/UI verification remains manual by design; no browser/E2E CI is required.
 
 ## Relevant commits
 PR #69 Profile/pricing migration commits.
