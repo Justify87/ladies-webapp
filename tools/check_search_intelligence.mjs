@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   availabilityMode,
   filtersWithAvailabilityMode,
@@ -62,5 +63,17 @@ const rawBaseline=baselineFromResults([
   {listing_id:8,person_id:808,advert_id:'1008',has_video:false}
 ]);
 assert.deepEqual(rawBaseline.listings.map(item=>item.listing_id),[7,8]);
+
+// Focused guards for the Explorer follow-up fixes.
+const discoverSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/discover.js',import.meta.url),'utf8');
+const encounterSource=readFileSync(new URL('../ladies/static/explorer/js/effects/encounters.js',import.meta.url),'utf8');
+const requestedSource=readFileSync(new URL('../ladies/static/explorer/js/requested_fixes.js',import.meta.url),'utf8');
+const requestedCss=readFileSync(new URL('../ladies/static/explorer/css/search-intelligence.css',import.meta.url),'utf8');
+assert.match(discoverSource,/grid-card-heart[^>]+data-action="grid-like"/s,'visible Grid heart must trigger Like');
+assert.match(encounterSource,/querySelector\('\[name="base_price_eur"\]'\)\)payload\.base_price_eur=/,'hidden base price must only be sent when present');
+assert.match(encounterSource,/querySelector\('\[name="note"\]'\)\)payload\.note=/,'hidden note must only be sent when present');
+assert.match(encounterSource,/querySelector\('\[data-encounter-service-row\]'\)\)payload\.services=/,'hidden services must only be sent when present');
+assert.match(requestedSource,/mode==='NOW'\?'Jetzt laut Anzeige':mode==='TODAY'\?'Heute laut Anzeige':'Heute verfügbar'/,'availability label must respect the quick filter mode');
+assert.match(requestedCss,/\.swipe-details \.online-pill\.requested-profile-availability\s*\{[^}]*position:\s*static;[^}]*inset:\s*auto;/s,'availability badge must flow below the profile name');
 
 console.log('search intelligence regression checks passed');
