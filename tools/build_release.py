@@ -15,6 +15,15 @@ INCLUDE_PREFIXES = ("ladies/", "tools/", "packaging/")
 EXCLUDED_PARTS = {"__pycache__", "node_modules", ".venv", ".runtime", "dist", "tests"}
 FORBIDDEN_PREFIXES = ("ladies_data/", "logs/", ".git/", ".github/")
 FORBIDDEN_NAMES = {"ladies.sqlite3", "ladies.sqlite3-wal", "ladies.sqlite3-shm"}
+V13_RUNTIME_FILES = {
+    "ladies/templates/index.html",
+    "ladies/static/explorer/css/tokens.css",
+    "ladies/static/explorer/css/base.css",
+    "ladies/static/explorer/css/shell.css",
+    "ladies/static/explorer/css/components.css",
+    "ladies/static/explorer/css/screens.css",
+    "ladies/static/explorer/js/bootstrap.js",
+}
 
 
 def _project_version(root: Path) -> str:
@@ -69,6 +78,7 @@ def _validate_file_set(files: list[Path]) -> None:
         "packaging/install.cmd",
         "packaging/start.cmd",
         "packaging/update.cmd",
+        *V13_RUNTIME_FILES,
     }
     missing = sorted(required - names)
     if missing:
@@ -81,6 +91,35 @@ def _validate_file_set(files: list[Path]) -> None:
     ]
     if forbidden:
         raise RuntimeError("Persistente Dateien im Release-Paket: " + ", ".join(sorted(forbidden)))
+
+
+def _validate_archive(archive: Path, files: list[Path]) -> None:
+    expected = {path.as_posix() for path in files} | {"release-manifest.json"}
+    with zipfile.ZipFile(archive) as bundle:
+        names = set(bundle.namelist())
+
+    missing = sorted(expected - names)
+    unexpected = sorted(names - expected)
+    if missing:
+        raise RuntimeError("Dateien fehlen im Release-Archiv: " + ", ".join(missing))
+    if unexpected:
+        raise RuntimeError("Unerwartete Dateien im Release-Archiv: " + ", ".join(unexpected))
+
+    missing_v13 = sorted(V13_RUNTIME_FILES - names)
+    if missing_v13:
+        raise RuntimeError("V13-Runtime fehlt im Release-Archiv: " + ", ".join(missing_v13))
+
+    tracked_v13 = {path.as_posix() for path in files if path.as_posix().startswith("ladies/static/explorer/")}
+    archived_v13 = {name for name in names if name.startswith("ladies/static/explorer/")}
+    if tracked_v13 != archived_v13:
+        missing_nested = sorted(tracked_v13 - archived_v13)
+        extra_nested = sorted(archived_v13 - tracked_v13)
+        details: list[str] = []
+        if missing_nested:
+            details.append("fehlend: " + ", ".join(missing_nested))
+        if extra_nested:
+            details.append("unerwartet: " + ", ".join(extra_nested))
+        raise RuntimeError("V13-Asset-Set im Release-Archiv stimmt nicht: " + "; ".join(details))
 
 
 def build(output_dir: Path, *, commit: str | None = None, root: Path = ROOT) -> Path:
@@ -107,6 +146,7 @@ def build(output_dir: Path, *, commit: str | None = None, root: Path = ROOT) -> 
             "release-manifest.json",
             json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         )
+    _validate_archive(archive, files)
     return archive
 
 
