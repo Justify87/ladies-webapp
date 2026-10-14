@@ -133,19 +133,24 @@ export function threadVm(thread) {
 
 export function messageVm(message) {
   const m = asObject(message);
+  const media = asObject(m.media);
   return {
     ...m,
     id:Number(m.message_id || 0),
     direction:String(m.direction || 'IN').toUpperCase(),
     type:String(m.message_type || 'TEXT').toUpperCase(),
-    text:m.text || m.caption || '',
+    text:m.text || media.caption || m.caption || '',
     timestamp:m.timestamp || m.created_at || '',
     status:String(m.status || ''),
-    replyTo:m.reply_to || m.reply_to_message || null,
+    replyToId:Number(m.reply_to_message_id || 0) || null,
+    replyTo:m.reply_to || m.reply_to_message || m.quote_snapshot || null,
+    quoteSnapshot:m.quote_snapshot || null,
     reactions:asArray(m.reactions),
-    mediaUrl:m.media_url || (m.message_id ? `/api/messaging/messages/${m.message_id}/media` : ''),
+    mediaUrl:m.media_url || media.local_url || (m.message_id ? `/api/messaging/messages/${m.message_id}/media` : ''),
     viewOnce:Boolean(m.view_once),
-    deleted:String(m.status || '').toUpperCase() === 'DELETED'
+    viewOnceConsumed:Boolean(m.view_once_consumed),
+    editedAt:m.edited_at || null,
+    deleted:Boolean(m.deleted_at || String(m.status || '').toUpperCase() === 'DELETED')
   };
 }
 
