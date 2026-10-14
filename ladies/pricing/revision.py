@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from hashlib import sha256
 
 from sqlalchemy import desc, select
@@ -14,7 +15,9 @@ def create_revision(service, extraction_id: int) -> dict:
 
     Accepted extraction records remain immutable audit artifacts. Editing therefore
     starts a new PENDING extraction based on the latest persisted price list and
-    copies the original message anchors only for timeline placement/evidence.
+    copies the original message anchors only for timeline placement. The baseline
+    marker makes this revision an explicit user edit even when the user immediately
+    saves it unchanged, so persisted rows are not re-grounded against old chat text.
     """
     with service.database.session() as db:
         source = db.get(PriceExtraction, int(extraction_id))
@@ -48,6 +51,8 @@ def create_revision(service, extraction_id: int) -> dict:
 
         proposal = validate_proposal(current)
         proposal["update_mode"] = "FULL"
+        baseline = deepcopy(proposal)
+        baseline["uncertainties"] = [*(baseline.get("uncertainties") or []), "USER_REVISION_BASELINE"]
         context = f"revision:{source.price_extraction_id}:{latest_id}"
         pending = PriceExtraction(
             person_id=int(source.person_id),
@@ -57,7 +62,8 @@ def create_revision(service, extraction_id: int) -> dict:
             schema_version=proposal["schema_version"],
             extractor_name="user_revision",
             extractor_version="1",
-            original_proposal_json=dumps(proposal),
+            original_proposal_json=dumps(baseline),
+            reviewed_proposal_json=dumps(proposal),
             context_fingerprint=sha256(context.encode("utf-8")).hexdigest(),
             base_price_list_id=int(latest_id),
         )
