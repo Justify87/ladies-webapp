@@ -122,7 +122,7 @@ const pageErrors = [];
 page.on('pageerror', error => pageErrors.push(String(error)));
 page.on('console', message => { if (message.type() === 'error') pageErrors.push(`console: ${message.text()}`); });
 
-await page.route('**/api/**', async route => {
+await page.route(url => url.pathname.startsWith('/api/'), async route => {
   const request = route.request();
   const url = new URL(request.url());
   const path = url.pathname;

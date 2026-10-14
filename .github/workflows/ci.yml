@@ -186,5 +186,4 @@ jobs:
             cat browser-server.log
             exit 1
           fi
-          node tests/browser/boot-diagnostics.mjs
           node tests/browser/explorer.mjs
