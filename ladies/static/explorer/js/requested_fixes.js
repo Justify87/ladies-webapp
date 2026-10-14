@@ -13,8 +13,13 @@ const normalizeText=value=>String(value||'').trim().toLocaleLowerCase('de-DE').r
 const humanize=value=>{const text=String(value||'').trim().replace(/[_-]+/g,' ');return text?text.charAt(0).toLocaleUpperCase('de-DE')+text.slice(1):'';};
 const chipList=values=>`<div class="offer-chips requested-compact-chips">${values.length?values.map(value=>`<span>${e(value)}</span>`).join(''):'<small>Keine Angaben</small>'}</div>`;
 const sourcePriceLabel=source=>String(source||'').toUpperCase()==='WHATSAPP_EXTRACTED'?'Aus Nachrichten':'Preisrevision';
-const proposalOffers=proposal=>(proposal?.offers||[]).filter(item=>item&&item.amount_cents!=null);
-const priceRows=proposal=>proposalOffers(proposal).map(item=>`<div class="requested-price-row"><span>${e(item.label||(item.duration_minutes?`${item.duration_minutes} Minuten`:'Preis'))}</span><b>${e(euro(Number(item.amount_cents)/100))}</b></div>`).join('');
+export const canonicalPriceRows=proposal=>[
+  ...(proposal?.offers||[]).filter(item=>item?.amount_cents!=null).map(item=>({label:item.label||(item.duration_minutes?`${item.duration_minutes} Minuten`:'Preis'),amount_cents:item.amount_cents})),
+  ...(proposal?.service_rules||[]).filter(item=>item?.amount_cents!=null).map(item=>({label:[item.raw_label||humanize(item.service_key)||'Service',item.status?humanize(item.status):''].filter(Boolean).join(' · '),amount_cents:item.amount_cents})),
+  ...(proposal?.conditions||[]).filter(item=>item?.amount_cents!=null).map(item=>({label:item.label||humanize(item.condition_type)||'Bedingung',amount_cents:item.amount_cents}))
+];
+const priceRows=proposal=>canonicalPriceRows(proposal).map(item=>`<div class="requested-price-row"><span>${e(item.label)}</span><b>${e(euro(Number(item.amount_cents)/100))}</b></div>`).join('');
+export const invalidatesProfilePricing=type=>type==='PRICING_THREAD'||type==='PRICING_PROPOSAL';
 
 export function createRequestedEffects({store,core}) {
   let discoverBusy=false;
@@ -290,13 +295,13 @@ export function installRequestedFixes({store,effects}) {
 
   const queueEnhance=()=>{if(enhanceQueued)return;enhanceQueued=true;queueMicrotask(()=>{enhanceQueued=false;enhanceDom();});};
   function loadPricing(personId) {
-    const key=String(personId),existing=pricingCache.get(key),now=Date.now();
-    if(existing&&(existing.status==='loading'||now-(existing.loadedAt||0)<15000))return existing;
-    const entry={status:'loading',current:existing?.current||null,history:existing?.history||[],loadedAt:existing?.loadedAt||0};
+    const key=String(personId),existing=pricingCache.get(key);
+    if(existing)return existing;
+    const entry={status:'loading',current:null,history:[]};
     pricingCache.set(key,entry);
     Promise.all([api.currentPricing(personId),api.pricingHistory(personId,100)])
-      .then(([current,history])=>pricingCache.set(key,{status:'ready',current:current||null,history:history?.items||[],loadedAt:Date.now()}))
-      .catch(error=>pricingCache.set(key,{status:'error',error,current:null,history:[],loadedAt:Date.now()}))
+      .then(([current,history])=>pricingCache.set(key,{status:'ready',current:current||null,history:history?.items||[]}))
+      .catch(error=>pricingCache.set(key,{status:'error',error,current:null,history:[]}))
       .finally(queueEnhance);
     return entry;
   }
@@ -388,6 +393,7 @@ export function installRequestedFixes({store,effects}) {
 
   store.subscribe((_,action)=>{
     if(action?.type==='SEARCH_RESULTS')hiddenLikedAdverts.clear();
+    if(invalidatesProfilePricing(action?.type))pricingCache.clear();
     queueEnhance();
   });
   enhanceDom();
