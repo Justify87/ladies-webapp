@@ -42,6 +42,21 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat()
 
 
+def _parse_iso(value: str | None) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise ValueError("Ungültiger Vergleichszeitpunkt") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
 def _change_payload(row: ChangeEvent | None) -> dict[str, Any] | None:
     if row is None:
         return None
@@ -58,6 +73,11 @@ def _change_payload(row: ChangeEvent | None) -> dict[str, Any] | None:
         "importance": row.importance,
         "created_at": _iso(row.created_at),
     }
+
+
+def _chunks(values: list[int], size: int = 500):
+    for start in range(0, len(values), size):
+        yield values[start:start + size]
 
 
 class SearchRepository:
@@ -172,6 +192,82 @@ class SearchRepository:
                 if len(out) >= limit:
                     break
             return out
+
+    def saved_search_context(
+        self,
+        listing_ids: list[int],
+        *,
+        since: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve historical listing IDs to current people and scoped profile changes.
+
+        Listing IDs are stable across automatic/manual person merges, while person IDs
+        are intentionally not.  Saved-search deltas therefore canonicalize through the
+        listing table at comparison time instead of trusting stale person IDs persisted
+        in an older baseline.
+        """
+        unique_ids: list[int] = []
+        seen_ids: set[int] = set()
+        for raw in listing_ids or []:
+            try:
+                value = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if value <= 0 or value in seen_ids:
+                continue
+            seen_ids.add(value)
+            unique_ids.append(value)
+        if len(unique_ids) > 10000:
+            raise ValueError("Zu viele Listings für den Delta-Vergleich")
+
+        since_dt = _parse_iso(since)
+        canonical: dict[str, int] = {}
+        changed_people: set[int] = set()
+        changed_fields: dict[int, set[str]] = {}
+        observed_change_events = 0
+        meaningful_event_types = {"FIELD_CHANGED", "STRUCTURED_CHANGED", "MEDIA_CHANGED"}
+
+        with self.database.session() as db:
+            for batch in _chunks(unique_ids):
+                rows = db.execute(
+                    select(Listing.listing_id, Listing.person_id)
+                    .where(Listing.listing_id.in_(batch))
+                ).all()
+                for listing_id, person_id in rows:
+                    canonical[str(int(listing_id))] = int(person_id)
+
+            if since_dt is not None and unique_ids:
+                for batch in _chunks(unique_ids):
+                    rows = db.execute(
+                        select(
+                            ChangeEvent.listing_id,
+                            Listing.person_id,
+                            ChangeEvent.event_type,
+                            ChangeEvent.field_key,
+                        )
+                        .join(Listing, Listing.listing_id == ChangeEvent.listing_id)
+                        .where(
+                            ChangeEvent.listing_id.in_(batch),
+                            ChangeEvent.created_at > since_dt,
+                            ChangeEvent.event_type.in_(meaningful_event_types),
+                        )
+                    ).all()
+                    for _listing_id, person_id, _event_type, field_key in rows:
+                        pid = int(person_id)
+                        changed_people.add(pid)
+                        observed_change_events += 1
+                        if field_key:
+                            changed_fields.setdefault(pid, set()).add(str(field_key))
+
+        return {
+            "canonical_person_by_listing": canonical,
+            "observed_changed_person_ids": sorted(changed_people),
+            "observed_change_event_count": observed_change_events,
+            "observed_changed_fields": {
+                str(person_id): sorted(fields)
+                for person_id, fields in changed_fields.items()
+            },
+        }
 
     @staticmethod
     def _ensure_listing_from_search(

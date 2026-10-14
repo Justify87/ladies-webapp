@@ -38,6 +38,7 @@ export const api = Object.freeze({
   historyRelistings: (limit=100) => request(`/api/history/relistings?limit=${encodeURIComponent(limit)}`),
   historyChanges: (limit=100) => request(`/api/history/changes?limit=${encodeURIComponent(limit)}`),
   recentSearches: (limit=8) => request(`/api/recent-searches?limit=${encodeURIComponent(limit)}`),
+  savedSearchContext: payload => request('/api/saved-search/context',{method:'POST',body:payload}),
   storage: () => request('/api/storage'),
   settings: () => request('/api/settings'),
   setSetting: (key,value) => request('/api/settings',{method:'POST',body:{key,value}}),

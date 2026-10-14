@@ -30,10 +30,12 @@ export function createEncounterEffects({store,getEffects}) {
       overall_rating:selected('rating','overall_rating'),
       sympathy_rating:selected('rating','sympathy_rating'),
       photo_status:enumChoice('photo_status'),
+      repeat_interest:enumChoice('repeat_interest'),
       service_accuracy:enumChoice('service_accuracy'),
       hygiene:enumChoice('hygiene'),
       kissing:enumChoice('kissing'),
       negotiable:enumChoice('negotiable'),
+      private_note:String(fd.get('private_note')||'').trim()||null,
       note:String(fd.get('note')||'').trim()||null,
       services:servicesFrom(form)
     };

@@ -1,13 +1,25 @@
 import { searchResultVm, profileBundleVm, personDetailVm, listItemVm, threadVm, threadDetailVm } from '../data/adapters.js';
 
 export const currentRoute = state => state.navigation.stack.at(-1) || {name:'search',params:{}};
-export const searchRows = state => (state.search.results || []).map(searchResultVm);
+export const searchRows = state => (state.search.results || []).map(raw=>{
+  const row=searchResultVm(raw);
+  const bundle=state.profiles.bundles[String(row.advertId)] || null;
+  const identity=bundle?.identity || {};
+  const canonicalPersonId=Number(identity.person_id || row.personId || 0) || null;
+  return {
+    ...row,
+    personId:canonicalPersonId,
+    preference:identity.preference || row.preference || 'NONE',
+    favorite:Boolean(identity.favorite ?? row.favorite)
+  };
+});
 export const currentSearchRow = state => discoverQueueRows(state)[state.discover.index] || null;
 export function visibleSearchRows(state) {
   const local=state.search.filters.local || {};
   return searchRows(state).filter(row=>{
     if(local.videoOnly && !row.hasVideo)return false;
     if(local.hideDislikes!==false && row.preference==='DISLIKE')return false;
+    if(local.hideLikes===true && row.preference==='LIKE')return false;
     if(local.photosOnly && !(row.thumbnail || row.media?.length))return false;
     const mode=String(local.imageMode || 'ALL').toUpperCase();
     const markerSource=row.markers ?? row.image_markers ?? '';
@@ -57,7 +69,7 @@ export const currentThread = state => {
   const vm=threadDetailVm(raw),pid=Number(vm.personId||0);
   const summary=(state.messaging.threads||[]).map(threadVm).find(row=>row.threadId===vm.threadId);
   const detailState=pid?state.profiles.details[String(pid)]?.user_state:null;
-  const searchState=pid?(state.search.results||[]).find(row=>Number(row.person_id)===pid):null;
+  const searchState=pid?searchRows(state).find(row=>Number(row.personId)===pid):null;
   const listState=pid?(state.lists.items||[]).find(row=>Number(row.person_id)===pid):null;
   if(summary){vm.favorite=summary.favorite;vm.preference=summary.preference;}
   else if(detailState){vm.favorite=Boolean(detailState.favorite);vm.preference=detailState.preference||vm.preference;}
