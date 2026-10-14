@@ -50,6 +50,7 @@ export function createCommands({store,router,effects}) {
     'chat-edit':el=>{const m=effects.findMessage(Number(el.dataset.messageId));store.dispatch({type:'EDITING',value:m});store.dispatch({type:'SHEET',value:null});},
     'chat-cancel-edit':()=>store.dispatch({type:'EDITING',value:null}),
     'chat-react':el=>effects.reactMessage(Number(el.dataset.messageId)),
+    'chat-view-once':el=>effects.openViewOnce(Number(el.dataset.messageId)),
     'chat-delete':el=>effects.deleteMessage(Number(el.dataset.messageId)),
     'chat-retry':el=>effects.retryMessage(Number(el.dataset.messageId)),
     'voice-start':()=>effects.startVoice(),
