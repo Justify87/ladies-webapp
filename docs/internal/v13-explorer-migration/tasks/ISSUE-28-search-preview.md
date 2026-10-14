@@ -6,16 +6,16 @@
 
 ## Open implementation steps
 - [x] `/api/search-preview` integration present.
-- [ ] Browser verification of loading, zero and error states.
+- [ ] Manually verify loading, zero, success and error states in the running Explorer.
 
 ## Acceptance Criteria
 - [ ] Preview remains accurate and resilient for production filters.
 
 ## Verification
-Current Chromium test proves normal-count path only.
+Source/API contract audit completed. Runtime/UI verification remains manual by design; no browser/E2E CI is required.
 
 ## Relevant commits
-`ae665b7` — partial browser smoke/E2E coverage.
+PR #69 Search Preview migration commits.
 
 ## PR / review notes
 No active review thread.
