@@ -28,7 +28,11 @@ export function reducer(state=initialState, action={}) {
       const detail = next.profiles.details[String(pid)]; if (detail) detail.user_state = {...(detail.user_state || {}),...patch};
       for (const bundle of Object.values(next.profiles.bundles)) if (Number(bundle?.identity?.person_id) === pid) bundle.identity = {...bundle.identity,...patch};
       for (const row of next.lists.items) if (Number(row.person_id) === pid) { if ('preference' in patch) row.preference = patch.preference; if ('favorite' in patch) row.favorite = patch.favorite; }
-      next.lists.items = next.lists.items.filter(row => Number(row.person_id) !== pid || next.lists.tab === 'FAVORITE' ? (Number(row.person_id) !== pid || Boolean(row.favorite)) : (Number(row.person_id) !== pid || row.preference === next.lists.tab));
+      next.lists.items = next.lists.items.filter(row => {
+        if (Number(row.person_id) !== pid) return true;
+        if (next.lists.tab === 'FAVORITE') return Boolean(row.favorite);
+        return row.preference === next.lists.tab;
+      });
       return next;
     }
     case 'LIST_TAB': next.lists.tab = action.tab; return next;
