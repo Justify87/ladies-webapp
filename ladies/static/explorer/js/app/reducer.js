@@ -36,6 +36,7 @@ export function reducer(state=initialState, action={}) {
       return next;
     }
     case 'LIST_TAB': next.lists.tab = action.tab; return next;
+    case 'LIST_SORT': next.lists.sort = action.value || 'DATE'; return next;
     case 'LIST_ITEMS': next.lists.items = action.items || []; next.lists.loading = false; return next;
     case 'LIST_LOADING': next.lists.loading = Boolean(action.value); return next;
     case 'STATUS_CHECK': next.lists.statusCheck = {...next.lists.statusCheck,...action.patch}; return next;
@@ -51,6 +52,7 @@ export function reducer(state=initialState, action={}) {
       return next;
     }
     case 'MESSAGE_FILTER': next.messaging.filter = action.value || 'ALL'; return next;
+    case 'MESSAGE_VIEW_FILTER': next.messaging.viewFilter = action.value || 'ALL'; return next;
     case 'MESSAGE_QUERY': next.messaging.query = action.value || ''; return next;
     case 'THREADS': next.messaging.threads = action.items || []; next.messaging.loading = false; return next;
     case 'THREADS_LOADING': next.messaging.loading = Boolean(action.value); return next;

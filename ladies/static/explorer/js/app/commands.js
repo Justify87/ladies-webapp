@@ -4,7 +4,7 @@ import { profileBundleVm } from '../data/adapters.js';
 export function createCommands({store,router,effects}) {
   const state=()=>store.getState();
   const handlers={
-    'root-route': async el => { const name=el.dataset.route; router.replaceRoot(name); if(name==='favorites')await effects.loadList(); if(name==='messages')await Promise.all([effects.loadMessagingStatus(),effects.loadThreads()]); if(name==='swipe')await effects.prefetchCurrent(); if(name==='settings')await Promise.all([effects.loadSettings(),effects.loadDashboard(),effects.loadPricingSettings()]); },
+    'root-route': async el => { const name=el.dataset.route; router.replaceRoot(name); if(name==='favorites')await effects.loadList(); if(name==='messages')await Promise.all([effects.loadMessagingStatus(),effects.loadThreads('ALL')]); if(name==='swipe')await effects.prefetchCurrent(); if(name==='settings')await Promise.all([effects.loadSettings(),effects.loadDashboard(),effects.loadPricingSettings()]); },
     'back':()=>router.back(),
     'sheet-close':()=>store.dispatch({type:'SHEET',value:null}),
     'search-submit':()=>effects.performSearch(),
@@ -21,6 +21,7 @@ export function createCommands({store,router,effects}) {
     'open-profile':el=>effects.openProfile({personId:el.dataset.personId,advertId:el.dataset.advertId}),
     'grid-favorite':async (el,ev)=>{ev?.stopPropagation?.();let pid=Number(el.dataset.personId||0);if(!pid&&el.dataset.advertId){const row=S.searchRows(state()).find(x=>x.advertId===el.dataset.advertId);const vm=await effects.loadBundle(row,{detail:false});pid=vm?.personId||0;}if(!pid)return effects.toast('Person konnte nicht aufgelöst werden');const row=S.searchRows(state()).find(x=>Number(x.personId)===pid||x.advertId===el.dataset.advertId);await effects.mutatePerson(pid,{favorite:!row?.favorite});effects.loadDashboard();},
     'grid-like':async (el,ev)=>{ev?.stopPropagation?.();let pid=Number(el.dataset.personId||0);if(!pid&&el.dataset.advertId){const row=S.searchRows(state()).find(x=>x.advertId===el.dataset.advertId);const vm=await effects.loadBundle(row,{detail:false});pid=vm?.personId||0;}if(!pid)return effects.toast('Person konnte nicht aufgelöst werden');const row=S.searchRows(state()).find(x=>Number(x.personId)===pid||x.advertId===el.dataset.advertId);await effects.mutatePerson(pid,{preference:row?.preference==='LIKE'?'NONE':'LIKE'});effects.loadDashboard();},
+    'list-favorite':async (el,ev)=>{ev?.stopPropagation?.();const pid=Number(el.dataset.personId||0);if(!pid)return effects.toast('Person konnte nicht aufgelöst werden');const row=S.listRows(state()).find(x=>Number(x.personId)===pid);await effects.mutatePerson(pid,{favorite:!row?.favorite});effects.loadDashboard();},
     'profile-like':async el=>{const pid=Number(el.dataset.personId);const d=S.detailFor(state(),pid);const current=d?.preference || 'NONE';await effects.mutatePerson(pid,{preference:current==='LIKE'?'NONE':'LIKE'});await effects.refreshProfile(pid);effects.loadDashboard();},
     'profile-favorite':async el=>{const pid=Number(el.dataset.personId);const d=S.detailFor(state(),pid);await effects.mutatePerson(pid,{favorite:!d?.favorite});await effects.refreshProfile(pid);effects.loadDashboard();},
     'profile-chat':el=>effects.openPersonChat(Number(el.dataset.personId),S.currentRoute(state()).params?.advertId||null),
@@ -42,6 +43,7 @@ export function createCommands({store,router,effects}) {
     'status-check-all':()=>effects.runStatusCheck(),
     'status-single':el=>effects.statusSingle(el.dataset.advertId),
     'message-filter':async el=>{store.dispatch({type:'MESSAGE_FILTER',value:el.dataset.filter});await effects.loadThreads(el.dataset.filter);},
+    'message-view-filter':async el=>{store.dispatch({type:'MESSAGE_VIEW_FILTER',value:el.dataset.filter});await effects.loadThreads('ALL');},
     'open-chat':el=>effects.openChat(Number(el.dataset.threadId)),
     'chat-load-older':el=>effects.loadThread(Number(el.dataset.threadId),{before:Number(el.dataset.before||0)||null,appendOlder:true}),
     'chat-attach':()=>{const t=S.currentThread(state());if(t)store.dispatch({type:'SHEET',value:{kind:'attach',payload:{threadId:t.threadId}}});},
@@ -58,6 +60,7 @@ export function createCommands({store,router,effects}) {
     'voice-start':()=>effects.startVoice(),
     'voice-stop':()=>effects.stopVoice(),
     'voice-cancel':()=>effects.cancelVoice(),
+    'chat-favorite':async ()=>{const t=S.currentThread(state());if(!t?.personId)return effects.toast('Chat ist keiner Person zugeordnet');await effects.mutatePerson(t.personId,{favorite:!t.favorite});await Promise.all([effects.loadThreads('ALL'),effects.loadThread(t.threadId)]);},
     'chat-profile':()=>{const t=S.currentThread(state());if(t?.personId)return effects.openProfile({personId:t.personId});const endpointId=Number(t?.selectedEndpoint?.endpoint_id||t?.selected_endpoint?.endpoint_id||t?.endpoint?.endpoint_id||t?.endpoints?.[0]?.endpoint_id||0);if(endpointId)return effects.openAssignment(endpointId);effects.toast('Chat ist keiner Person zugeordnet');},
     'wa-connect':()=>effects.connectWhatsapp(),
     'wa-disconnect':()=>effects.disconnectWhatsapp(),
