@@ -104,6 +104,9 @@ def install_encounter_metadata(app, *, database) -> None:
             encounters = _encounter_list(body)
             ids = [int(item.get("encounter_id") or 0) for item in encounters]
             ids = [value for value in ids if value > 0]
+            user_state = body.get("user_state") if isinstance(body.get("user_state"), dict) else {}
+            legacy_repeat = str(user_state.get("repeat_interest") or "UNKNOWN")[:32]
+            legacy_note = str(user_state.get("private_note") or "")[:10000] or None
             metadata: dict[int, EncounterUserData] = {}
             if ids:
                 with database.session() as db:
@@ -111,10 +114,20 @@ def install_encounter_metadata(app, *, database) -> None:
                         select(EncounterUserData).where(EncounterUserData.encounter_id.in_(ids))
                     ).all()
                     metadata = {int(row.encounter_id): row for row in rows}
+                    latest_id = ids[0]
+                    if latest_id not in metadata and (legacy_repeat != "UNKNOWN" or legacy_note):
+                        migrated = EncounterUserData(
+                            encounter_id=latest_id,
+                            repeat_interest=legacy_repeat,
+                            private_note=legacy_note,
+                        )
+                        db.add(migrated)
+                        db.flush()
+                        metadata[latest_id] = migrated
             for encounter in encounters:
                 encounter_id = int(encounter.get("encounter_id") or 0)
                 row = metadata.get(encounter_id)
                 encounter["repeat_interest"] = row.repeat_interest if row else "UNKNOWN"
-                encounter["private_note"] = row.private_note or "" if row else ""
+                encounter["private_note"] = (row.private_note or "") if row else ""
             _set_json_body(response, body)
         return response
