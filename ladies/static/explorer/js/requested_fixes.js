@@ -1,4 +1,5 @@
 import * as S from './app/selectors.js';
+import { availabilityMode } from './search_intelligence.js';
 import { escapeHtml as e, escapeAttr as a, fmtDate, euro } from './shared/html.js';
 import { icon } from './shared/icons.js';
 
@@ -99,7 +100,7 @@ function cleanGrid(hiddenAdverts) {
   document.querySelectorAll('#screenHost .grid-card[data-advert-id]').forEach(card=>{if(hiddenAdverts.has(String(card.dataset.advertId||'')))card.remove();});
 }
 
-function cleanSwipe() {
+function cleanSwipe(store) {
   const root=document.querySelector('#screenHost .swipe-screen');
   if(!root)return;
   root.querySelectorAll('.swipe-details .profile-meta-place,.swipe-details .badge-row').forEach(node=>node.remove());
@@ -107,9 +108,11 @@ function cleanSwipe() {
   const nameRow=identity?.querySelector('.profile-name-row');
   const pill=root.querySelector('.online-pill');
   if(identity&&nameRow&&pill) {
+    const mode=availabilityMode(stateOf(store).search.filters);
+    const label=mode==='NOW'?'Jetzt laut Anzeige':mode==='TODAY'?'Heute laut Anzeige':'Heute verfügbar';
     pill.classList.remove('media-availability');
     pill.classList.add('requested-profile-availability');
-    pill.innerHTML=`${icon('calendar')}<span>Heute verfügbar</span>`;
+    pill.innerHTML=`${icon('calendar')}<span>${label}</span>`;
     nameRow.insertAdjacentElement('afterend',pill);
   }
 }
@@ -145,7 +148,7 @@ export function installRequestedFixes({store,effects}) {
   function enhanceDom() {
     addHideLikesOption(store);
     cleanGrid(hiddenLikedAdverts);
-    cleanSwipe();
+    cleanSwipe(store);
     consolidateDataTab(store);
   }
 
