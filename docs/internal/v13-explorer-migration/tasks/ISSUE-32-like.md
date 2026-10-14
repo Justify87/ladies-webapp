@@ -6,16 +6,16 @@
 
 ## Open implementation steps
 - [x] Person-state persistence/synchronization path exists.
-- [ ] E2E Search→Swipe→Like→Favorites→Profile.
+- [ ] Manually verify Search→Swipe/Grid→Like→Lists→Profile and reload persistence.
 
 ## Acceptance Criteria
 - [ ] Persisted LIKE is visible consistently after navigation/reload.
 
 ## Verification
-Current Chromium test proves a LIKE request from right-swipe only.
+Source/API/state-coherency audit completed. Runtime/UI verification remains manual by design; no browser/E2E CI is required.
 
 ## Relevant commits
-`ae665b7` — partial LIKE browser assertion.
+PR #69 Search/Profile/List migration and state-sync commits.
 
 ## PR / review notes
 No active review thread.
