@@ -204,8 +204,14 @@ try {
     return { before, after: scroller.scrollTop, detailsTop: details.getBoundingClientRect().top };
   });
   assert.ok(scrollResult.after > scrollResult.before, 'Up-scroll must reveal profile details');
-  await page.evaluate(() => { document.querySelector('[data-swipe-scroll]').scrollTop = 0; });
-  await page.waitForFunction(() => document.querySelector('[data-swipe-scroll]')?.scrollTop === 0);
+  const resetScroll = await page.evaluate(async () => {
+    const scroller = document.querySelector('[data-swipe-scroll]');
+    scroller.style.scrollBehavior = 'auto';
+    scroller.scrollTop = 0;
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    return scroller.scrollTop;
+  });
+  assert.ok(resetScroll <= 1, `Swipe media surface must return to the viewport before horizontal gesture (scrollTop=${resetScroll})`);
 
   const surface = page.locator('[data-profile-media]').first();
   const box = await surface.boundingBox();
