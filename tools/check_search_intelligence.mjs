@@ -7,6 +7,8 @@ import {
   baselineFromResults,
   computeSavedSearchDelta
 } from '../ladies/static/explorer/js/search_intelligence.js';
+import { threadRows, unreadTotal } from '../ladies/static/explorer/js/app/selectors.js';
+import { canonicalPriceRows, invalidatesProfilePricing } from '../ladies/static/explorer/js/requested_fixes.js';
 
 // Canonical availability slugs must be the only values written back to state.
 assert.equal(availabilityMode({selected:{zeiten:['jetzt-offen']}}),'NOW');
@@ -64,9 +66,32 @@ const rawBaseline=baselineFromResults([
 ]);
 assert.deepEqual(rawBaseline.listings.map(item=>item.listing_id),[7,8]);
 
+// Message filters are local views over one canonical all-thread collection.
+const messageState={messaging:{query:'',viewFilter:'UNASSIGNED',threads:[
+  {thread_id:1,person_id:11,display_name:'A',unread_count:2},
+  {thread_id:2,person_id:22,display_name:'B',unread_count:3},
+  {thread_id:3,person_id:null,display_name:'C',unread_count:1}
+]}};
+assert.deepEqual(threadRows(messageState).map(row=>row.threadId),[3],'UNASSIGNED must only filter the visible list locally');
+assert.equal(unreadTotal(messageState),6,'global unread count must still include threads hidden by the active view filter');
+
+// Profile pricing must render every monetary component from the canonical proposal.
+const canonicalRows=canonicalPriceRows({
+  offers:[{label:'30 Minuten',amount_cents:10000}],
+  service_rules:[{raw_label:'Massage',status:'SURCHARGE',amount_cents:2000},{raw_label:'Küssen',status:'INCLUDED',amount_cents:null}],
+  conditions:[{label:'Hausbesuch',amount_cents:5000},{label:'Nur nach Absprache',amount_cents:null}]
+});
+assert.deepEqual(canonicalRows.map(row=>row.amount_cents),[10000,2000,5000],'offers, service surcharges and monetary conditions must all be visible');
+assert.match(canonicalRows[1].label,/Massage/,'service price rows keep their service label');
+assert.match(canonicalRows[2].label,/Hausbesuch/,'condition price rows keep their condition label');
+assert.equal(invalidatesProfilePricing('PRICING_THREAD'),true);
+assert.equal(invalidatesProfilePricing('PRICING_PROPOSAL'),true);
+assert.equal(invalidatesProfilePricing('PROFILE_TAB'),false);
+
 // Focused guards for the Explorer follow-up fixes.
 const discoverSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/discover.js',import.meta.url),'utf8');
 const chromeSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/chrome.js',import.meta.url),'utf8');
+const clientSource=readFileSync(new URL('../ladies/static/explorer/js/api/client.js',import.meta.url),'utf8');
 const encounterSource=readFileSync(new URL('../ladies/static/explorer/js/effects/encounters.js',import.meta.url),'utf8');
 const requestedSource=readFileSync(new URL('../ladies/static/explorer/js/requested_fixes.js',import.meta.url),'utf8');
 const canonicalPricingSource=readFileSync(new URL('../ladies/pricing/canonical.py',import.meta.url),'utf8');
@@ -75,6 +100,7 @@ assert.match(discoverSource,/grid-card-heart[^>]+data-action="grid-like"/s,'visi
 assert.doesNotMatch(discoverSource,/discover-mode-pills/,'availability controls must not be duplicated inside Grid or Swipe content');
 assert.match(chromeSource,/header-discovery-modes/,'Swipe and Grid availability controls must live in the shared header');
 assert.match(chromeSource,/route\.name==='swipe'.*data-route="grid".*gridGlyph\(\).*route\.name==='grid'.*data-route="swipe"/s,'shared header must expose both view switches with a real Grid glyph');
+assert.match(clientSource,/threads:\s*\(\)\s*=>\s*request\('\/api\/messaging\/threads\?filter=ALL'\)/,'thread API must always load the canonical unfiltered collection');
 assert.match(encounterSource,/querySelector\('\[name="base_price_eur"\]'\)\)payload\.base_price_eur=/,'hidden base price must only be sent when present');
 assert.match(encounterSource,/querySelector\('\[name="note"\]'\)\)payload\.note=/,'hidden note must only be sent when present');
 assert.match(encounterSource,/querySelector\('\[data-encounter-service-row\]'\)\)payload\.services=/,'hidden services must only be sent when present');
@@ -85,6 +111,8 @@ assert.match(requestedSource,/requested-new-encounter"><summary/,'new encounter 
 assert.doesNotMatch(requestedSource,/requested-new-encounter"\s+open/,'new encounter capture must never render open by default');
 assert.match(requestedSource,/dataset\.requestedPriceHistory='1'/,'profile must provide a dedicated price history tab');
 assert.match(requestedSource,/api\.currentPricing\(personId\).*api\.pricingHistory\(personId,100\)/s,'profile pricing must read exclusively through canonical pricing APIs');
+assert.doesNotMatch(requestedSource,/15000/,'profile pricing must not use a time-based stale window');
+assert.match(requestedSource,/if\(invalidatesProfilePricing\(action\?\.type\)\)pricingCache\.clear\(\)/,'pricing mutations must invalidate profile pricing immediately');
 assert.match(requestedSource,/removeCardsByHeading\(panel,\['Merkmale','Öffnungszeiten','Preislisten'\]\)/,'service tab must no longer own traits, opening hours or price lists');
 assert.match(requestedSource,/removeCardsByHeading\(panel,\['Aktuelle Filter'\]\)/,'analysis must not duplicate current filters');
 assert.match(canonicalPricingSource,/PriceList\.source == CANONICAL_PRICE_SOURCE/,'canonical pricing must filter legacy/manual price rows');
