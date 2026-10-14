@@ -30,7 +30,7 @@ export const detailFor = (state,personId) => { const raw=state.profiles.details[
 export const listRows = state => (state.lists.items || []).map(listItemVm);
 export const threadRows = state => {
   const query=(state.messaging.query || '').trim().toLowerCase();
-  return (state.messaging.threads || []).map(threadVm).filter(row => !query || `${row.name} ${row.preview}`.toLowerCase().includes(query));
+  return (state.messaging.threads || []).map(threadVm).filter(row => !query || `${row.name} ${row.preview} ${row.endpoint?.display_phone||''} ${row.endpoint?.normalized_phone||''}`.toLowerCase().includes(query));
 };
 export const currentThread = state => state.messaging.currentThread ? threadDetailVm(state.messaging.currentThread) : null;
 export const unreadTotal = state => (state.messaging.threads || []).reduce((sum,row)=>sum+Number(row.unread_count || row.unread || 0),0);
