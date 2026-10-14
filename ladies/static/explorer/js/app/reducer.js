@@ -10,6 +10,14 @@ export function reducer(state=initialState, action={}) {
     case 'SEARCH_PREVIEW': next.search.preview = {...next.search.preview,...action.patch}; return next;
     case 'SEARCH_LOADING': next.search.loading = Boolean(action.value); next.search.error = action.error || null; return next;
     case 'SEARCH_RESULTS': next.search.results = action.results || []; next.search.meta = action.meta || null; next.discover.index = 0; next.discover.history = []; return next;
+    case 'SEARCH_RESULT_PATCH': {
+      const advertId=String(action.advertId||'');
+      const patch=action.patch||{};
+      for(const row of next.search.results){
+        if(String(row.advert_id ?? row.external_listing_id ?? row.id ?? '')===advertId)Object.assign(row,patch);
+      }
+      return next;
+    }
     case 'RECENT_SEARCHES': next.search.recent = action.items || []; return next;
     case 'DISCOVER_INDEX': next.discover.index = Math.max(0, action.index); return next;
     case 'DISCOVER_MODE': next.discover.mode = action.mode; return next;
