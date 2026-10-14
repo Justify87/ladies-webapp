@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+from functools import wraps
 import ipaddress
 import logging
 from pathlib import Path
@@ -51,6 +52,87 @@ def _is_loopback(remote_addr: str | None) -> bool:
         return bool(mapped and mapped.is_loopback)
     except ValueError:
         return False
+
+
+def _install_domain_route_integrations(app, *, database, messaging, pricing, background) -> None:
+    """Attach domain side effects to the routes that own the corresponding mutation.
+
+    This keeps identity/messaging behavior explicit instead of inferring business
+    operations later from request paths in a global ``after_request`` hook.
+    """
+
+    def reconcile_identity_state() -> None:
+        reconcile_identity_events(database)
+        pricing.reconcile_identity_events()
+
+    def rehydrate_liked_person(person_id: int) -> None:
+        result = messaging.rehydrate_recent_history(int(person_id), limit=10)
+        LOGGER.info(
+            "WhatsApp rehydrate after like person_id=%s restored=%s requested=%s existing=%s",
+            person_id,
+            result.get("restored", 0),
+            result.get("requested", 0),
+            result.get("existing", 0),
+        )
+
+    profile_view = app.view_functions["api_profile"]
+
+    @wraps(profile_view)
+    def profile_with_identity_sync(*args, **kwargs):
+        response = app.make_response(profile_view(*args, **kwargs))
+        if response.status_code >= 400:
+            return response
+        try:
+            payload = response.get_json(silent=True) or {}
+            person_id = (payload.get("identity") or {}).get("person_id")
+            if person_id:
+                messaging.sync_person(int(person_id))
+                reconcile_identity_state()
+        except Exception:
+            LOGGER.exception("Identity reconciliation failed endpoint=api_profile")
+        return response
+
+    app.view_functions["api_profile"] = profile_with_identity_sync
+
+    merge_view = app.view_functions["api_identity_merge"]
+
+    @wraps(merge_view)
+    def merge_with_identity_sync(*args, **kwargs):
+        response = app.make_response(merge_view(*args, **kwargs))
+        if response.status_code >= 400:
+            return response
+        try:
+            reconcile_identity_state()
+        except Exception:
+            LOGGER.exception("Identity reconciliation failed endpoint=api_identity_merge")
+        return response
+
+    app.view_functions["api_identity_merge"] = merge_with_identity_sync
+
+    person_state_view = app.view_functions["api_person_state"]
+
+    @wraps(person_state_view)
+    def person_state_with_rehydrate(*args, **kwargs):
+        submitted = request.get_json(silent=True) or {}
+        response = app.make_response(person_state_view(*args, **kwargs))
+        if response.status_code >= 400 or str(submitted.get("preference") or "").upper() != "LIKE":
+            return response
+        try:
+            person_id = kwargs.get("person_id")
+            if person_id is None and args:
+                person_id = args[0]
+            if person_id is not None:
+                person_id = int(person_id)
+                background.submit(
+                    f"wa-rehydrate:{person_id}",
+                    rehydrate_liked_person,
+                    person_id,
+                )
+        except Exception:
+            LOGGER.exception("WhatsApp rehydrate scheduling failed endpoint=api_person_state")
+        return response
+
+    app.view_functions["api_person_state"] = person_state_with_rehydrate
 
 
 def create_app(
@@ -146,47 +228,12 @@ def create_app(
     except Exception:
         LOGGER.exception("Initial identity reconciliation failed")
 
-    def rehydrate_liked_person(person_id: int) -> None:
-        result = messaging.rehydrate_recent_history(int(person_id), limit=10)
-        LOGGER.info(
-            "WhatsApp rehydrate after like person_id=%s restored=%s requested=%s existing=%s",
-            person_id,
-            result.get("restored", 0),
-            result.get("requested", 0),
-            result.get("existing", 0),
-        )
-
-    @app.after_request
-    def reconcile_messaging_after_identity_change(response):
-        try:
-            if response.status_code < 400 and request.path.startswith("/api/profile/"):
-                payload = response.get_json(silent=True) or {}
-                person_id = (payload.get("identity") or {}).get("person_id")
-                if person_id:
-                    messaging.sync_person(int(person_id))
-                    reconcile_identity_events(database)
-                    pricing.reconcile_identity_events()
-            elif response.status_code < 400 and request.path == "/api/identity/merge":
-                reconcile_identity_events(database)
-                pricing.reconcile_identity_events()
-            elif (
-                response.status_code < 400
-                and request.method == "POST"
-                and request.path.startswith("/api/person/")
-                and request.path.endswith("/state")
-            ):
-                submitted = request.get_json(silent=True) or {}
-                if str(submitted.get("preference") or "").upper() == "LIKE":
-                    parts = request.path.strip("/").split("/")
-                    if len(parts) == 4 and parts[:2] == ["api", "person"] and parts[3] == "state":
-                        person_id = int(parts[2])
-                        background.submit(
-                            f"wa-rehydrate:{person_id}",
-                            rehydrate_liked_person,
-                            person_id,
-                        )
-        except Exception:
-            LOGGER.exception("Identity reconciliation failed path=%s", request.path)
-        return response
+    _install_domain_route_integrations(
+        app,
+        database=database,
+        messaging=messaging,
+        pricing=pricing,
+        background=background,
+    )
 
     return app
