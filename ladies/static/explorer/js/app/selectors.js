@@ -48,12 +48,17 @@ export const threadRows = state => {
     if(filter==='UNREAD' && !row.unread)return false;
     if(filter==='UNASSIGNED' && row.assigned)return false;
     if(filter==='FAVORITE' && !row.favorite)return false;
-    if(filter==='APPOINTMENT' && !(row.appointment_at||row.next_appointment_at||row.has_appointment||row.appointment))return false;
-    if(filter==='ARCHIVED' && !(row.archived||row.is_archived||row.archived_at))return false;
     return !query || `${row.name} ${row.preview} ${row.endpoint?.display_phone||''} ${row.endpoint?.normalized_phone||''}`.toLowerCase().includes(query);
   });
 };
-export const currentThread = state => state.messaging.currentThread ? threadDetailVm(state.messaging.currentThread) : null;
+export const currentThread = state => {
+  const raw=state.messaging.currentThread;
+  if(!raw)return null;
+  const vm=threadDetailVm(raw);
+  const summary=(state.messaging.threads||[]).map(threadVm).find(row=>row.threadId===vm.threadId);
+  if(summary){vm.favorite=summary.favorite;vm.preference=summary.preference;}
+  return vm;
+};
 export const unreadTotal = state => (state.messaging.threads || []).reduce((sum,row)=>sum+Number(row.unread_count || row.unread || 0),0);
 export const profileTab = (state,personId) => state.profileUi.tabByPerson[String(personId)] || 'info';
 export const profileMediaIndex = (state,personId) => Number(state.profileUi.mediaByPerson[String(personId)] || 0);
