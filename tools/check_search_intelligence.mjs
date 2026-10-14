@@ -83,7 +83,7 @@ assert.match(requestedSource,/panel\.appendChild\(identity\)/,'Swipe identity mu
 assert.match(requestedSource,/panel\.appendChild\(pill\)/,'availability badge must be anchored in the opposite image corner');
 assert.match(requestedSource,/requested-new-encounter"><summary/,'new encounter capture must start collapsed');
 assert.doesNotMatch(requestedSource,/requested-new-encounter"\s+open/,'new encounter capture must never render open by default');
-assert.match(requestedSource,/data-requested-price-history/,'profile must provide a dedicated price history tab');
+assert.match(requestedSource,/dataset\.requestedPriceHistory='1'/,'profile must provide a dedicated price history tab');
 assert.match(requestedSource,/api\.currentPricing\(personId\).*api\.pricingHistory\(personId,100\)/s,'profile pricing must read exclusively through canonical pricing APIs');
 assert.match(requestedSource,/removeCardsByHeading\(panel,\['Merkmale','Öffnungszeiten','Preislisten'\]\)/,'service tab must no longer own traits, opening hours or price lists');
 assert.match(requestedSource,/removeCardsByHeading\(panel,\['Aktuelle Filter'\]\)/,'analysis must not duplicate current filters');
