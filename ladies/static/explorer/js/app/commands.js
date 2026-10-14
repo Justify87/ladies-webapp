@@ -56,6 +56,7 @@ export function createCommands({store,router,effects}) {
     'chat-endpoint':()=>{const t=S.currentThread(state());const endpoints=t?.endpoints||[];if(endpoints.length<2)return effects.toast('Für diesen Chat ist nur eine WhatsApp-Nummer vorhanden');const active=effects.currentEndpointId(t);const lines=endpoints.map((endpoint,index)=>`${index+1}: ${endpoint.display_phone||endpoint.normalized_phone||`Endpunkt #${endpoint.endpoint_id}`}${endpoint.is_preferred?' (bevorzugt)':''}`).join('\n');const currentIndex=Math.max(0,endpoints.findIndex(endpoint=>Number(endpoint.endpoint_id)===Number(active)));const answer=prompt(`WhatsApp-Nummer wählen:\n${lines}`,String(currentIndex+1));if(answer===null)return;const endpoint=endpoints[Number(answer)-1];if(!endpoint)return effects.toast('Ungültige Auswahl');store.dispatch({type:'THREAD_ENDPOINT',endpointId:Number(endpoint.endpoint_id)});effects.toast('WhatsApp-Nummer gewechselt');},
     'voice-start':()=>effects.startVoice(),
     'voice-stop':()=>effects.stopVoice(),
+    'voice-cancel':()=>effects.cancelVoice(),
     'chat-profile':()=>{const t=S.currentThread(state());if(t?.personId)return effects.openProfile({personId:t.personId});const endpointId=Number(t?.selectedEndpoint?.endpoint_id||t?.selected_endpoint?.endpoint_id||t?.endpoint?.endpoint_id||t?.endpoints?.[0]?.endpoint_id||0);if(endpointId)return effects.openAssignment(endpointId);effects.toast('Chat ist keiner Person zugeordnet');},
     'wa-connect':()=>effects.connectWhatsapp(),
     'wa-disconnect':()=>effects.disconnectWhatsapp(),
