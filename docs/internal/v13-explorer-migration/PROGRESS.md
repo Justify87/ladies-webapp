@@ -6,7 +6,7 @@ Tracker: #23
 
 ## Current
 
-- #63 — Browser smoke tests: **PARTIAL**. Existing Chromium coverage verifies boot/search/swipe/grid/profile, but lists, messages/chat, settings, Firefox and CI execution are still missing.
+- #63 — Browser smoke tests: **IMPLEMENTED, NOT VERIFIED**. Chromium + Firefox CI matrix and required top-level screen coverage are implemented; wait for the resulting Actions run before closing.
 
 ## Next
 
@@ -18,7 +18,7 @@ Tracker: #23
 
 ## Blocked
 
-- #66 — final CI gate. Current head `721b3b1` is green in CI and Platform, but #66 remains blocked until all remaining V13 commits are complete and the final PR head is fully green.
+- #66 — final CI gate; remains blocked until all remaining V13 commits are complete and the final PR head is fully green.
 - #23 — migration DoD remains open until every child acceptance item is verified.
 
 ## Done
@@ -35,5 +35,5 @@ Tracker: #23
 - PR #69 is open and remains the only migration PR; base `main`, head `feature/v13-explorer-migration`.
 - No unresolved PR review threads or review comments were present at the audit point.
 - All V13 issues #23–#68 are currently open; no later V13 issue was found.
-- PR auto-cancellation was disabled in both CI and Platform without weakening jobs, triggers, matrices or checks.
-- The old CI architecture assertion that required PR cancellation was updated because it contradicted the explicit V13 migration integrity rule. Current CI and Platform runs for `721b3b1` both pass.
+- PR auto-cancellation is disabled in CI and Platform without weakening jobs, triggers, matrices or checks.
+- The former test contract requiring PR cancellation was corrected because it contradicted the explicit migration integrity rule.

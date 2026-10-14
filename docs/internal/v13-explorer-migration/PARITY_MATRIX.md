@@ -11,12 +11,12 @@ Allowed states: `NOT STARTED`, `IN PROGRESS`, `IMPLEMENTED`, `VERIFIED`.
 | #28 | Search preview | IMPLEMENTED | `/api/search-preview` flow present |
 | #29 | Swipe | IMPLEMENTED | productive search/profile data flow present |
 | #30 | Grid | IMPLEMENTED | productive result/media/status flow present |
-| #31 | Up-scroll profile details | IMPLEMENTED | shared profile details in swipe scroll; browser proof exists only in Chromium |
+| #31 | Up-scroll profile details | IMPLEMENTED | shared profile details in swipe scroll; cross-browser CI pending |
 | #32 | Like | IMPLEMENTED | state persistence path present; E2E pending |
 | #33 | Dislike | IMPLEMENTED | state persistence path present; E2E pending |
 | #34 | Favorite | IMPLEMENTED | state persistence path present; E2E pending |
 | #35 | Undo | IMPLEMENTED | persisted-state/queue restoration path present; E2E pending |
-| #36 | Favorites/Likes/Dislikes lists | IMPLEMENTED | list screen/API flow present; browser proof pending |
+| #36 | Favorites/Likes/Dislikes lists | IMPLEMENTED | list screen/API flow present; smoke added, CI pending |
 | #37 | Shared profile implementation | VERIFIED | swipe + standalone use common profile renderer |
 | #38 | Profile info | IMPLEMENTED | media/identity/info renderer present |
 | #39 | Profile offer | IMPLEMENTED | services/traits/hours/prices present |
@@ -29,23 +29,23 @@ Allowed states: `NOT STARTED`, `IN PROGRESS`, `IMPLEMENTED`, `VERIFIED`.
 | #46 | Status checks | IMPLEMENTED | single + bulk status effects present |
 | #47 | Global history/statistics | IMPLEMENTED | Settings subroute/dashboard/history present |
 | #48 | WhatsApp connect/QR | IMPLEMENTED | real status/connect/QR/disconnect/logout endpoints used |
-| #49 | Message list | IMPLEMENTED | all/unread/unassigned/search metadata present |
+| #49 | Message list | IMPLEMENTED | all/unread/unassigned/search metadata present; smoke added, CI pending |
 | #50 | Messaging live updates | IMPLEMENTED | EventSource-based SSE path present |
-| #51 | Full chat | IMPLEMENTED | pagination/send/status/presence/navigation present; browser E2E pending |
+| #51 | Full chat | IMPLEMENTED | pagination/send/status/presence/navigation present; smoke added, deeper E2E pending |
 | #52 | Chat media + voice | IMPLEMENTED | upload/playback/MediaRecorder paths present |
 | #53 | Reply/reaction/edit/delete/retry | IMPLEMENTED | actions/API paths present |
 | #54 | View Once | IMPLEMENTED | dedicated consume link; no image prefetch contract |
 | #55 | Contact assignment | IMPLEMENTED | candidates/assign/create-person paths present |
 | #56 | Pricing | IMPLEMENTED | inline signal/proposal/edit/accept/reject/current/history present |
-| #57 | Settings | IMPLEMENTED | productive settings groups present |
+| #57 | Settings | IMPLEMENTED | productive settings groups present; smoke added, CI pending |
 | #58 | Archive/storage | IMPLEMENTED | storage/archive/cleanup paths present |
 | #59 | Visual analysis | IMPLEMENTED | automatic/manual persisted analysis paths present |
 | #60 | Legacy Explorer JS/CSS removed | VERIFIED | obsolete files deleted from branch |
 | #61 | No legacy Explorer assets loaded | VERIFIED | V13 template/runtime contract test passes |
 | #62 | Manager unchanged | VERIFIED | migration diff contains no Manager runtime/UI changes; Platform green |
-| #63 | Browser smoke | IN PROGRESS | Chromium partial only; Firefox + missing screens + CI execution needed |
-| #64 | Functional E2E | IN PROGRESS | current browser test covers only part of required flows |
-| #65 | Visual reference | IN PROGRESS | Search screenshot exists but no complete reference/regression set |
-| #66 | Final CI green | IN PROGRESS | current head green; final gate waits for remaining commits |
+| #63 | Browser smoke | IMPLEMENTED | Chromium+Firefox smoke matrix added for all required top-level surfaces; Actions verification pending |
+| #64 | Functional E2E | IN PROGRESS | current browser test covers only part of required critical flows |
+| #65 | Visual reference | IN PROGRESS | Search reference screenshot/geometry only; complete reference set pending |
+| #66 | Final CI green | IN PROGRESS | final gate waits for remaining commits |
 | #67 | Release contains V13 assets | IMPLEMENTED | nested package-data present; built archive verification pending |
 | #68 | Fresh release install/start | NOT STARTED | perform after release verification |

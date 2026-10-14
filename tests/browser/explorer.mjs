@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import { chromium } from 'playwright';
+import { chromium, firefox } from 'playwright';
 
 const baseUrl = process.env.LADIES_BROWSER_TEST_URL || 'http://127.0.0.1:8765';
 const resultDir = process.env.LADIES_BROWSER_RESULT_DIR || 'test-results/browser';
+const engineName = process.env.LADIES_BROWSER_ENGINE || 'chromium';
+const browserType = { chromium, firefox }[engineName];
+assert.ok(browserType, `Unsupported browser engine: ${engineName}`);
 await fs.mkdir(resultDir, { recursive: true });
 
 const svg = encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900"><rect width="600" height="900" fill="#f2d9e6"/><circle cx="300" cy="250" r="120" fill="#cc2d7c" opacity=".22"/><rect x="125" y="430" width="350" height="260" rx="80" fill="#cc2d7c" opacity=".18"/></svg>`);
@@ -19,6 +22,15 @@ const rows = [
   { advert_id: '1001', person_id: 1, name: 'Anna', age: '24', city: 'Leipzig', thumbnail_url: image, preference: 'NONE', favorite: false, current_status: 'ACTIVE', has_video: false, has_ai_content: false, markers: { studio: false } },
   { advert_id: '1002', person_id: 2, name: 'Bella', age: '27', city: 'Leipzig', thumbnail_url: image, preference: 'NONE', favorite: false, current_status: 'ACTIVE', has_video: true, has_ai_content: true, markers: { studio: true, faceapp: true } },
 ];
+
+const thread = {
+  thread_id: 77,
+  person_id: 1,
+  display_name: 'Anna',
+  unread_count: 1,
+  last_message_at: now,
+  last_message: { text: 'Bis später', message_type: 'TEXT', timestamp: now },
+};
 
 function profileBundle(advertId) {
   const row = rows.find(item => item.advert_id === String(advertId)) || rows[0];
@@ -72,11 +84,39 @@ function personDetail(personId) {
   };
 }
 
+function listItems() {
+  return [{
+    person_id: 1,
+    latest_advert_id: '1001',
+    display_name: 'Anna',
+    city: 'Leipzig',
+    thumbnail_url: image,
+    status: 'ACTIVE',
+    preference: 'LIKE',
+    favorite: true,
+    listing_count: 2,
+  }];
+}
+
+function threadDetail() {
+  return {
+    thread,
+    messages: [
+      { message_id: 701, thread_id: 77, direction: 'IN', message_type: 'TEXT', text: 'Hallo aus dem Browser-Smoke-Test', timestamp: now, status: 'READ' },
+      { message_id: 702, thread_id: 77, direction: 'OUT', message_type: 'TEXT', text: 'Bis später', timestamp: now, status: 'SENT' },
+    ],
+    endpoints: [{ endpoint_id: 5, kind: 'WHATSAPP', address: '+491701234567' }],
+    selected_endpoint: { endpoint_id: 5, kind: 'WHATSAPP', address: '+491701234567' },
+    has_more: false,
+    next_before: null,
+  };
+}
+
 function json(route, value, status = 200) {
   return route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(value) });
 }
 
-const browser = await chromium.launch({ headless: true });
+const browser = await browserType.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 430, height: 932 }, deviceScaleFactor: 1 });
 const pageErrors = [];
 page.on('pageerror', error => pageErrors.push(String(error)));
@@ -96,11 +136,12 @@ await page.route('**/api/**', async route => {
   if (path === '/api/recent-searches') return json(route, { items: [] });
   if (path === '/api/pricing/runtime/status') return json(route, { detail: 'Test Runtime', extractor: { ready: true } });
   if (path === '/api/pricing/settings') return json(route, { settings: { price_intelligence_enabled: true, price_magic_button_enabled: true, price_ocr_enabled: true, price_semantic_model_enabled: false } });
-  if (path === '/api/messaging/status') return json(route, { state: 'NOT_CONFIGURED', typing_enabled: true });
-  if (path === '/api/messaging/threads') return json(route, { items: [] });
+  if (path === '/api/messaging/status') return json(route, { state: 'CONNECTED', typing_enabled: true });
+  if (path === '/api/messaging/threads') return json(route, { items: [thread] });
   if (path === '/api/messaging/events') return route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'data: {}\n\n' });
   if (path === '/api/search-preview') return json(route, { count: 2 });
   if (path === '/api/search') return json(route, { results: rows, meta: { total: 2 } });
+  if (/^\/api\/lists\/[^/]+$/.test(path)) return json(route, { items: listItems() });
   if (/^\/api\/profile\/[^/]+$/.test(path)) return json(route, profileBundle(decodeURIComponent(path.split('/').at(-1))));
   if (/^\/api\/person\/\d+\/state$/.test(path) && method === 'POST') {
     const personId = Number(path.split('/')[3]);
@@ -113,6 +154,10 @@ await page.route('**/api/**', async route => {
     return json(route, { user_state: next });
   }
   if (/^\/api\/person\/\d+$/.test(path)) return json(route, personDetail(Number(path.split('/').at(-1))));
+  if (path === '/api/messaging/threads/77' && method === 'GET') return json(route, threadDetail());
+  if (path === '/api/messaging/threads/77/read' && method === 'POST') return json(route, {});
+  if (path === '/api/pricing/threads/77/signal') return json(route, { signal: null });
+  if (path === '/api/pricing/threads/77/timeline') return json(route, { items: [] });
   if (/^\/api\/pricing\/person\/\d+\/current$/.test(path)) return json(route, { person_id: 1, price_list_id: 1000, proposal: { offers: [{ label: '60 Minuten', duration_minutes: 60, amount_cents: 15000 }], service_rules: [], conditions: [] } });
   if (/^\/api\/pricing\/person\/\d+\/history$/.test(path)) return json(route, { items: [{ price_list_id: 1000, observed_at: now, source: 'CHAT_CONFIRMED', revision: { revision_type: 'FULL' }, proposal: { offers: [{ label: '60 Minuten', duration_minutes: 60, amount_cents: 15000 }], service_rules: [], conditions: [] } }] });
   return json(route, {});
@@ -144,7 +189,7 @@ try {
   assert.equal(visual.header.height, 64);
   assert.equal(visual.nav.height, 76);
   assert.ok(visual.footer.bottom <= visual.nav.top + 1, 'Search CTA must remain above bottom navigation');
-  await page.screenshot({ path: `${resultDir}/v13-search-reference.png`, fullPage: true });
+  await page.screenshot({ path: `${resultDir}/v13-search-reference-${engineName}.png`, fullPage: true });
 
   await page.click('[data-action="search-submit"]');
   await page.waitForSelector('.swipe-screen');
@@ -155,7 +200,7 @@ try {
     const scroller = document.querySelector('[data-swipe-scroll]');
     const details = document.querySelector('.profile-details');
     const before = scroller.scrollTop;
-    scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'instant' });
+    scroller.scrollTop = scroller.scrollHeight;
     return { before, after: scroller.scrollTop, detailsTop: details.getBoundingClientRect().top };
   });
   assert.ok(scrollResult.after > scrollResult.before, 'Up-scroll must reveal profile details');
@@ -183,9 +228,34 @@ try {
   await page.click('[data-action="person-pricing"]');
   await page.waitForFunction(() => document.body.innerText.includes('Aktuelle bestätigte Preise'));
   assert.ok((await page.locator('.bottom-sheet').innerText()).includes('60 Minuten'));
+  await page.keyboard.press('Escape');
+  await page.click('.profile-back-button');
+  await page.waitForSelector('.grid-screen');
+
+  await page.click('[data-route="favorites"]');
+  await page.waitForSelector('.favorites-screen');
+  await page.waitForSelector('.favorite-card');
+  assert.ok((await page.locator('.favorite-card').first().innerText()).includes('Anna'));
+
+  await page.click('[data-route="messages"]');
+  await page.waitForSelector('.messages-screen');
+  await page.waitForSelector('.conversation-row');
+  assert.ok((await page.locator('.messages-status').innerText()).includes('Verbunden'));
+  await page.locator('.conversation-row').first().click();
+  await page.waitForSelector('.chat-screen');
+  await page.waitForFunction(() => document.body.innerText.includes('Hallo aus dem Browser-Smoke-Test'));
+  assert.equal(await page.locator('.bubble-row').count(), 2);
+  await page.click('#appHeader [data-action="back"]');
+  await page.waitForSelector('.messages-screen');
+
+  await page.click('[data-route="settings"]');
+  await page.waitForSelector('.settings-screen');
+  const settingsText = await page.locator('.settings-screen').innerText();
+  assert.ok(settingsText.includes('WhatsApp'));
+  assert.ok(settingsText.includes('Speicher'));
 
   assert.deepEqual(pageErrors, [], `Browser console/page errors: ${pageErrors.join(' | ')}`);
-  console.log('V13 browser smoke, functional E2E and visual reference checks passed.');
+  console.log(`V13 browser smoke passed in ${engineName}.`);
 } finally {
   await browser.close();
 }
