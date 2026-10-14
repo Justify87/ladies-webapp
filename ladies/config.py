@@ -4,7 +4,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 import tomllib
 
-from .source import CATEGORY_MAP, FILTER_GROUP_ORDER, FILTER_VALUE_MAP
+from .search_catalog import CATEGORY_MAP, FILTER_GROUP_ORDER, FILTER_VALUE_MAP
 
 CATEGORY_LABELS = {
     "": "Alle",
