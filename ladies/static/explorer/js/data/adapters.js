@@ -82,7 +82,7 @@ export function personDetailVm(raw) {
     snapshot,
     media,
     listings:asArray(d.listings),
-    changes:asArray(d.changes || d.history),
+    changes:asArray(d.timeline || d.changes || d.history),
     prices:asArray(d.price_lists || d.prices),
     encounters:asArray(d.encounters),
     analytics:asObject(d.analytics),
