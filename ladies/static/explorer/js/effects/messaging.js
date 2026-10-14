@@ -12,6 +12,8 @@ export function createMessagingEffects({store,router,getEffects}) {
 
   function retainLoadedHistory(fresh,current){if(!current||Number(current.thread_id)!==Number(fresh?.thread_id))return fresh;const oldMessages=current.messages||current.items||[];const newMessages=fresh.messages||fresh.items||[];if(!oldMessages.length)return fresh;const freshById=new Map(newMessages.map(message=>[Number(message.message_id),message]));const oldIds=new Set(oldMessages.map(message=>Number(message.message_id)));fresh.messages=oldMessages.map(message=>freshById.get(Number(message.message_id))||message);for(const message of newMessages)if(!oldIds.has(Number(message.message_id)))fresh.messages.push(message);fresh.has_more=Boolean(current.has_more);fresh.next_before=current.next_before||null;return fresh;}
 
+  function currentEndpointId(thread=S.currentThread(state())){return Number(thread?.selectedEndpoint?.endpoint_id||thread?.selected_endpoint?.endpoint_id||thread?.endpoint?.endpoint_id||thread?.endpoints?.[0]?.endpoint_id||0);}
+
   async function loadMessagingStatus(){try{store.dispatch({type:'MESSAGE_STATUS',value:await api.messagingStatus()});}catch{} }
 
   async function connectWhatsapp(){try{store.dispatch({type:'MESSAGE_STATUS',value:await api.messagingConnect()});toast('WhatsApp-Verbindung gestartet');setTimeout(loadMessagingStatus,800);}catch(error){toast(error.message);} }
@@ -48,9 +50,11 @@ export function createMessagingEffects({store,router,getEffects}) {
 
   async function openAssignment(endpointId){try{const [candidates,probe]=await Promise.all([api.assignmentCandidates(endpointId),api.endpointProbe(endpointId).catch(()=>null)]);store.dispatch({type:'SHEET',value:{kind:'assign',payload:{endpointId,candidates:candidates?.items||[],probe}}});}catch(error){toast(error.message);} }
 
-  async function assignEndpoint(endpointId,personId){try{await api.assignEndpoint(endpointId,{person_id:Number(personId)});store.dispatch({type:'SHEET',value:null});toast('Kontakt zugeordnet');await loadThreads();}catch(error){toast(error.message);} }
+  async function refreshAfterAssignment(endpointId){const t=S.currentThread(state());const activeThreadId=t?.threadId||0;const activeEndpoint=currentEndpointId(t);await loadThreads();if(activeThreadId&&Number(activeEndpoint)===Number(endpointId))await loadThread(activeThreadId);}
 
-  async function createPersonAndAssign(form){const endpointId=Number(form.dataset.endpointId),name=String(new FormData(form).get('display_name')||'WhatsApp-Kontakt');try{await api.assignEndpoint(endpointId,{create_person:true,display_name:name});store.dispatch({type:'SHEET',value:null});toast('Person erstellt und zugeordnet');await loadThreads();}catch(error){toast(error.message);} }
+  async function assignEndpoint(endpointId,personId){try{await api.assignEndpoint(endpointId,{person_id:Number(personId)});store.dispatch({type:'SHEET',value:null});await refreshAfterAssignment(endpointId);toast('Kontakt zugeordnet');}catch(error){toast(error.message);} }
+
+  async function createPersonAndAssign(form){const endpointId=Number(form.dataset.endpointId),name=String(new FormData(form).get('display_name')||'WhatsApp-Kontakt');try{await api.assignEndpoint(endpointId,{create_person:true,display_name:name});store.dispatch({type:'SHEET',value:null});await refreshAfterAssignment(endpointId);toast('Person erstellt und zugeordnet');}catch(error){toast(error.message);} }
 
   function connectEvents(){if(events)return;try{events=new EventSource('/api/messaging/events');events.onopen=()=>store.dispatch({type:'MESSAGE_EVENTS',value:true});events.onerror=()=>store.dispatch({type:'MESSAGE_EVENTS',value:false});events.onmessage=async ev=>{let payload={};try{payload=JSON.parse(ev.data||'{}');}catch{};if(payload.type==='presence'){applyPresence(payload);return;}await Promise.allSettled([loadMessagingStatus(),loadThreads()]);const t=S.currentThread(state());if(t&&(payload.thread_id===t.threadId||payload.message?.thread_id===t.threadId||!payload.thread_id))loadThread(t.threadId).catch(()=>{});};}catch(error){logClient('warning','sse',error.message);}}
 
