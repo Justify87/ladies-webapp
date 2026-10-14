@@ -18,9 +18,6 @@ export function createRequestedEffects({store,core}) {
     if(!row)return;
     discoverBusy=true;
     try {
-      // Search rows can contain an identity that has meanwhile been merged into
-      // another person. Always hydrate the listing first and prefer its current
-      // canonical person id before writing a LIKE/DISLIKE/FAVORITE decision.
       const bundleVm=await core.loadBundle(row,{detail:false,quiet:true});
       if(!bundleVm) {
         store.dispatch({type:'DISCOVER_INDEX',index:state().discover.index+1});
@@ -93,7 +90,8 @@ function encounterSignature(detail) {
 function dataPanel(detail) {
   const encounters=detail.encounters||[];
   const existing=encounters.map((encounter,index)=>`<details class="price-list-block requested-encounter-entry" ${index===0?'open':''}><summary><b>${e(fmtDate(encounter.occurred_at))}</b> · ${e(encounter.duration_minutes?`${encounter.duration_minutes} Min.`:'Dauer offen')} · ${e(euro(encounter.total_price_eur))}</summary>${encounterForm(detail,encounter)}</details>`).join('');
-  return `<section class="profile-card requested-data-card"><div class="profile-card-head"><h2>${icon('calendar')}Daten erfassen</h2><small>${e(encounters.length)} Treffen gespeichert</small></div><p class="muted requested-data-note">Bewertungen und Privatnotizen werden jeweils dem konkreten Treffen zugeordnet.</p>${existing||'<p class="muted">Noch kein Treffen gespeichert.</p>'}<details class="price-list-block requested-new-encounter" ${encounters.length?'':'open'}><summary><b>${icon('plus')} Neues Treffen erfassen</b></summary>${encounterForm(detail,{})}</details></section>`;
+  const legacySeed=encounters.length?{}:{repeat_interest:detail.repeatInterest,private_note:detail.privateNote};
+  return `<section class="profile-card requested-data-card"><div class="profile-card-head"><h2>${icon('calendar')}Daten erfassen</h2><small>${e(encounters.length)} Treffen gespeichert</small></div><p class="muted requested-data-note">Bewertungen und Privatnotizen werden jeweils dem konkreten Treffen zugeordnet.</p>${existing||'<p class="muted">Noch kein Treffen gespeichert.</p>'}<details class="price-list-block requested-new-encounter" ${encounters.length?'':'open'}><summary><b>${icon('plus')} Neues Treffen erfassen</b></summary>${encounterForm(detail,legacySeed)}</details></section>`;
 }
 
 function addHideLikesOption(store) {
