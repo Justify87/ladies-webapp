@@ -6,13 +6,13 @@
 
 ## Open implementation steps
 - [x] Migration diff audited for Manager runtime/UI changes.
-- [x] Existing Platform CI passes.
+- [x] Current Explorer changes remain outside Manager runtime/UI paths.
 
 ## Acceptance Criteria
 - [x] Manager behavior/runtime remains outside migration modifications.
 
 ## Verification
-PR changed-file audit plus Platform success for current head.
+PR changed-file/source audit. Development CI is intentionally limited to lightweight syntax/metadata checks; no Platform CI is part of the V13 acceptance contract.
 
 ## Relevant commits
 No V13 functional Manager commit.
