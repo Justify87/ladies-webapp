@@ -38,7 +38,7 @@ export function createEncounterEffects({store,getEffects}) {
     try {
       if(encounterId)await api.updateEncounter(personId,encounterId,payload);
       else await api.addEncounter(personId,payload);
-      await getEffects().loadPerson(personId,{force:true});
+      await Promise.all([getEffects().loadPerson(personId,{force:true}),getEffects().loadDashboard()]);
       toast(encounterId?'Treffen aktualisiert':'Treffen gespeichert');
     } catch(error) { toast(error.message); }
   }
@@ -54,7 +54,7 @@ export function createEncounterEffects({store,getEffects}) {
       if(encounterId)await api.updateEncounter(personId,encounterId,{services});
       else await api.addEncounter(personId,{services});
       store.dispatch({type:'SHEET',value:null});
-      await getEffects().loadPerson(personId,{force:true});
+      await Promise.all([getEffects().loadPerson(personId,{force:true}),getEffects().loadDashboard()]);
       toast('Service-Details gespeichert');
     } catch(error) { toast(error.message); }
   }
