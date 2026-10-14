@@ -94,6 +94,7 @@ jobs:
           node --experimental-default-type=module - <<'JS'
           import assert from 'node:assert/strict';
           import { canonicalPricingService, currentSavedPricingExtractionId } from './ladies/static/explorer/js/ux_patch.js';
+          import { captureScrollState, resetScrollState, restoreScrollState } from './ladies/static/explorer/js/app/scroll_state.js';
 
           const config={filter_groups:[{key:'service',options:[
             {label:'ZK',value:'zungenkuss'},
@@ -115,6 +116,30 @@ jobs:
             {price_extraction_id:7,status:'ACCEPTED',accepted_price_list_id:11},
             {price_extraction_id:8,status:'ACCEPTED_NO_CHANGE',accepted_price_list_id:11}
           ]),8);
+
+          const oldRoots=[
+            {dataset:{scrollKey:'main'},id:'',scrollTop:640,scrollLeft:3},
+            {dataset:{},id:'secondary',scrollTop:91,scrollLeft:0}
+          ];
+          const oldHost={querySelectorAll:()=>oldRoots};
+          const snapshot=captureScrollState(oldHost);
+          assert.deepEqual(snapshot,[
+            {key:'main',top:640,left:3},
+            {key:'secondary',top:91,left:0}
+          ]);
+
+          const newRoots=[
+            {dataset:{scrollKey:'main'},id:'',scrollTop:0,scrollLeft:0},
+            {dataset:{},id:'secondary',scrollTop:0,scrollLeft:0}
+          ];
+          const newHost={querySelectorAll:()=>newRoots};
+          assert.equal(restoreScrollState(newHost,snapshot),true);
+          assert.equal(newRoots[0].scrollTop,640);
+          assert.equal(newRoots[0].scrollLeft,3);
+          assert.equal(newRoots[1].scrollTop,91);
+          resetScrollState(newHost);
+          assert.equal(newRoots[0].scrollTop,0);
+          assert.equal(newRoots[1].scrollTop,0);
           JS
 
       - name: Check project metadata syntax
