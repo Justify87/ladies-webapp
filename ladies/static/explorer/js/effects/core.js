@@ -129,7 +129,7 @@ export function createCoreEffects({store,router}) {
 
   async function undoDecision() {
     const history=state().discover.history; const entry=history.at(-1); if(!entry)return toast('Nichts zum Zurücknehmen');
-    try { await mutatePerson(entry.personId,{preference:entry.preference,favorite:entry.favorite}); store.dispatch({type:'DISCOVER_HISTORY_POP'}); store.dispatch({type:'DISCOVER_INDEX',index:entry.index}); prefetchCurrent(); }
+    try { await mutatePerson(entry.personId,{preference:entry.preference,favorite:entry.favorite}); store.dispatch({type:'DISCOVER_HISTORY_POP'}); store.dispatch({type:'DISCOVER_INDEX',index:entry.index}); await Promise.all([prefetchCurrent(),loadDashboard()]); }
     catch(error){toast(error.message);}
   }
 
@@ -159,7 +159,7 @@ export function createCoreEffects({store,router}) {
     } catch(error){store.dispatch({type:'STATUS_CHECK',patch:{running:false}});toast(error.message);}
   }
 
-  async function statusSingle(advertId) { if(!advertId)return;try{await api.profileStatus(advertId);toast('Status aktualisiert');await loadList();}catch(error){toast(error.message);} }
+  async function statusSingle(advertId) { if(!advertId)return;try{await api.profileStatus(advertId);toast('Status aktualisiert');await Promise.all([loadList(),loadDashboard()]);}catch(error){toast(error.message);} }
 
   async function saveProfileData(form) {
     const personId=Number(form.dataset.personId);const encounterId=Number(form.dataset.encounterId || 0);const fd=new FormData(form);
@@ -170,19 +170,19 @@ export function createCoreEffects({store,router}) {
       store.dispatch({type:'PERSON_STATE_SYNC',personId,userState:user?.user_state || {}});
       const payload={duration_minutes:fd.get('duration_minutes')||null,total_price_eur:fd.get('total_price_eur')||null,overall_rating:rating('overall_rating'),sympathy_rating:rating('sympathy_rating'),photo_status:formEnumWireValue('photo_status',choice('photo_status')),service_accuracy:formEnumWireValue('service_accuracy',choice('service_accuracy')),hygiene:formEnumWireValue('hygiene',choice('hygiene')),kissing:formEnumWireValue('kissing',choice('kissing')),negotiable:formEnumWireValue('negotiable',choice('negotiable'))};
       if(encounterId) await api.updateEncounter(personId,encounterId,payload); else if(Object.values(payload).some(v=>v&&v!=='UNKNOWN')) await api.addEncounter(personId,payload);
-      await loadPerson(personId,{force:true}); toast('Meine Daten gespeichert'); loadDashboard();
+      await Promise.all([loadPerson(personId,{force:true}),loadDashboard()]); toast('Meine Daten gespeichert');
     } catch(error){toast(error.message);}
   }
 
   async function addPrice(form) {
     const personId=Number(form.dataset.personId),fd=new FormData(form);
-    try { await api.addPriceList(personId,{source:'USER_ENTERED',items:[{item_type:'BASE',duration_minutes:fd.get('minutes')||null,amount_eur:fd.get('amount'),label:fd.get('label')||null}]});store.dispatch({type:'SHEET',value:null});await loadPerson(personId,{force:true});toast('Preisliste gespeichert'); }
+    try { await api.addPriceList(personId,{source:'USER_ENTERED',items:[{item_type:'BASE',duration_minutes:fd.get('minutes')||null,amount_eur:fd.get('amount'),label:fd.get('label')||null}]});store.dispatch({type:'SHEET',value:null});await Promise.all([loadPerson(personId,{force:true}),loadDashboard()]);toast('Preisliste gespeichert'); }
     catch(error){toast(error.message);}
   }
 
-  async function merge(form) { const source=Number(form.dataset.sourcePersonId),target=Number(new FormData(form).get('target'));if(!target||target===source)return toast('Andere gültige Person-ID eingeben');try{await api.merge(source,target);store.dispatch({type:'SHEET',value:null});router.back();await openProfile({personId:target});toast('Personen zusammengeführt');}catch(error){toast(error.message);} }
+  async function merge(form) { const source=Number(form.dataset.sourcePersonId),target=Number(new FormData(form).get('target'));if(!target||target===source)return toast('Andere gültige Person-ID eingeben');try{await api.merge(source,target);store.dispatch({type:'SHEET',value:null});router.back();await openProfile({personId:target});loadDashboard();toast('Personen zusammengeführt');}catch(error){toast(error.message);} }
 
-  async function split(listingId) { try{const d=await api.split(listingId);store.dispatch({type:'SHEET',value:null});toast(`Neue Person #${d.new_person_id}`);const route=S.currentRoute(state());if(route.params?.personId)await loadPerson(route.params.personId,{force:true});}catch(error){toast(error.message);} }
+  async function split(listingId) { try{const d=await api.split(listingId);store.dispatch({type:'SHEET',value:null});toast(`Neue Person #${d.new_person_id}`);const route=S.currentRoute(state());await Promise.all([route.params?.personId?loadPerson(route.params.personId,{force:true}):Promise.resolve(),loadDashboard()]);}catch(error){toast(error.message);} }
 
   async function snapshotCompare(a,b) { try{const [x,y]=await Promise.all([api.snapshot(a),api.snapshot(b)]);store.dispatch({type:'SHEET',value:{kind:'snapshot',payload:{before:x?.snapshot,after:y?.snapshot}}});}catch(error){toast(error.message);} }
 
