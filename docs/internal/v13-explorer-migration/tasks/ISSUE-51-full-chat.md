@@ -6,17 +6,19 @@
 
 ## Open implementation steps
 - [x] Chat renderer/effects/API surface implemented.
-- [ ] Browser E2E for pagination, send, presence and Chat→Profile→Back context preservation.
-- [ ] Confirm older-message pagination preserves useful scroll position.
+- [x] Older-message pagination preserves the useful reading position when history is prepended.
+- [x] Loaded history is retained across send/edit/reaction/live refreshes instead of collapsing back to the newest page.
+- [x] Chat → Profile → Back preserves the current chat context and useful scroll position.
+- [ ] Manual runtime verification for pagination, send, presence and navigation against real chat data.
 
 ## Acceptance Criteria
-- [ ] Full productive chat flow works without layer hacks or lost context.
+- [ ] Full productive chat flow works without layer hacks or lost context in the running Explorer.
 
 ## Verification
-Source/API evidence; dedicated browser E2E pending.
+Source/API contract audit completed. Runtime/UI verification remains manual by design; no browser/E2E CI is required.
 
 ## Relevant commits
-PR #69 Messaging migration commits.
+PR #69 Messaging migration and chat-context hardening commits.
 
 ## PR / review notes
 No active review thread.
