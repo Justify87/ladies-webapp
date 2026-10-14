@@ -25,8 +25,10 @@ export function reducer(state=initialState, action={}) {
     case 'PERSON_STATE_SYNC': {
       const pid = Number(action.personId); const patch = action.userState || {};
       for (const row of next.search.results) if (Number(row.person_id) === pid) { if ('preference' in patch) row.preference = patch.preference; if ('favorite' in patch) row.favorite = patch.favorite; }
-      const detail = next.profiles.details[String(pid)]; if (detail?.raw) detail.raw.user_state = {...(detail.raw.user_state || {}),...patch};
-      for (const [key,bundle] of Object.entries(next.profiles.bundles)) if (Number(bundle?.identity?.person_id) === pid) bundle.identity = {...bundle.identity,...patch};
+      const detail = next.profiles.details[String(pid)]; if (detail) detail.user_state = {...(detail.user_state || {}),...patch};
+      for (const bundle of Object.values(next.profiles.bundles)) if (Number(bundle?.identity?.person_id) === pid) bundle.identity = {...bundle.identity,...patch};
+      for (const row of next.lists.items) if (Number(row.person_id) === pid) { if ('preference' in patch) row.preference = patch.preference; if ('favorite' in patch) row.favorite = patch.favorite; }
+      next.lists.items = next.lists.items.filter(row => Number(row.person_id) !== pid || next.lists.tab === 'FAVORITE' ? (Number(row.person_id) !== pid || Boolean(row.favorite)) : (Number(row.person_id) !== pid || row.preference === next.lists.tab));
       return next;
     }
     case 'LIST_TAB': next.lists.tab = action.tab; return next;
@@ -49,6 +51,11 @@ export function reducer(state=initialState, action={}) {
     case 'REPLY_TO': next.messaging.replyTo = action.value || null; return next;
     case 'EDITING': next.messaging.editing = action.value || null; return next;
     case 'MESSAGE_EVENTS': next.messaging.eventsConnected = Boolean(action.value); return next;
+    case 'MESSAGE_PRESENCE': {
+      const key = String(Number(action.threadId || 0)); if (key === '0') return state;
+      if (action.value) next.messaging.presenceByThread[key] = action.value; else delete next.messaging.presenceByThread[key];
+      return next;
+    }
     case 'ASSIGNMENT': next.messaging.assignment = action.value || null; return next;
     case 'MESSAGE_RECORDING': next.messaging.recording = Boolean(action.value); return next;
     case 'PRICING_THREAD': next.pricing.byThread[String(action.threadId)] = {...(next.pricing.byThread[String(action.threadId)] || {}),...action.value}; return next;
