@@ -1,5 +1,5 @@
 import * as S from './selectors.js';
-import { profileBundleVm, personDetailVm } from '../data/adapters.js';
+import { profileBundleVm } from '../data/adapters.js';
 
 export function createCommands({store,router,effects}) {
   const state=()=>store.getState();
@@ -30,6 +30,7 @@ export function createCommands({store,router,effects}) {
     'profile-split':el=>effects.split(Number(el.dataset.listingId)),
     'visual-current':el=>effects.analyzeCurrent(Number(el.dataset.personId)),
     'open-add-price':el=>store.dispatch({type:'SHEET',value:{kind:'add-price',payload:{personId:Number(el.dataset.personId)}}}),
+    'encounter-services':el=>{const personId=Number(el.dataset.personId);const d=S.detailFor(state(),personId);const encounter=d?.encounters?.[0]||null;store.dispatch({type:'SHEET',value:{kind:'encounter-services',payload:{personId,encounter}}});},
     'profile-tab':el=>store.dispatch({type:'PROFILE_TAB',personId:Number(el.dataset.personId),tab:el.dataset.tab}),
     'profile-media-step':el=>{const pid=Number(el.dataset.personId),d=S.detailFor(state(),pid);const bundleRoute=S.currentRoute(state());let count=d?.media?.length||0;if(!count&&bundleRoute.name==='swipe'){const row=S.currentSearchRow(state());const vm=row?profileBundleVm(state().profiles.bundles[row.advertId],row):null;count=vm?.media?.length||0;}const current=S.profileMediaIndex(state(),pid);const next=Math.max(0,Math.min(Math.max(0,count-1),current+Number(el.dataset.delta||0)));store.dispatch({type:'PROFILE_MEDIA',personId:pid,index:next});effects.autoAnalyzeCurrent();},
     'rating-select':el=>{const root=el.closest('[data-rating-name]');root?.querySelectorAll('button').forEach(b=>b.classList.toggle('selected',b===el));},
