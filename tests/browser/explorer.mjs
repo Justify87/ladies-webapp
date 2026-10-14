@@ -204,6 +204,8 @@ try {
     return { before, after: scroller.scrollTop, detailsTop: details.getBoundingClientRect().top };
   });
   assert.ok(scrollResult.after > scrollResult.before, 'Up-scroll must reveal profile details');
+  await page.evaluate(() => { document.querySelector('[data-swipe-scroll]').scrollTop = 0; });
+  await page.waitForFunction(() => document.querySelector('[data-swipe-scroll]')?.scrollTop === 0);
 
   const surface = page.locator('[data-profile-media]').first();
   const box = await surface.boundingBox();
