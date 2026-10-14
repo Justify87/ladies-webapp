@@ -30,12 +30,7 @@ export function createRequestedEffects({store,core}) {
         void core.prefetchCurrent();
         return;
       }
-      const before={
-        preference:bundleVm.preference||row.preference||'NONE',
-        favorite:bundleVm.favorite??row.favorite??false,
-        index:state().discover.index,
-        personId
-      };
+      const before={preference:bundleVm.preference||row.preference||'NONE',favorite:bundleVm.favorite??row.favorite??false,index:state().discover.index,personId};
       const local=state().search.filters.local||{};
       const replayLikes=state().settings.values.replay_likes!==false;
       const hideLikes=local.hideLikes===true;
@@ -50,11 +45,8 @@ export function createRequestedEffects({store,core}) {
       }
       core.loadDashboard();
       void core.prefetchCurrent();
-    } catch(error) {
-      core.toast(error.message||String(error));
-    } finally {
-      discoverBusy=false;
-    }
+    } catch(error) { core.toast(error.message||String(error)); }
+    finally { discoverBusy=false; }
   }
 
   return Object.freeze({discoverDecision});
@@ -81,10 +73,7 @@ function encounterForm(detail,encounter={}) {
 }
 
 function encounterSignature(detail) {
-  return `${detail.personId}|${(detail.encounters||[]).map(item=>[
-    item.encounter_id,item.updated_at,item.repeat_interest,item.private_note,item.duration_minutes,item.total_price_eur,
-    item.overall_rating,item.sympathy_rating,item.photo_status,item.service_accuracy,item.hygiene,item.kissing,item.negotiable
-  ].join(':')).join('|')}`;
+  return `${detail.personId}|${(detail.encounters||[]).map(item=>[item.encounter_id,item.updated_at,item.repeat_interest,item.private_note,item.duration_minutes,item.total_price_eur,item.overall_rating,item.sympathy_rating,item.photo_status,item.service_accuracy,item.hygiene,item.kissing,item.negotiable].join(':')).join('|')}`;
 }
 
 function dataPanel(detail) {
@@ -107,19 +96,12 @@ function addHideLikesOption(store) {
 }
 
 function cleanGrid(hiddenAdverts) {
-  document.querySelectorAll('#screenHost .grid-card-chips').forEach(node=>node.remove());
-  document.querySelectorAll('#screenHost .grid-card[data-advert-id]').forEach(card=>{
-    if(hiddenAdverts.has(String(card.dataset.advertId||'')))card.remove();
-  });
+  document.querySelectorAll('#screenHost .grid-card[data-advert-id]').forEach(card=>{if(hiddenAdverts.has(String(card.dataset.advertId||'')))card.remove();});
 }
 
-function cleanSwipe(store) {
+function cleanSwipe() {
   const root=document.querySelector('#screenHost .swipe-screen');
-  if(!root) {
-    const heading=document.querySelector('#screenHost .empty-state h2');
-    if(heading&&/Keine weiteren Profile/i.test(heading.textContent||''))heading.textContent=S.searchRows(stateOf(store)).length?'Du hast alle Profile angeschaut.':'Keine Profile gefunden.';
-    return;
-  }
+  if(!root)return;
   root.querySelectorAll('.swipe-details .profile-meta-place,.swipe-details .badge-row').forEach(node=>node.remove());
   const identity=root.querySelector('.swipe-details .profile-identity');
   const nameRow=identity?.querySelector('.profile-name-row');
@@ -163,7 +145,7 @@ export function installRequestedFixes({store,effects}) {
   function enhanceDom() {
     addHideLikesOption(store);
     cleanGrid(hiddenLikedAdverts);
-    cleanSwipe(store);
+    cleanSwipe();
     consolidateDataTab(store);
   }
 
@@ -182,10 +164,7 @@ export function installRequestedFixes({store,effects}) {
     const card=button.closest('.grid-card');
     const parent=card?.parentElement||null;
     const nextSibling=card?.nextSibling||null;
-    if(addingLike) {
-      hiddenLikedAdverts.add(advertId);
-      card?.remove();
-    }
+    if(addingLike) { hiddenLikedAdverts.add(advertId); card?.remove(); }
     try {
       if(!vm)throw new Error('Profil konnte nicht aufgelöst werden');
       const bundle=await effects.loadBundle(vm,{detail:false,quiet:true});
@@ -205,6 +184,9 @@ export function installRequestedFixes({store,effects}) {
     }
   },true);
 
-  store.subscribe(()=>queueMicrotask(enhanceDom));
+  store.subscribe((_,action)=>{
+    if(action?.type==='SEARCH_RESULTS')hiddenLikedAdverts.clear();
+    queueMicrotask(enhanceDom);
+  });
   enhanceDom();
 }
