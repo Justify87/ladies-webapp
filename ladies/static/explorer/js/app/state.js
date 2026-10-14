@@ -14,7 +14,7 @@ export const initialState = Object.freeze({
   dashboard:{counts:{},usage:{},recent_changes:[]},
   history:{kind:null,items:[]},
   settings:{values:{},storage:{},pricing:{},pricingRuntime:{},loaded:false},
-  messaging:{status:{state:'UNKNOWN'},filter:'ALL',query:'',threads:[],loading:false,currentThread:null,threadLoading:false,replyTo:null,editing:null,eventsConnected:false,assignment:null,recording:false},
+  messaging:{status:{state:'UNKNOWN'},filter:'ALL',query:'',threads:[],loading:false,currentThread:null,threadLoading:false,replyTo:null,editing:null,eventsConnected:false,assignment:null,recording:false,presenceByThread:{}},
   pricing:{byThread:{},proposal:null},
   profileUi:{tabByPerson:{},mediaByPerson:{},expandedByPerson:{}},
   ui:{sheet:null,toast:null,busy:false},
