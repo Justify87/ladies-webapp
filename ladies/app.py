@@ -13,8 +13,9 @@ from .config import frontend_config
 from .encounter_metadata import install_encounter_metadata
 from .lan_access import LanAccessManager
 from .messaging import install_messaging
-from .messaging.integration import install_identity_merge_listener, reconcile_identity_events
-from .pricing import install_pricing, install_pricing_identity_merge_listener
+from .messaging.integration import merge_messaging_person, reconcile_identity_events as reconcile_messaging_identity_events
+from .pricing import install_pricing
+from .pricing.integration import merge_pricing_person, reconcile_identity_events as reconcile_pricing_identity_events
 from .search_preview import install_search_preview
 from .web import create_app as create_core_app
 
@@ -54,16 +55,13 @@ def _is_loopback(remote_addr: str | None) -> bool:
         return False
 
 
-def _install_domain_route_integrations(app, *, database, messaging, pricing, background) -> None:
-    """Attach domain side effects to the routes that own the corresponding mutation.
-
-    This keeps identity/messaging behavior explicit instead of inferring business
-    operations later from request paths in a global ``after_request`` hook.
-    """
+def _install_domain_route_integrations(app, *, database, messaging, background) -> None:
+    """Attach domain side effects to the routes that own the corresponding mutation."""
 
     def reconcile_identity_state() -> None:
-        reconcile_identity_events(database)
-        pricing.reconcile_identity_events()
+        # Pricing needs the source chat thread before messaging may collapse it.
+        reconcile_pricing_identity_events(database)
+        reconcile_messaging_identity_events(database)
 
     def rehydrate_liked_person(person_id: int) -> None:
         result = messaging.rehydrate_recent_history(int(person_id), limit=10)
@@ -144,9 +142,6 @@ def create_app(
     profile_delay: float = 2.0,
 ):
     _install_request_log_filter()
-    # Pricing moves extraction refs before messaging may delete a duplicate source thread.
-    install_pricing_identity_merge_listener()
-    install_identity_merge_listener()
     app = create_core_app(
         db_path=db_path,
         data_dir=data_dir,
@@ -220,11 +215,20 @@ def create_app(
         return response
 
     database = app.extensions["ladies_database"]
+    repositories = app.extensions["ladies_repositories"]
     messaging = install_messaging(app, database=database, data_dir=data_dir)
-    pricing = install_pricing(app, database=database, data_dir=data_dir)
+    install_pricing(app, database=database, data_dir=data_dir)
+
+    # Merge side effects are explicit and ordered. Pricing must run first because
+    # messaging may collapse/delete the source chat thread in the same transaction.
+    repositories.persons.set_identity_merge_handlers(
+        merge_pricing_person,
+        merge_messaging_person,
+    )
+
     try:
-        reconcile_identity_events(database)
-        pricing.reconcile_identity_events()
+        reconcile_pricing_identity_events(database)
+        reconcile_messaging_identity_events(database)
     except Exception:
         LOGGER.exception("Initial identity reconciliation failed")
 
@@ -232,7 +236,6 @@ def create_app(
         app,
         database=database,
         messaging=messaging,
-        pricing=pricing,
         background=background,
     )
 
