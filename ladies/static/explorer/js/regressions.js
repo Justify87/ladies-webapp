@@ -184,16 +184,6 @@ export function installRegressionUi({store,effects}) {
       return;
     }
 
-    const tab=event.target.closest('[data-action="profile-tab"]');
-    if(tab){
-      const current=document.querySelector('#screenHost [data-scroll-root]');
-      const top=current?.scrollTop||0;
-      requestAnimationFrame(()=>requestAnimationFrame(()=>{
-        const replacement=document.querySelector('#screenHost [data-scroll-root]');
-        if(replacement)replacement.scrollTop=top;
-      }));
-    }
-
     if(event.target.closest('[data-action="rating-select"]'))queueMicrotask(enhanceRatings);
 
     if(performance.now()<suppressMediaTapUntil&&event.target.closest('.media-tap')){
