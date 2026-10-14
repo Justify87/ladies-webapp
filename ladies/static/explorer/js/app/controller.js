@@ -1,6 +1,13 @@
 import { renderApp } from '../ui/render.js';
 import * as S from './selectors.js';
-import { captureScrollState, resetScrollState, restoreScrollState } from './scroll_state.js';
+import { captureScrollState, updateScrollableRegion } from './scroll_state.js';
+
+function sheetRenderKey(sheet){
+  if(!sheet?.kind)return null;
+  const payload=sheet.payload||{};
+  const identity=payload.personId??payload.threadId??payload.endpointId??payload.messageId??payload.listingId??payload.extractionId??payload.message?.id??payload.proposal?.price_extraction_id??payload.encounter?.encounter_id??payload.kind??'';
+  return identity===''?String(sheet.kind):`${sheet.kind}:${identity}`;
+}
 
 export function createController({store,router,effects,commands}) {
   const app=document.querySelector('#app');
@@ -13,6 +20,10 @@ export function createController({store,router,effects,commands}) {
   let swipeBinding=null;
   let lastRouteKey=null;
   let lastBodyHtml=null;
+  let lastHeaderHtml=null;
+  let lastNavHtml=null;
+  let lastOverlayHtml=null;
+  let lastSheetKey=null;
   let lastSwipeAnalysisKey=null;
   const chatScrollMemory=new Map();
   const screenScrollMemory=new Map();
@@ -24,10 +35,6 @@ export function createController({store,router,effects,commands}) {
     screenScrollMemory.delete(routeKey);
     screenScrollMemory.set(routeKey,snapshot);
     while(screenScrollMemory.size>40)screenScrollMemory.delete(screenScrollMemory.keys().next().value);
-  }
-
-  function restoreScreenScroll(routeKey){
-    return restoreScrollState(host,screenScrollMemory.get(routeKey));
   }
 
   function bindSwipeGesture(){
@@ -137,25 +144,39 @@ export function createController({store,router,effects,commands}) {
   function render(){
     rememberChatScroll();
     rememberScreenScroll(lastRouteKey);
+
     const state=store.getState();
     const route=S.currentRoute(state);
     const out=renderApp(state);
     const routeChanged=route.key!==lastRouteKey;
-    const bodyChanged=routeChanged||out.body!==lastBodyHtml;
+    const nextSheetKey=sheetRenderKey(state.ui.sheet);
+    const sheetChanged=nextSheetKey!==lastSheetKey;
+    const overlaySnapshot=!sheetChanged&&nextSheetKey?captureScrollState(overlay,'.bottom-sheet'):[];
 
     document.documentElement.classList.toggle('reduced-motion',!!state.settings.values.reduced_motion);
     app?.classList.toggle('chat-mode',route.name==='chat');
     app?.classList.toggle('detail-mode',['profile','history','archive'].includes(route.name));
-    header.innerHTML=out.header;
-    nav.innerHTML=out.nav;
-    overlay.innerHTML=out.sheet;
 
-    if(bodyChanged){
-      host.innerHTML=out.body;
-      lastBodyHtml=out.body;
-      const restored=restoreScreenScroll(route.key);
-      if(routeChanged&&!restored)resetScrollState(host);
-    }
+    if(out.header!==lastHeaderHtml){header.innerHTML=out.header;lastHeaderHtml=out.header;}
+    if(out.nav!==lastNavHtml){nav.innerHTML=out.nav;lastNavHtml=out.nav;}
+
+    const screenUpdate=updateScrollableRegion(host,out.body,{
+      previousHtml:lastBodyHtml,
+      force:routeChanged,
+      snapshot:screenScrollMemory.get(route.key),
+      reset:routeChanged
+    });
+    lastBodyHtml=out.body;
+
+    updateScrollableRegion(overlay,out.sheet,{
+      previousHtml:lastOverlayHtml,
+      force:sheetChanged,
+      snapshot:sheetChanged?null:overlaySnapshot,
+      reset:sheetChanged,
+      selector:'.bottom-sheet'
+    });
+    lastOverlayHtml=out.sheet;
+    lastSheetKey=nextSheetKey;
 
     if(out.toast){
       toast.textContent=out.toast;
@@ -168,9 +189,9 @@ export function createController({store,router,effects,commands}) {
     }
 
     lastRouteKey=route.key;
-    if(bodyChanged)bindSwipeGesture();
+    if(screenUpdate.replaced)bindSwipeGesture();
     maybeAutoAnalyzeSwipe(state,route);
-    if(route.name==='chat'&&bodyChanged)restoreChatScroll(Number(route.params?.threadId||S.currentThread(state)?.threadId||0));
+    if(route.name==='chat'&&screenUpdate.replaced)restoreChatScroll(Number(route.params?.threadId||S.currentThread(state)?.threadId||0));
   }
 
   document.addEventListener('click',async ev=>{
