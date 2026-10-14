@@ -6,13 +6,13 @@
 
 ## Open implementation steps
 - [x] Favorite state path implemented.
-- [ ] Browser/E2E cross-screen persistence verification.
+- [ ] Manually verify cross-screen persistence and reload behavior in the running Explorer.
 
 ## Acceptance Criteria
 - [ ] Favorite state remains consistent across navigation/reload.
 
 ## Verification
-Source evidence only; E2E pending.
+Source/API/state-coherency audit completed. Runtime/UI verification remains manual by design; no browser/E2E CI is required.
 
 ## Relevant commits
 PR #69 Search/Profile/List migration commits.
