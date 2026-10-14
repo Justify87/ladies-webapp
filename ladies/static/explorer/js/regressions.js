@@ -1,31 +1,9 @@
 import * as S from './app/selectors.js';
-import { api } from './api/client.js';
-import { filterPayload } from './data/adapters.js';
 import { icon } from './shared/icons.js';
 
 export function createRegressionEffects({store,router,core}) {
-  let previewAbort=null;
-  let previewTimer=null;
-  let previewSeq=0;
+  let discoverBusy=false;
   const state=()=>store.getState();
-
-  function schedulePreview({immediate=false}={}) {
-    clearTimeout(previewTimer);
-    const sequence=++previewSeq;
-    store.dispatch({type:'SEARCH_PREVIEW',patch:{status:'loading',count:null,error:null}});
-    previewTimer=setTimeout(async()=>{
-      previewAbort?.abort();
-      previewAbort=new AbortController();
-      try {
-        const data=await api.searchPreview(filterPayload(state().search.filters),previewAbort.signal);
-        if(sequence!==previewSeq)return;
-        store.dispatch({type:'SEARCH_PREVIEW',patch:{status:'ready',count:Number(data?.count||0),error:null}});
-      } catch(error) {
-        if(error?.name==='AbortError'||sequence!==previewSeq)return;
-        store.dispatch({type:'SEARCH_PREVIEW',patch:{status:'error',count:null,error:error.message||'Suchvorschau konnte nicht geladen werden.'}});
-      }
-    },immediate?0:280);
-  }
 
   async function openProfile({personId,advertId}) {
     let pid=Number(personId||0)||null;
@@ -42,7 +20,32 @@ export function createRegressionEffects({store,router,core}) {
     if(!state().profiles.details[String(pid)])await core.loadPerson(pid,{force:false,quiet:false});
   }
 
-  return Object.freeze({schedulePreview,openProfile});
+  async function discoverDecision(decision) {
+    if(discoverBusy)return;
+    const row=S.currentSearchRow(state());if(!row)return;
+    discoverBusy=true;
+    try{
+      let personId=Number(row.personId||0)||null,bundleVm=null;
+      if(!personId){bundleVm=await core.loadBundle(row,{detail:false,quiet:false});personId=bundleVm?.personId||null;}
+      if(!personId)return core.toast('Person konnte nicht aufgelöst werden');
+      const before={preference:bundleVm?.preference||row.preference||'NONE',favorite:bundleVm?.favorite??row.favorite??false,index:state().discover.index,personId};
+      const replayLikes=state().settings.values.replay_likes!==false;
+      const hideDislikes=state().search.filters.local?.hideDislikes!==false;
+      if(decision==='LIKE')await core.mutatePerson(personId,{preference:'LIKE'});
+      else if(decision==='DISLIKE')await core.mutatePerson(personId,{preference:'DISLIKE'});
+      else if(decision==='FAVORITE')await core.mutatePerson(personId,{favorite:!before.favorite});
+      store.dispatch({type:'DISCOVER_HISTORY_PUSH',entry:before});
+      if(decision!=='FAVORITE'){
+        const remains=(decision==='LIKE'&&replayLikes)||(decision==='DISLIKE'&&!hideDislikes);
+        store.dispatch({type:'DISCOVER_INDEX',index:remains?before.index+1:before.index});
+      }
+      core.loadDashboard();
+      void core.prefetchCurrent();
+    }catch(error){core.toast(error.message||String(error));}
+    finally{discoverBusy=false;}
+  }
+
+  return Object.freeze({openProfile,discoverDecision});
 }
 
 const PRICING_LABELS=Object.freeze({
@@ -56,6 +59,7 @@ const TAB_ICONS=Object.freeze({info:'info',offer:'heart',analysis:'sparkles',dat
 export function installRegressionUi({store,effects}) {
   const expandedDescriptions=new Set();
   let swipePointer=null;
+  let swipeBusy=false;
   let suppressMediaTapUntil=0;
 
   function enhanceAvailability() {
@@ -199,7 +203,7 @@ export function installRegressionUi({store,effects}) {
   },true);
 
   document.addEventListener('pointerdown',event=>{
-    if(S.currentRoute(store.getState()).name!=='swipe')return;
+    if(swipeBusy||S.currentRoute(store.getState()).name!=='swipe')return;
     const tap=event.target.closest('.media-tap');
     const surface=event.target.closest('[data-profile-media]');
     if(!tap||!surface)return;
@@ -217,7 +221,7 @@ export function installRegressionUi({store,effects}) {
     }
   },{capture:true,passive:false});
 
-  document.addEventListener('pointerup',event=>{
+  document.addEventListener('pointerup',async event=>{
     if(!swipePointer||event.pointerId!==swipePointer.id)return;
     const gesture=swipePointer;
     swipePointer=null;
@@ -226,10 +230,11 @@ export function installRegressionUi({store,effects}) {
     if(Math.abs(gesture.dx)>65&&Math.abs(gesture.dx)>Math.abs(gesture.dy)*1.15){
       event.preventDefault();
       suppressMediaTapUntil=performance.now()+500;
-      void effects.discoverDecision(gesture.dx>0?'LIKE':'DISLIKE');
+      swipeBusy=true;
+      try{await effects.discoverDecision(gesture.dx>0?'LIKE':'DISLIKE');}finally{swipeBusy=false;}
     }
   },true);
-  document.addEventListener('pointercancel',()=>{swipePointer=null;},true);
+  document.addEventListener('pointercancel',()=>{if(swipePointer?.surface){swipePointer.surface.style.transform='';swipePointer.surface.style.opacity='';}swipePointer=null;},true);
 
   store.subscribe(()=>queueMicrotask(enhanceDom));
   enhanceDom();
