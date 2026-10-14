@@ -19,7 +19,7 @@ export function createPricingEffects({store,getEffects}) {
 
   async function rejectPricing(id){try{await api.rejectPriceProposal(id);store.dispatch({type:'SHEET',value:null});toast('Preisvorschlag abgelehnt');const t=S.currentThread(state());if(t)await loadPricingForThread(t.threadId);}catch(error){toast(error.message);} }
 
-  async function sendPresence(threadId,stateValue){try{return await api.presence(threadId,stateValue);}catch{return null;}}
+  async function sendPresence(threadId,stateValue){const t=S.currentThread(state());const endpointId=Number(t?.selectedEndpoint?.endpoint_id||t?.selected_endpoint?.endpoint_id||t?.endpoint?.endpoint_id||t?.endpoints?.[0]?.endpoint_id||0);try{return await api.presence(threadId,stateValue,endpointId||null);}catch{return null;}}
 
   async function savePricingSettings(form){const payload={};for(const [key,value] of new FormData(form).entries())payload[key]=value;for(const input of form.querySelectorAll('input[type=checkbox]'))payload[input.name]=input.checked;try{const d=await api.setPricingSettings(payload);store.dispatch({type:'PRICING_SETTINGS',value:d?.settings||d||{}});store.dispatch({type:'SHEET',value:null});toast('Pricing-Einstellungen gespeichert');}catch(error){toast(error.message);} }
 
