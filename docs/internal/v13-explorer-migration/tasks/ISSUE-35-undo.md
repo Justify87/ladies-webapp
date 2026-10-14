@@ -6,16 +6,16 @@
 
 ## Open implementation steps
 - [x] Undo stack/effect path implemented.
-- [ ] Browser/E2E verification of persistence and queue restoration.
+- [ ] Manually verify persistence, queue restoration and dashboard consistency in the running Explorer.
 
 ## Acceptance Criteria
 - [ ] Last decision is restored without state divergence.
 
 ## Verification
-Source evidence only; E2E pending.
+Source/API/state-coherency audit completed. Runtime/UI verification remains manual by design; no browser/E2E CI is required.
 
 ## Relevant commits
-PR #69 Discover migration commits.
+PR #69 Discover migration and state-refresh commits.
 
 ## PR / review notes
 No active review thread.
