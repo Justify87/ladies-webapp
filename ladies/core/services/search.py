@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from ladies_v9.errors import ExternalServiceError, ValidationError
@@ -9,6 +10,7 @@ from ladies_v9.source import build_filter_path, fetch_search_configured, resolve
 from ladies_v9.utils import clean_text
 
 LOGGER = logging.getLogger("ladies_explorer.search")
+_RADIUS_RE = re.compile(r"meldet Radius\s+(\d+)\s+km", re.IGNORECASE)
 
 
 def parse_search_request(
@@ -17,7 +19,6 @@ def parse_search_request(
     default_city: str,
     default_radius: int,
 ) -> dict[str, Any]:
-    """Normalize the shared search/preview request contract in one place."""
     city_raw = clean_text(str(payload.get("city") or default_city))
     radius = read_int(payload, "radius", default=default_radius, minimum=1, maximum=200)
     category = clean_text(str(payload.get("category") or ""))
@@ -26,16 +27,8 @@ def parse_search_request(
     height_min = read_int(payload, "height_min", default=140, minimum=140, maximum=200)
     height_max = read_int(payload, "height_max", default=200, minimum=height_min, maximum=200)
     selected = read_mapping(payload, "selected")
-
-    # Ladies exposes the Treffpunkt facets below the canonical Ladies category.
-    # Sending them against the unscoped /sex-anzeigen route makes the upstream
-    # site silently widen the radius (observed as 50/70 km for a 20 km request),
-    # which our fail-closed radius guard correctly rejects. Keep explicit user
-    # categories untouched, but scope an otherwise category-less Treffpunkt
-    # search to the canonical Ladies category for both preview and real search.
     if not category and selected.get("treff"):
         category = "huren-hostessen"
-
     return {
         "city_raw": city_raw,
         "radius": radius,
@@ -55,21 +48,27 @@ class SearchService:
         self.default_city = default_city
         self.default_radius = int(default_radius)
 
+    def _fetch(self, params: dict[str, Any], city_slug: str, city_display: str, radius: int):
+        return fetch_search_configured(
+            session=self.http,
+            city_slug=city_slug,
+            city_display=city_display,
+            radius_km=radius,
+            category=params["category"],
+            age_min=params["age_min"],
+            age_max=params["age_max"],
+            height_min=params["height_min"],
+            height_max=params["height_max"],
+            selected=params["selected"],
+        )
+
     def execute(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
-            params = parse_search_request(
-                payload,
-                default_city=self.default_city,
-                default_radius=self.default_radius,
-            )
+            params = parse_search_request(payload, default_city=self.default_city, default_radius=self.default_radius)
             LOGGER.info(
                 "Search start city=%s radius=%s category=%s age=%s-%s filters=%s",
-                params["city_raw"],
-                params["radius"],
-                params["category"] or "ALL",
-                params["age_min"],
-                params["age_max"],
-                sorted(params["selected"]),
+                params["city_raw"], params["radius"], params["category"] or "ALL",
+                params["age_min"], params["age_max"], sorted(params["selected"]),
             )
             city_slug, city_display = resolve_location(self.http, params["city_raw"])
             run_id = self.repository.create_search_run(
@@ -85,60 +84,38 @@ class SearchService:
                     "selected": params["selected"],
                 },
             )
+            requested_radius = int(params["radius"])
+            effective_radius = requested_radius
+            auto_expanded = False
             try:
-                profiles, meta = fetch_search_configured(
-                    session=self.http,
-                    city_slug=city_slug,
-                    city_display=city_display,
-                    radius_km=params["radius"],
-                    category=params["category"],
-                    age_min=params["age_min"],
-                    age_max=params["age_max"],
-                    height_min=params["height_min"],
-                    height_max=params["height_max"],
-                    selected=params["selected"],
-                )
+                profiles, meta = self._fetch(params, city_slug, city_display, requested_radius)
             except RuntimeError as exc:
-                # The upstream site sometimes auto-expands sparse searches beyond
-                # the requested radius. Keep the hard-radius contract: do not accept
-                # widened cards, but finish the search cleanly with zero trusted
-                # results instead of turning a valid filter combination into HTTP 400.
-                if "meldet Radius" not in str(exc):
+                match = _RADIUS_RE.search(str(exc))
+                if not match:
                     raise
-                filter_path = build_filter_path(
-                    params["category"],
-                    params["age_min"],
-                    params["age_max"],
-                    params["height_min"],
-                    params["height_max"],
-                    params["selected"],
-                )
+                effective_radius = int(match.group(1))
+                if effective_radius < 1 or effective_radius > 200:
+                    raise
+                auto_expanded = effective_radius != requested_radius
                 LOGGER.info(
-                    "Search hard-radius boundary treated as empty requested_radius=%s filter_path=%s detail=%s",
-                    params["radius"],
-                    filter_path or "<none>",
-                    exc,
+                    "Search follows upstream radius expansion requested_radius=%s effective_radius=%s filter_path=%s",
+                    requested_radius,
+                    effective_radius,
+                    build_filter_path(
+                        params["category"], params["age_min"], params["age_max"],
+                        params["height_min"], params["height_max"], params["selected"],
+                    ) or "<none>",
                 )
-                profiles = []
-                meta = {
-                    "city": city_slug,
-                    "city_display": city_display,
-                    "radius_km": params["radius"],
-                    "filter_path": filter_path,
-                    "total_pages": 0,
-                    "server_advert_count": 0,
-                    "distance_searched": str(params["radius"]),
-                    "pagination_source": "radius-boundary-empty",
-                    "radius_boundary_stopped": True,
-                    "unique_count": 0,
-                }
+                profiles, meta = self._fetch(params, city_slug, city_display, effective_radius)
+
+            meta = dict(meta or {})
+            meta["requested_radius_km"] = requested_radius
+            meta["effective_radius_km"] = effective_radius
+            meta["radius_auto_expanded"] = auto_expanded
             results = self.repository.finish_search_run(run_id, profiles, meta)
             LOGGER.info(
-                "Search complete run_id=%s results=%s city=%s radius=%s",
-                run_id,
-                len(results),
-                city_display,
-                params["radius"],
+                "Search complete run_id=%s results=%s city=%s requested_radius=%s effective_radius=%s",
+                run_id, len(results), city_display, requested_radius, effective_radius,
             )
             return {"search_run_id": run_id, "results": results, "meta": meta}
         except ValidationError:
