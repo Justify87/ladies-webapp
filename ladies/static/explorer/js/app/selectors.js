@@ -8,6 +8,7 @@ export function visibleSearchRows(state) {
   return searchRows(state).filter(row=>{
     if(local.videoOnly && !row.hasVideo)return false;
     if(local.hideDislikes!==false && row.preference==='DISLIKE')return false;
+    if(local.hideLikes===true && row.preference==='LIKE')return false;
     if(local.photosOnly && !(row.thumbnail || row.media?.length))return false;
     const mode=String(local.imageMode || 'ALL').toUpperCase();
     const markerSource=row.markers ?? row.image_markers ?? '';
