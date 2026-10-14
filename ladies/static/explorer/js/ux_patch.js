@@ -5,11 +5,13 @@ function openSections(){try{return new Set(JSON.parse(sessionStorage.getItem(OPE
 function saveSections(set){try{sessionStorage.setItem(OPEN_KEY,JSON.stringify([...set]));}catch{}}
 function focusSnapshot(){const input=document.activeElement?.closest?.('.search-screen input,.search-screen select,.search-screen textarea');if(!input)return null;return {filterSearch:input.matches('[data-filter-search]'),filterInput:input.dataset.filterInput||null,start:input.selectionStart??null,end:input.selectionEnd??null};}
 function priceNumber(value){return value===''?null:Math.round(Number(value)*100);}
+function renumberPricingForm(form){const counts={offer:0,rule:0,condition:0};for(const row of form?.querySelectorAll('[data-pricing-row]')||[]){const kind=row.dataset.pricingKind;if(!(kind in counts))continue;const index=counts[kind]++;for(const field of row.querySelectorAll('[name]'))field.name=field.name.replace(/_\d+$/,`_${index}`);}}
 
 export function installUxPatch({store}){
   function syncPricingDraft(form){
     const current=store.getState().pricing.proposal?.proposal;
     if(!form||!current)return;
+    renumberPricingForm(form);
     const proposal=structuredClone(current);
     const pick=(items,row,index)=>items.find(item=>String(item.proposal_key||'')===String(row.dataset.proposalKey||''))||items[index]||{};
     const rows=kind=>[...form.querySelectorAll(`[data-pricing-kind="${kind}"]`)];
