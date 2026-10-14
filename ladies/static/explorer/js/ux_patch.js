@@ -54,7 +54,7 @@ export function installUxPatch({store}){
     const pick=(items,row,index)=>items.find(item=>String(item.proposal_key||'')===String(row.dataset.proposalKey||''))||items[index]||{};
     const rows=kind=>[...form.querySelectorAll(`[data-pricing-kind="${kind}"]`)];
     proposal.offers=rows('offer').map((row,index)=>{const base=pick(current.offers||[],row,index),label=String(row.querySelector('[data-pricing-field="duration-label"]')?.value||'').trim();const duration=durationNumber(label);return {...base,label:label||null,duration_minutes:duration,amount_cents:priceNumber(row.querySelector('[data-pricing-field="amount"]')?.value??'')};});
-    proposal.service_rules=rows('rule').map((row,index)=>{const base=pick(current.service_rules||[],row,index),select=row.querySelector('[data-pricing-field="service"]'),canonical=canonicalPricingService(base,state.config),serviceKey=String(select?.value||canonical?.value||'').trim(),option=serviceKey?[...select.options].find(item=>String(item.value)===serviceKey):null,label=String(option?.dataset.label||option?.textContent||canonical?.label||'').trim();return {...base,service_key:serviceKey||null,raw_label:serviceKey?label:'',status:String(row.querySelector('[data-pricing-field="status"]')?.value||base.status||'UNKNOWN'),amount_cents:priceNumber(row.querySelector('[data-pricing-field="amount"]')?.value??'')};});
+    proposal.service_rules=rows('rule').map((row,index)=>{const base=pick(current.service_rules||[],row,index),select=row.querySelector('[data-pricing-field="service"]'),canonical=canonicalPricingService(base,state.config),serviceKey=String(select?.value||canonical?.value||'').trim(),option=serviceKey?[...(select?.options||[])].find(item=>String(item.value)===serviceKey):null,label=String(option?.dataset.label||option?.textContent||canonical?.label||'').trim();return {...base,service_key:serviceKey||null,raw_label:serviceKey?label:'',status:String(row.querySelector('[data-pricing-field="status"]')?.value||base.status||'UNKNOWN'),amount_cents:priceNumber(row.querySelector('[data-pricing-field="amount"]')?.value??'')};});
     proposal.conditions=rows('condition').map((row,index)=>{const base=pick(current.conditions||[],row,index);return {...base,label:String(row.querySelector('[data-pricing-field="label"]')?.value||base.label||'').trim(),amount_cents:priceNumber(row.querySelector('[data-pricing-field="amount"]')?.value??'')};});
     store.dispatch({type:'PRICING_DRAFT',value:proposal},{silent:true});
   }
@@ -87,6 +87,7 @@ export function installUxPatch({store}){
 
   document.addEventListener('input',event=>{const form=event.target.closest?.('[data-pricing-form]');if(form)syncPricingDraft(form);},true);
   document.addEventListener('change',event=>{const form=event.target.closest?.('[data-pricing-form]');if(form)syncPricingDraft(form);},true);
+  document.addEventListener('submit',event=>{const form=event.target.closest?.('[data-pricing-form]');if(form)syncPricingDraft(form);},true);
 
   document.addEventListener('click',event=>{
     const submit=event.target.closest('[data-action="search-submit"]');
