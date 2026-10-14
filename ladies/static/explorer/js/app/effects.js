@@ -4,12 +4,14 @@ import { createMessagingEffects } from '../effects/messaging.js';
 import { createPricingEffects } from '../effects/pricing.js';
 import { createEncounterEffects } from '../effects/encounters.js';
 import { createRegressionEffects } from '../regressions.js';
+import { createRequestedEffects } from '../requested_fixes.js';
 
 export function createEffects({store,router}) {
   let effects=null;
   const getEffects=()=>effects;
   const core=createCoreEffects({store,router});
   const regressions=createRegressionEffects({store,router,core});
+  const requested=createRequestedEffects({store,core});
   const visual=createVisualEffects({store,router,getEffects});
   const pricing=createPricingEffects({store,getEffects});
   const messaging=createMessagingEffects({store,router,getEffects});
@@ -22,6 +24,6 @@ export function createEffects({store,router}) {
     messaging.connectEvents();
     core.schedulePreview({immediate:true});
   };
-  effects=Object.freeze({...core,...regressions,...visual,...messaging,...pricing,...encounters,schedulePreview:core.schedulePreview,boot});
+  effects=Object.freeze({...core,...regressions,...requested,...visual,...messaging,...pricing,...encounters,schedulePreview:core.schedulePreview,boot});
   return effects;
 }
