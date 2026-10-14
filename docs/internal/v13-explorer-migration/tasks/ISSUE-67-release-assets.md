@@ -6,20 +6,22 @@
 
 ## Open implementation steps
 - [x] Nested V13 package-data patterns added to `pyproject.toml`.
-- [x] Existing test contract asserts nested package-data patterns.
-- [ ] Build the release archive and verify the complete V13 asset set inside it.
+- [x] Existing package contract covers the nested package-data declarations.
+- [x] `tools/build_release.py` now validates the completed ZIP against the complete selected release file set.
+- [x] The release builder explicitly requires the V13 template, CSS entrypoints and `explorer/js/bootstrap.js` and compares every tracked `ladies/static/explorer/` asset with the archive contents.
+- [ ] Execute a fresh release build from the migration head and record the successful archive verification.
 
 ## Acceptance Criteria
-- [ ] Built release includes every required V13 asset, not just source-package declarations.
+- [ ] A built release from the migration head includes every required V13 asset, not just source/package declarations.
 
 ## Verification
-Source/package-data evidence exists; actual archive verification remains.
+The release builder now performs the archive-content check itself. Source verification is complete; one actual release build from the migration head remains required before this issue can be marked VERIFIED.
 
 ## Relevant commits
-PR #69 packaging migration commits.
+PR #69 packaging migration commits, including `f79c96a` for archive/V13 asset validation.
 
 ## PR / review notes
-No Manager packaging behavior should be altered except what is necessary to include V13 Explorer assets.
+No Manager packaging behavior is changed beyond validating that the existing release file set contains the V13 Explorer runtime.
 
 ## Result
 IMPLEMENTED, NOT VERIFIED.
