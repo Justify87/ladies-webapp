@@ -3,3 +3,5 @@
 
 .view-once-media{display:flex;align-items:center;gap:10px;padding:12px;border:1px dashed var(--outline-variant,#d8dde5);border-radius:12px;text-decoration:none;color:inherit;background:rgba(255,255,255,.55)}
 .view-once-media svg{width:22px;height:22px}
+
+.encounter-services-editor{display:grid;gap:10px;margin:12px 0 16px}.encounter-service-row{display:grid;grid-template-columns:1.3fr .65fr;gap:8px;padding:10px;border:1px solid #eceef3;border-radius:14px;background:#fafafd}.encounter-service-row .option-row{min-height:38px;margin:0;border:0}.encounter-service-row .service-note{grid-column:1/-1}
