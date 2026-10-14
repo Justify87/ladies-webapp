@@ -6,7 +6,7 @@ export function createStore() {
   const listeners = new Set();
   return Object.freeze({
     getState:() => state,
-    dispatch(action) { const next = reducer(state, action); if (next !== state) { state = next; listeners.forEach(fn => fn(state,action)); } return action; },
+    dispatch(action,{silent=false}={}) { const next = reducer(state, action); if (next !== state) { state = next; if(!silent)listeners.forEach(fn => fn(state,action)); } return action; },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }
   });
 }
