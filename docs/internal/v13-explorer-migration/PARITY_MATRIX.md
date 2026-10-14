@@ -43,7 +43,7 @@ Allowed states: `NOT STARTED`, `IN PROGRESS`, `IMPLEMENTED`, `VERIFIED`.
 | #60 | Legacy Explorer JS/CSS removed | VERIFIED | obsolete files deleted from branch |
 | #61 | No legacy Explorer assets loaded | VERIFIED | final template references only V13 Explorer runtime assets |
 | #62 | Manager unchanged | VERIFIED | Explorer migration does not replace Manager runtime/UI |
-| #67 | Release contains V13 assets | IMPLEMENTED | nested package-data present; built archive verification pending |
-| #68 | Fresh release install/start | NOT STARTED | perform after release verification |
+| #67 | Release contains V13 assets | IMPLEMENTED | release builder validates the complete ZIP/V13 asset set; actual migration-head build still required |
+| #68 | Fresh release install/start | IN PROGRESS | install/start path source-audited; fresh packaged runtime verification remains |
 
 Items #63–#66 from the original DoD were retired because browser-smoke, E2E, visual-regression and heavyweight CI gates are intentionally no longer part of the migration contract.
