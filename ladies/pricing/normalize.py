@@ -9,6 +9,8 @@ DURATION_PATTERNS = [
     (re.compile(r"(?<!\d)(\d{1,3})\s*(?:min(?:ute[n]?)?|mins?)\b", re.I), lambda m: int(m.group(1))),
     (re.compile(r"(?<!\d)(\d+(?:[\.,]\d+)?)\s*(?:h|std\.?|stunde[n]?)\b", re.I), lambda m: round(float(m.group(1).replace(",", ".")) * 60)),
     (re.compile(r"\b(?:eine\s+)?halbe\s+stunde\b|½\s*(?:h|std\.?)", re.I), lambda m: 30),
+    (re.compile(r"(?<!\d)\d{2,4}(15|20|30|45|60|90|120|180)\s*(?:min(?:ute[n]?)?|mins?)\b", re.I), lambda m: int(m.group(1))),
+    (re.compile(r"(?<!\d)\d{2,4}\s*(?:h|std\.?)\b", re.I), lambda m: 60),
 ]
 DURATION_RANGE_RE = re.compile(
     r"(?<!\d)\d{1,3}\s*[-–]\s*\d{1,3}\s*(?:min(?:ute[n]?)?|mins?|h|std\.?|stunde[n]?)\b",
@@ -88,7 +90,7 @@ def extract_price_duration_pairs(text: str | None) -> list[dict[str, Any]]:
 
     Besides normal forms such as ``50 20 Minuten`` this deliberately handles
     compact typing like ``10045 Minuten`` (100 EUR / 45 min) and the common
-    shorthand ``130 Std`` (130 EUR / one hour).  Conservative amount and
+    shorthand ``130 Std`` (130 EUR / one hour). Conservative amount and
     duration bounds keep ordinary duration-only chat text from becoming a
     price row accidentally.
     """
@@ -212,6 +214,16 @@ def extract_money(text: str) -> list[dict[str, Any]]:
             "start": match.start(), "end": match.end(), "raw": match.group(0),
             "explicit": explicit,
             "is_surcharge": prefix.strip().startswith("+") or "extra" in folded[max(0, match.start()-20):match.end()+20] or "aufpreis" in folded[max(0, match.start()-20):match.end()+20],
+        })
+    for pair in extract_price_duration_pairs(text):
+        out.append({
+            "amount_cents": pair["amount_cents"],
+            "amount_max_cents": None,
+            "amount_type": "EXACT",
+            "start": pair["start"], "end": pair["end"], "raw": pair["raw"],
+            "explicit": True,
+            "is_surcharge": False,
+            "structured_pair": True,
         })
     return sorted(out, key=lambda x: x["start"])
 

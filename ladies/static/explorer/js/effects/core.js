@@ -2,10 +2,14 @@ import { api } from '../api/client.js';
 import * as S from '../app/selectors.js';
 import { filterPayload, profileBundleVm, formEnumWireValue } from '../data/adapters.js';
 
+const SEARCH_RADII=[5,10,20,30,50,70,100];
+const normalizeRadius=value=>SEARCH_RADII.includes(Number(value))?Number(value):20;
+
 export function createCoreEffects({store,router}) {
   let previewAbort=null, previewTimer=null, previewSeq=0;
   const toast=message=>store.dispatch({type:'TOAST',value:message});
   const state=()=>store.getState();
+  const searchPayload=()=>{const payload=filterPayload(state().search.filters);payload.radius=normalizeRadius(payload.radius);return payload;};
 
   function rawSearchRowAt(index=state().discover.index) {
     return S.discoverQueueRows(state())[index] || null;
@@ -21,7 +25,9 @@ export function createCoreEffects({store,router}) {
       const defaults=settings?.settings?.default_filters;
       if (hydrateDefaults && defaults && typeof defaults === 'object') {
         const current=state().search.filters;
-        store.dispatch({type:'SEARCH_FILTERS',filters:{...current,...defaults,selected:{...(current.selected||{}),...(defaults.selected||{})},local:{...(current.local||{}),...(defaults.local||{})}}});
+        const merged={...current,...defaults,selected:{...(current.selected||{}),...(defaults.selected||{})},local:{...(current.local||{}),...(defaults.local||{})}};
+        merged.radius=normalizeRadius(merged.radius);
+        store.dispatch({type:'SEARCH_FILTERS',filters:merged});
       }
       document.documentElement.classList.toggle('reduced-motion',!!settings?.settings?.reduced_motion);
     } catch (error) { console.warn(error); }
@@ -47,28 +53,36 @@ export function createCoreEffects({store,router}) {
   function schedulePreview({immediate=false}={}) {
     clearTimeout(previewTimer);
     const sequence=++previewSeq;
+    store.dispatch({type:'SEARCH_PREVIEW',patch:{status:'loading',count:null,error:null}});
     previewTimer=setTimeout(async()=>{
       previewAbort?.abort(); previewAbort=new AbortController();
-      store.dispatch({type:'SEARCH_PREVIEW',patch:{status:'loading',error:null}});
+      const payload=searchPayload();
       try {
-        const data=await api.searchPreview(filterPayload(state().search.filters),previewAbort.signal);
+        const data=await api.searchPreview(payload,previewAbort.signal);
         if(sequence!==previewSeq)return;
-        store.dispatch({type:'SEARCH_PREVIEW',patch:{status:'ready',count:Number(data?.count || 0),error:null}});
+        store.dispatch({type:'SEARCH_PREVIEW',patch:{
+          status:'ready',count:Number(data?.count || 0),error:null,
+          requestedRadius:Number(data?.radius_km || payload.radius),
+          effectiveRadius:Number(data?.effective_radius_km || data?.radius_km || payload.radius),
+          radiusAutoExpanded:Boolean(data?.radius_auto_expanded)
+        }});
       } catch(error) {
         if(error?.name==='AbortError'||sequence!==previewSeq)return;
-        store.dispatch({type:'SEARCH_PREVIEW',patch:{status:'error',count:null,error:error.message}});
+        store.dispatch({type:'SEARCH_PREVIEW',patch:{status:'error',count:null,error:error.message,radiusAutoExpanded:false}});
       }
-    }, immediate?0:550);
+    }, immediate?0:280);
   }
 
   async function performSearch() {
     store.dispatch({type:'SEARCH_LOADING',value:true});
     try {
-      const data=await api.search(filterPayload(state().search.filters));
-      store.dispatch({type:'SEARCH_RESULTS',results:data?.results || [],meta:data?.meta || null});
+      const data=await api.search(searchPayload());
+      const meta=data?.meta || null;
+      store.dispatch({type:'SEARCH_RESULTS',results:data?.results || [],meta});
       store.dispatch({type:'SEARCH_LOADING',value:false});
       await loadRecentSearches();
       router.replaceRoot('swipe');
+      if(meta?.radius_auto_expanded)toast(`Ladies hat den Umkreis automatisch von ${meta.requested_radius_km} auf ${meta.effective_radius_km} km erweitert.`);
       await prefetchCurrent();
     } catch(error) {
       store.dispatch({type:'SEARCH_LOADING',value:false,error:error.message}); toast(error.message);

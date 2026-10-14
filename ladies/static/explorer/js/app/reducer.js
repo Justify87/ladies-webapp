@@ -80,6 +80,7 @@ export function reducer(state=initialState, action={}) {
     case 'MESSAGE_RECORDING': next.messaging.recording = Boolean(action.value); return next;
     case 'PRICING_THREAD': next.pricing.byThread[String(action.threadId)] = {...(next.pricing.byThread[String(action.threadId)] || {}),...action.value}; return next;
     case 'PRICING_PROPOSAL': next.pricing.proposal = action.value || null; return next;
+    case 'PRICING_DRAFT': if(next.pricing.proposal)next.pricing.proposal.proposal=action.value || null; return next;
     case 'SHEET': next.ui.sheet = action.value || null; return next;
     case 'TOAST': next.ui.toast = action.value ? {message:String(action.value),nonce:Date.now()} : null; return next;
     case 'BUSY': next.ui.busy = Boolean(action.value); return next;

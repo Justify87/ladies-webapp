@@ -33,10 +33,8 @@ def fetch_search_preview_count(
     height_max: int = 200,
     selected: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
-    """Fetch only page 1 and return a trustworthy exact-radius advert count."""
-    filter_path = build_filter_path(
-        category, age_min, age_max, height_min, height_max, selected
-    )
+    """Fetch page 1 and report the count Ladies actually serves for the filter combination."""
+    filter_path = build_filter_path(category, age_min, age_max, height_min, height_max, selected)
     url = build_search_url(
         city_slug=city_slug,
         radius_km=radius_km,
@@ -56,6 +54,8 @@ def fetch_search_preview_count(
             "city": city_display,
             "city_slug": city_slug,
             "radius_km": radius_km,
+            "effective_radius_km": radius_km,
+            "radius_auto_expanded": False,
             "filter_path": filter_path,
             "count_source": "page-1-404",
         }
@@ -63,39 +63,29 @@ def fetch_search_preview_count(
     response.raise_for_status()
     config = parse_search_config(response.text)
     distance = config.get("distance_searched")
-    if distance is not None and int(distance) != int(radius_km):
-        # The upstream site may automatically enlarge the radius for sparse filter
-        # combinations. Never expose that widened count as if it matched the user's
-        # explicit radius. Treat it as an exact-radius boundary with zero trusted
-        # results instead of returning a validation error that leaves stale UI data.
+    effective_radius = int(distance) if distance is not None else int(radius_km)
+    auto_expanded = effective_radius != int(radius_km)
+    if auto_expanded:
         LOGGER.info(
-            "Search preview hard-radius boundary requested_radius=%s server_radius=%s filter_path=%s",
+            "Search preview upstream radius expansion requested_radius=%s effective_radius=%s filter_path=%s",
             radius_km,
-            distance,
+            effective_radius,
             filter_path or "<none>",
         )
-        return {
-            "count": 0,
-            "city": city_display,
-            "city_slug": city_slug,
-            "radius_km": radius_km,
-            "filter_path": filter_path,
-            "count_source": "radius-boundary-empty",
-            "radius_boundary_stopped": True,
-            "server_distance_seen": int(distance),
-        }
 
     count = config.get("advert_count")
-    source = "search-config"
+    source = "search-config-auto-radius" if auto_expanded else "search-config"
     if count is None:
         count = len({profile.advert_id for profile in parse_search_cards(response.text)})
-        source = "page-1-cards"
+        source = "page-1-cards-auto-radius" if auto_expanded else "page-1-cards"
 
     return {
         "count": int(count or 0),
         "city": city_display,
         "city_slug": city_slug,
-        "radius_km": radius_km,
+        "radius_km": int(radius_km),
+        "effective_radius_km": effective_radius,
+        "radius_auto_expanded": auto_expanded,
         "filter_path": filter_path,
         "count_source": source,
     }
@@ -107,19 +97,13 @@ def install_search_preview(
     default_city: str = "leipzig",
     default_radius: int = 20,
 ) -> None:
-    # Reuse the same HTTP session as the canonical SearchService when installed
-    # through the normal application composition path.
     http = app.extensions.get("ladies_http") or build_session()
 
     @app.post("/api/search-preview")
     def api_search_preview():
         payload = request.get_json(silent=True) or {}
         try:
-            params = parse_search_request(
-                payload,
-                default_city=default_city,
-                default_radius=default_radius,
-            )
+            params = parse_search_request(payload, default_city=default_city, default_radius=default_radius)
             city_slug, city_display = resolve_location(http, params["city_raw"])
             result = fetch_search_preview_count(
                 http,
