@@ -5,11 +5,13 @@ import { createCommands } from './app/commands.js';
 import { createController } from './app/controller.js';
 import { logClient } from './api/client.js';
 import { installRegressionUi } from './regressions.js';
+import { installUxPatch } from './ux_patch.js';
 
 const store=createStore();
 const router=createRouter(store);
 const effects=createEffects({store,router});
 const commands=createCommands({store,router,effects});
+installUxPatch({store});
 createController({store,router,effects,commands});
 installRegressionUi({store,effects});
 window.addEventListener('error',event=>logClient('error','window',event.message,{source:event.filename,line:event.lineno,column:event.colno}));
