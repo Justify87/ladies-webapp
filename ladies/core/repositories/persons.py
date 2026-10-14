@@ -5,12 +5,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 import orjson
-from sqlalchemy import delete, desc, func, or_, select, update
+from sqlalchemy import delete, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from ladies_v9.database import Database
 from ladies_v9.domain import ProfileData
-from ladies_v9.identity import MatchResult, hash_from_hex, match_identity, normalize_phone_number
+from ladies_v9.identity import MatchResult, hash_from_hex, normalize_phone_number
 from ladies_v9.media import ArchiveManager, ArchivedMedia
 from ladies_v9.models import (
     ChangeEvent,
@@ -34,6 +34,9 @@ from ladies_v9.models import (
 )
 from ladies_v9.utils import parse_iso_datetime
 
+from .person_identity import resolve_identity
+from .person_merge import MergeHandler, merge_persons_in_session
+
 
 def _dumps(value: Any) -> str:
     return orjson.dumps(value, option=orjson.OPT_SORT_KEYS).decode("utf-8")
@@ -56,18 +59,12 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat()
 
 
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
-
-
 class PersonRepository:
-    """Person, listing, identity and user-entered person data boundary.
+    """Persistence boundary for person/listing data and person-owned mutations.
 
-    Profile ingestion, identity evidence, merge/split and state-changing person
-    operations are repository-owned. During the final read-model migration only
-    the large detail/list serializers still delegate to the legacy store.
+    Identity resolution and merge mechanics live in dedicated modules. Integration
+    side effects for a merge are configured explicitly by the application
+    composition root and run in the same transaction before the source is removed.
     """
 
     def __init__(
@@ -81,6 +78,10 @@ class PersonRepository:
         self.archive = archive
         self.settings_repository = settings_repository
         self._read_store = read_store
+        self._identity_merge_handlers: tuple[MergeHandler, ...] = ()
+
+    def set_identity_merge_handlers(self, *handlers: MergeHandler) -> None:
+        self._identity_merge_handlers = tuple(handler for handler in handlers if handler)
 
     def listing_target(self, advert_id):
         with self.database.session() as db:
@@ -154,7 +155,7 @@ class PersonRepository:
             normalized_phone = normalize_phone_number(
                 profile.phone_display or profile.tel_url or profile.whatsapp_url
             )
-            target_person_id, result, candidate_person_id = self._resolve_identity(
+            target_person_id, result, candidate_person_id = resolve_identity(
                 db,
                 listing=listing,
                 source_profile_external_id=profile.source_profile_id,
@@ -163,11 +164,12 @@ class PersonRepository:
             )
             if target_person_id != listing.person_id and result.decision == "MATCH":
                 old_person_id = listing.person_id
-                self._merge_persons_in_session(
+                merge_persons_in_session(
                     db,
                     source_person_id=old_person_id,
                     target_person_id=target_person_id,
                     action="AUTO_MATCH",
+                    before_merge_handlers=self._identity_merge_handlers,
                 )
                 listing = db.get(Listing, listing.listing_id)
 
@@ -346,105 +348,6 @@ class PersonRepository:
                 }),
             ))
             return self._read_store._profile_payload(db, listing, snapshot)
-
-    def _resolve_identity(
-        self,
-        db: Session,
-        *,
-        listing: Listing,
-        source_profile_external_id: str | None,
-        normalized_phone: str | None,
-        image_hashes: list[int],
-    ) -> tuple[int, MatchResult, int | None]:
-        if listing.match_decision == "MANUAL_SPLIT":
-            return (
-                listing.person_id,
-                MatchResult(
-                    "MANUAL_SPLIT",
-                    "Manuelle Trennung: automatisches Re-Merge gesperrt.",
-                ),
-                None,
-            )
-
-        candidates = db.scalars(
-            select(Person).where(Person.person_id != listing.person_id)
-        ).all()
-        evaluated: list[tuple[int, MatchResult]] = []
-        for person in candidates:
-            source_ids = set(db.scalars(
-                select(SourceProfile.external_profile_id).where(
-                    SourceProfile.person_id == person.person_id,
-                    SourceProfile.external_profile_id.is_not(None),
-                )
-            ).all())
-            phones = set(db.scalars(
-                select(PersonIdentifier.normalized_value).where(
-                    PersonIdentifier.person_id == person.person_id,
-                    PersonIdentifier.kind == "PHONE",
-                )
-            ).all())
-            hash_values = set(db.scalars(
-                select(PersonIdentifier.normalized_value).where(
-                    PersonIdentifier.person_id == person.person_id,
-                    PersonIdentifier.kind == "IMAGE_DHASH",
-                )
-            ).all())
-            old_hashes = []
-            for value in hash_values:
-                try:
-                    old_hashes.append(hash_from_hex(value))
-                except ValueError:
-                    pass
-            match = match_identity(
-                old_hashes,
-                image_hashes,
-                old_phones=phones,
-                new_phone=normalized_phone,
-                old_source_profile_ids=source_ids,
-                new_source_profile_id=source_profile_external_id,
-            )
-            if match.decision != "NO_MATCH":
-                evaluated.append((person.person_id, match))
-
-        def rank(item: tuple[int, MatchResult]) -> tuple[int, int, int, int, int, int]:
-            match = item[1]
-            decision_rank = {
-                "MATCH": 3,
-                "STRONG_CANDIDATE": 2,
-                "CANDIDATE": 1,
-                "NO_MATCH": 0,
-            }.get(match.decision, 0)
-            return (
-                decision_rank,
-                int(match.source_profile_match),
-                int(match.phone_match),
-                match.strong_image_matches,
-                match.very_strong_image_matches,
-                -(match.best_distance if match.best_distance is not None else 999),
-            )
-
-        matches = sorted(
-            [item for item in evaluated if item[1].decision == "MATCH"],
-            key=rank,
-            reverse=True,
-        )
-        if matches and (len(matches) == 1 or rank(matches[0]) > rank(matches[1])):
-            return matches[0][0], matches[0][1], None
-        weak = sorted(
-            [
-                item for item in evaluated
-                if item[1].decision in {"STRONG_CANDIDATE", "CANDIDATE"}
-            ],
-            key=rank,
-            reverse=True,
-        )
-        if weak:
-            return listing.person_id, weak[0][1], weak[0][0]
-        return (
-            listing.person_id,
-            MatchResult("NO_MATCH", "Keine ausreichende Identity-Evidence."),
-            None,
-        )
 
     @staticmethod
     def _upsert_source_profile(
@@ -1007,119 +910,14 @@ class PersonRepository:
         if int(source_person_id) == int(target_person_id):
             return self.person_detail(target_person_id)
         with self.database.session() as db:
-            self._merge_persons_in_session(
+            merge_persons_in_session(
                 db,
                 source_person_id=int(source_person_id),
                 target_person_id=int(target_person_id),
                 action="MANUAL_MERGE",
+                before_merge_handlers=self._identity_merge_handlers,
             )
         return self.person_detail(target_person_id)
-
-    def _merge_persons_in_session(
-        self,
-        db: Session,
-        *,
-        source_person_id: int,
-        target_person_id: int,
-        action: str,
-    ) -> None:
-        source = db.get(Person, source_person_id)
-        target = db.get(Person, target_person_id)
-        if source is None or target is None or source_person_id == target_person_id:
-            return
-        source_state = db.get(PersonUserState, source_person_id)
-        target_state = db.get(PersonUserState, target_person_id)
-        if target_state is None:
-            target_state = PersonUserState(person_id=target_person_id)
-            db.add(target_state)
-            db.flush()
-        if source_state:
-            if target_state.preference == "NONE" and source_state.preference != "NONE":
-                target_state.preference = source_state.preference
-            target_state.favorite = target_state.favorite or source_state.favorite
-            if (
-                target_state.repeat_interest == "UNKNOWN"
-                and source_state.repeat_interest != "UNKNOWN"
-            ):
-                target_state.repeat_interest = source_state.repeat_interest
-            if source_state.private_note:
-                target_state.private_note = (
-                    (target_state.private_note or "")
-                    + ("\n\n" if target_state.private_note else "")
-                    + source_state.private_note
-                )[:10000]
-
-        listings = db.scalars(
-            select(Listing).where(Listing.person_id == source_person_id)
-        ).all()
-        for listing in listings:
-            db.add(IdentityEvent(
-                listing_id=listing.listing_id,
-                previous_person_id=source_person_id,
-                new_person_id=target_person_id,
-                action=action,
-                evidence_json=_dumps({"reason": listing.match_reason}),
-            ))
-            listing.person_id = target_person_id
-        for listing in db.scalars(
-            select(Listing).where(Listing.candidate_person_id == source_person_id)
-        ).all():
-            listing.candidate_person_id = target_person_id
-        for row in db.scalars(
-            select(SourceProfile).where(SourceProfile.person_id == source_person_id)
-        ).all():
-            duplicate = None
-            if row.external_profile_id:
-                duplicate = db.scalar(select(SourceProfile).where(
-                    SourceProfile.person_id == target_person_id,
-                    SourceProfile.source == row.source,
-                    SourceProfile.external_profile_id == row.external_profile_id,
-                ))
-            if duplicate:
-                for listing in db.scalars(
-                    select(Listing).where(Listing.source_profile_id == row.source_profile_id)
-                ).all():
-                    listing.source_profile_id = duplicate.source_profile_id
-                db.delete(row)
-            else:
-                row.person_id = target_person_id
-        for row in db.scalars(
-            select(PersonIdentifier).where(PersonIdentifier.person_id == source_person_id)
-        ).all():
-            duplicate = db.scalar(select(PersonIdentifier).where(
-                PersonIdentifier.person_id == target_person_id,
-                PersonIdentifier.kind == row.kind,
-                PersonIdentifier.normalized_value == row.normalized_value,
-            ))
-            if duplicate:
-                duplicate.last_seen_at = max(
-                    _as_utc(duplicate.last_seen_at),
-                    _as_utc(row.last_seen_at),
-                )
-                db.delete(row)
-            else:
-                row.person_id = target_person_id
-        for model in (PriceList, Encounter, ChangeEvent, IdentityEvidence):
-            db.execute(
-                update(model)
-                .where(model.person_id == source_person_id)
-                .values(person_id=target_person_id)
-            )
-        if source_state:
-            db.delete(source_state)
-        target.first_seen_at = min(
-            _as_utc(target.first_seen_at),
-            _as_utc(source.first_seen_at),
-        )
-        target.last_seen_at = max(
-            _as_utc(target.last_seen_at),
-            _as_utc(source.last_seen_at),
-        )
-        target.updated_at = utcnow()
-        if not target.display_name and source.display_name:
-            target.display_name = source.display_name
-        db.delete(source)
-        db.flush()
 
     def split_listing(self, listing_id: int) -> dict[str, Any]:
         with self.database.session() as db:
