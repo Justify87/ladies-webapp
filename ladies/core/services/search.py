@@ -11,6 +11,7 @@ from ladies_v9.utils import clean_text
 
 LOGGER = logging.getLogger("ladies_explorer.search")
 _RADIUS_RE = re.compile(r"meldet Radius\s+(\d+)\s+km", re.IGNORECASE)
+ALLOWED_RADII = (5, 10, 20, 30, 50, 70, 100)
 
 
 def parse_search_request(
@@ -21,6 +22,8 @@ def parse_search_request(
 ) -> dict[str, Any]:
     city_raw = clean_text(str(payload.get("city") or default_city))
     radius = read_int(payload, "radius", default=default_radius, minimum=1, maximum=200)
+    if radius not in ALLOWED_RADII:
+        raise ValidationError(f"Ungültiger Umkreis. Erlaubt sind: {', '.join(str(x) for x in ALLOWED_RADII)} km.")
     category = clean_text(str(payload.get("category") or ""))
     age_min = read_int(payload, "age_min", default=18, minimum=18, maximum=60)
     age_max = read_int(payload, "age_max", default=60, minimum=age_min, maximum=60)
