@@ -67,7 +67,7 @@ export const api = Object.freeze({
   messagingDisconnect: () => request('/api/messaging/disconnect',{method:'POST'}),
   messagingLogout: () => request('/api/messaging/logout',{method:'POST'}),
   messagingQr: () => request('/api/messaging/qr'),
-  threads: filter => request(`/api/messaging/threads?filter=${encodeURIComponent(filter || 'ALL')}`),
+  threads: () => request('/api/messaging/threads?filter=ALL'),
   thread: (threadId,{limit=100,before=null}={}) => request(`/api/messaging/threads/${threadId}?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`),
   ensurePersonThread: (personId,listingId=null) => request(`/api/messaging/person/${personId}/thread`,{method:'POST',body:{listing_id:listingId}}),
   personMessaging: (personId,listingId=null) => request(`/api/messaging/person/${personId}${listingId ? `?listing_id=${listingId}` : ''}`),
