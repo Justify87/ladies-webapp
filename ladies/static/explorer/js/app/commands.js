@@ -69,6 +69,7 @@ export function createCommands({store,router,effects}) {
     'settings-visual-info':()=>store.dispatch({type:'SHEET',value:{kind:'visual-info',payload:{storage:state().settings.storage}}}),
     'settings-storage-info':()=>store.dispatch({type:'SHEET',value:{kind:'storage-info',payload:{storage:state().settings.storage}}}),
     'settings-backup-info':()=>store.dispatch({type:'SHEET',value:{kind:'backup-info',payload:{}}}),
+    'pricing-manual':()=>{const t=S.currentThread(state());if(!t)return;const pricing=state().pricing.byThread[String(t.threadId)]||{};const pending=(pricing.timeline||[]).find(item=>String(item.status||'').toUpperCase()==='PENDING');if(pending?.price_extraction_id)return effects.openExistingPricing(Number(pending.price_extraction_id));return effects.openPricing(t.threadId,null);},
     'pricing-open':el=>effects.openPricing(Number(el.dataset.threadId),Number(el.dataset.messageId||0)||null),
     'pricing-open-existing':el=>effects.openExistingPricing(Number(el.dataset.extractionId)),
     'pricing-reject':el=>effects.rejectPricing(Number(el.dataset.extractionId)),
