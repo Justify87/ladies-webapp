@@ -25,7 +25,7 @@ export function renderApp(state) {
   else if(route.name==='profile') {
     const pid=Number(route.params?.personId||0);
     const detail=S.detailFor(state,pid);
-    body=detail ? renderStandalone(detail,{activeTab:S.profileTab(state,pid),mediaIndex:S.profileMediaIndex(state,pid),filters:state.search.filters}) : '<div class="screen-view"><div class="loading-state"><span class="spinner"></span>Profil wird geladen …</div></div>';
+    body=detail ? renderStandalone(detail,{activeTab:S.profileTab(state,pid),mediaIndex:S.profileMediaIndex(state,pid),filters:state.search.filters,autoplay:!!state.settings.values.autoplay_videos,showDescriptionChanges:!!state.settings.values.show_description_changes}) : '<div class="screen-view"><div class="loading-state"><span class="spinner"></span>Profil wird geladen …</div></div>';
   } else body='<div class="screen-view"></div>';
   return {header:renderHeader(state,route),body,nav:renderBottomNav(state,route),sheet:renderSheet(state),toast:state.ui.toast?.message||''};
 }

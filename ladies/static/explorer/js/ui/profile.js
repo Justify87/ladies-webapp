@@ -7,9 +7,9 @@ const chips = values => `<div class="offer-chips">${values.map(v=>`<span>${e(v)}
 const traitValue=(detail,...keys)=>firstValue(detail.traits,keys) || '—';
 const serviceFlag=(detail,...aliases)=>{const names=flatten(detail.services).map(x=>String(x).toLowerCase());return names.some(n=>aliases.some(x=>n===x.toLowerCase()||n.includes(x.toLowerCase())))?'Ja':'—';};
 
-export function renderMedia(vm,index=0,{standalone=false}={}) {
+export function renderMedia(vm,index=0,{standalone=false,autoplay=false}={}) {
   const media=vm.media || []; const i=clamp(index,0,Math.max(0,media.length-1)); const current=media[i];
-  const body=current ? (current.kind==='VIDEO' ? `<video src="${a(current.src)}" ${current.poster?`poster="${a(current.poster)}"`:''} muted autoplay loop playsinline preload="metadata"></video>` : `<img src="${a(current.src)}" alt="Profilbild von ${a(vm.name)}" draggable="false">`) : `<div class="media-fallback">${icon('image')}<span>Kein Bild verfügbar</span></div>`;
+  const body=current ? (current.kind==='VIDEO' ? `<video src="${a(current.src)}" ${current.poster?`poster="${a(current.poster)}"`:''} ${autoplay?'muted autoplay loop':'controls'} playsinline preload="metadata"></video>` : `<img src="${a(current.src)}" alt="Profilbild von ${a(vm.name)}" draggable="false">`) : `<div class="media-fallback">${icon('image')}<span>Kein Bild verfügbar</span></div>`;
   return `<div class="profile-media ${standalone?'standalone-media':''}" data-profile-media data-person-id="${a(vm.personId)}">${body}
     ${media.length>1?`<div class="media-story">${media.slice(0,10).map((_,n)=>`<i class="${n===i?'active':''}"></i>`).join('')}</div>`:''}
     <span class="media-count">${media.length?`${i+1} / ${media.length}`:'—'}</span>
@@ -80,14 +80,15 @@ function renderMyData(detail) {
 }
 
 function eventTitle(event){const type=String(event.event_type || event.field_key || '').toUpperCase();if(type==='LISTING_FIRST_SNAPSHOT')return 'Anzeige entdeckt';if(type==='NEW_LISTING_FOR_PERSON')return 'Person wiedererkannt';if(type.includes('MEDIA'))return 'Bilder geändert';if(type==='STATUS_CHANGED')return 'Status geändert';return event.field_key?`${event.field_key} geändert`:'Profil geändert';}
-function renderHistory(detail) {
-  return `<section class="profile-card"><div class="profile-card-head"><h2>${icon('clock')}Profilverlauf</h2></div><div class="timeline">${detail.changes.length?detail.changes.map(ev=>`<div class="timeline-row"><i></i><span><b>${e(eventTitle(ev))}</b><small>${e(fmtDate(ev.created_at))}</small></span>${ev.from_snapshot_id&&ev.to_snapshot_id?`<button data-action="snapshot-compare" data-a="${a(ev.from_snapshot_id)}" data-b="${a(ev.to_snapshot_id)}">Vergleichen</button>`:''}</div>`).join(''):'<p class="muted">Noch keine Änderungen gespeichert.</p>'}</div></section>
+function renderHistory(detail,{showDescriptionChanges=false}={}) {
+  const changes=showDescriptionChanges?(detail.changes||[]):(detail.changes||[]).filter(ev=>String(ev.field_key||'').toLowerCase()!=='description');
+  return `<section class="profile-card"><div class="profile-card-head"><h2>${icon('clock')}Profilverlauf</h2></div><div class="timeline">${changes.length?changes.map(ev=>`<div class="timeline-row"><i></i><span><b>${e(eventTitle(ev))}</b><small>${e(fmtDate(ev.created_at))}</small></span>${ev.from_snapshot_id&&ev.to_snapshot_id?`<button data-action="snapshot-compare" data-a="${a(ev.from_snapshot_id)}" data-b="${a(ev.to_snapshot_id)}">Vergleichen</button>`:''}</div>`).join(''):'<p class="muted">Noch keine Änderungen gespeichert.</p>'}</div></section>
   <section class="profile-card"><div class="profile-card-head"><h2>${icon('list')}Anzeigen</h2></div>${detail.listings.map(row=>`<div class="listing-row"><span><b>#${e(row.advert_id || row.external_listing_id || row.listing_id)}</b><small>${e(row.current_status || '')} · ${e(fmtDate(row.last_seen_at))}</small></span>${row.current_url?`<a href="${a(row.current_url)}" target="_blank" rel="noopener">${icon('external')}</a>`:''}</div>`).join('')}</section>`;
 }
 
-export function renderTabs(detail,active,filters) {
+export function renderTabs(detail,active,filters,{showDescriptionChanges=false}={}) {
   const tabs=[['info','Info'],['offer','Angebot'],['analysis','Analyse'],['data','Meine Daten'],['history','Verlauf']];
-  const panels={info:renderInfo(detail),offer:renderOffer(detail),analysis:renderAnalysis(detail,filters),data:renderMyData(detail),history:renderHistory(detail)};
+  const panels={info:renderInfo(detail),offer:renderOffer(detail),analysis:renderAnalysis(detail,filters),data:renderMyData(detail),history:renderHistory(detail,{showDescriptionChanges})};
   return `<div class="profile-details"><nav class="profile-tabs">${tabs.map(([id,label])=>`<button class="${active===id?'active':''}" data-action="profile-tab" data-tab="${id}" data-person-id="${a(detail.personId)}">${e(label)}</button>`).join('')}</nav><div class="profile-panel active">${panels[active] || panels.info}</div></div>`;
 }
 
@@ -95,11 +96,11 @@ export function renderIdentity(vm) {
   return `<div class="profile-identity"><div class="profile-name-row"><h1>${e(vm.name)}${vm.age?`, ${e(String(vm.age).replace(/\s*Jahre?.*/i,''))}`:''}</h1>${vm.activeToday?'<span class="online-pill">Heute online</span>':''}</div><div class="profile-meta-place">${icon('pin')}${e(vm.city || 'Ort unbekannt')}</div><div class="badge-row">${vm.listingCount>1?`<span class="badge purple">${icon('users')}Person bekannt · ${vm.listingCount} Anzeigen</span>`:''}${vm.hasVideo?`<span class="badge blue">${icon('play')}Video</span>`:''}</div></div>`;
 }
 
-export function renderStandalone(detail,{activeTab='info',mediaIndex=0,filters={selected:{}}}={}) {
-  return `<div class="screen-view standalone-profile"><div class="screen-scroll" data-scroll-root><section class="standalone-media-wrap"><button class="profile-back-button" data-action="back" aria-label="Zurück">${icon('back')}</button><button class="profile-more-button" data-action="profile-more" data-person-id="${a(detail.personId)}">${icon('more')}</button>${renderMedia(detail,mediaIndex,{standalone:true})}</section><section class="standalone-profile-body">${renderIdentity(detail)}${renderActionRail(detail)}${renderTabs(detail,activeTab,filters)}</section></div></div>`;
+export function renderStandalone(detail,{activeTab='info',mediaIndex=0,filters={selected:{}},autoplay=false,showDescriptionChanges=false}={}) {
+  return `<div class="screen-view standalone-profile"><div class="screen-scroll" data-scroll-root><section class="standalone-media-wrap"><button class="profile-back-button" data-action="back" aria-label="Zurück">${icon('back')}</button><button class="profile-more-button" data-action="profile-more" data-person-id="${a(detail.personId)}">${icon('more')}</button>${renderMedia(detail,mediaIndex,{standalone:true,autoplay})}</section><section class="standalone-profile-body">${renderIdentity(detail)}${renderActionRail(detail)}${renderTabs(detail,activeTab,filters,{showDescriptionChanges})}</section></div></div>`;
 }
 
-export function renderSwipe(bundle,detail,{activeTab='info',mediaIndex=0,filters={selected:{}}}={}) {
+export function renderSwipe(bundle,detail,{activeTab='info',mediaIndex=0,filters={selected:{}},autoplay=false,showDescriptionChanges=false}={}) {
   const vm=detail || bundle;
-  return `<div class="screen-view swipe-screen"><div class="screen-scroll" data-scroll-root data-swipe-scroll><section class="swipe-media-panel">${renderMedia(vm,mediaIndex)}</section><section class="swipe-details">${renderIdentity(vm)}${renderActionRail(vm)}${detail?renderTabs(detail,activeTab,filters):`<section class="profile-card loading-card"><span class="spinner"></span><span>Profildetails werden geladen …</span></section>`}</section></div></div>`;
+  return `<div class="screen-view swipe-screen"><div class="screen-scroll" data-scroll-root data-swipe-scroll><section class="swipe-media-panel">${renderMedia(vm,mediaIndex,{autoplay})}</section><section class="swipe-details">${renderIdentity(vm)}${renderActionRail(vm)}${detail?renderTabs(detail,activeTab,filters,{showDescriptionChanges}):`<section class="profile-card loading-card"><span class="spinner"></span><span>Profildetails werden geladen …</span></section>`}</section></div></div>`;
 }
