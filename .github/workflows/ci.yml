@@ -163,6 +163,8 @@ jobs:
           assert.equal(newSheet.scrollTop,215);
           JS
 
+          node --experimental-default-type=module tools/check_search_intelligence.mjs
+
       - name: Check project metadata syntax
         run: |
           python - <<'PY'
