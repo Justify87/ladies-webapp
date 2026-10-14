@@ -94,6 +94,7 @@ jobs:
           node --experimental-default-type=module - <<'JS'
           import assert from 'node:assert/strict';
           import { canonicalPricingService, currentSavedPricingExtractionId } from './ladies/static/explorer/js/ux_patch.js';
+          import { captureScrollState, updateScrollableRegion } from './ladies/static/explorer/js/app/scroll_state.js';
 
           const config={filter_groups:[{key:'service',options:[
             {label:'ZK',value:'zungenkuss'},
@@ -115,6 +116,51 @@ jobs:
             {price_extraction_id:7,status:'ACCEPTED',accepted_price_list_id:11},
             {price_extraction_id:8,status:'ACCEPTED_NO_CHANGE',accepted_price_list_id:11}
           ]),8);
+
+          function hostWithRoots(roots,nextRoots=[]){
+            let writes=0;
+            return {
+              roots,
+              nextRoots,
+              lastSelector:null,
+              get writes(){return writes;},
+              querySelectorAll(selector){this.lastSelector=selector;return this.roots;},
+              set innerHTML(value){this.html=value;writes+=1;this.roots=this.nextRoots;}
+            };
+          }
+
+          const oldRoot={dataset:{scrollKey:'main'},id:'',scrollTop:640,scrollLeft:3};
+          const replacementRoot={dataset:{scrollKey:'main'},id:'',scrollTop:0,scrollLeft:0};
+          const screen=hostWithRoots([oldRoot],[replacementRoot]);
+          const snapshot=captureScrollState(screen);
+          let result=updateScrollableRegion(screen,'body-v2',{previousHtml:'body-v1',snapshot});
+          assert.equal(result.replaced,true);
+          assert.equal(result.restored,true);
+          assert.equal(replacementRoot.scrollTop,640);
+          assert.equal(replacementRoot.scrollLeft,3);
+
+          const writesAfterRestore=screen.writes;
+          result=updateScrollableRegion(screen,'body-v2',{previousHtml:'body-v2',snapshot:captureScrollState(screen)});
+          assert.equal(result.replaced,false);
+          assert.equal(screen.writes,writesAfterRestore);
+
+          const freshRoot={dataset:{scrollKey:'main'},id:'',scrollTop:88,scrollLeft:4};
+          screen.nextRoots=[freshRoot];
+          result=updateScrollableRegion(screen,'body-new-route',{previousHtml:'body-v2',force:true,reset:true});
+          assert.equal(result.replaced,true);
+          assert.equal(result.restored,false);
+          assert.equal(freshRoot.scrollTop,0);
+          assert.equal(freshRoot.scrollLeft,0);
+
+          const oldSheet={dataset:{},id:'',scrollTop:215,scrollLeft:0};
+          const newSheet={dataset:{},id:'',scrollTop:0,scrollLeft:0};
+          const overlay=hostWithRoots([oldSheet],[newSheet]);
+          const sheetSnapshot=captureScrollState(overlay,'.bottom-sheet');
+          assert.equal(overlay.lastSelector,'.bottom-sheet');
+          result=updateScrollableRegion(overlay,'sheet-v2',{previousHtml:'sheet-v1',snapshot:sheetSnapshot,selector:'.bottom-sheet'});
+          assert.equal(result.replaced,true);
+          assert.equal(result.restored,true);
+          assert.equal(newSheet.scrollTop,215);
           JS
 
       - name: Check project metadata syntax
