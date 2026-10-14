@@ -14,6 +14,7 @@ export function createEncounterEffects({store,getEffects}) {
       const performed=Boolean(row.querySelector('[name="performed"]')?.checked);
       return name?{service_name:name,amount_eur:amount===''?null:Number(amount),performed,note:note||null}:null;
     }).filter(Boolean);
+    if(!encounterId&&!services.length)return toast('Mindestens einen Service eingeben');
     try {
       if(encounterId)await api.updateEncounter(personId,encounterId,{services});
       else await api.addEncounter(personId,{services});
