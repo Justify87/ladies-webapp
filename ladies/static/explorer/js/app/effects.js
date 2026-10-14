@@ -33,7 +33,7 @@ export function createEffects({store,router}) {
         personId
       };
       const replayLikes=state.settings.values.replay_likes!==false;
-      const hideLikes=state.search.filters.local?.hideLikes!==false;
+      const hideLikes=Boolean(state.search.filters.local?.hideLikes);
       const hideDislikes=state.search.filters.local?.hideDislikes!==false;
       if(decision==='LIKE')await core.mutatePerson(personId,{preference:'LIKE'});
       else if(decision==='DISLIKE')await core.mutatePerson(personId,{preference:'DISLIKE'});

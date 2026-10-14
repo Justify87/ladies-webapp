@@ -51,7 +51,7 @@ function enhanceSearchToggle(store) {
       input=document.querySelector('#screenHost input[data-local-filter="hideLikes"]');
     }
   }
-  if(input)input.checked=state.search.filters.local?.hideLikes!==false;
+  if(input)input.checked=Boolean(state.search.filters.local?.hideLikes);
 }
 
 function enhanceGrid(store) {
@@ -140,6 +140,7 @@ function enhanceDataCapture(store) {
 }
 
 export function installRequestedExplorerFixes({store,effects}) {
+  let wasSearchLoading=Boolean(store.getState().search.loading);
   const enhance=()=>{
     enhanceSearchToggle(store);
     enhanceGrid(store);
@@ -179,6 +180,11 @@ export function installRequestedExplorerFixes({store,effects}) {
     if(event.target.closest('.requested-data-capture [data-action="rating-select"]'))queueMicrotask(()=>enhanceRatings());
   });
 
-  store.subscribe(()=>queueMicrotask(enhance));
+  store.subscribe(()=>{
+    const loading=Boolean(store.getState().search.loading);
+    if(wasSearchLoading&&!loading)gridDismissed.clear();
+    wasSearchLoading=loading;
+    queueMicrotask(enhance);
+  });
   enhance();
 }
