@@ -91,6 +91,7 @@ export const api = Object.freeze({
   createPriceProposal: (threadId,payload) => request(`/api/pricing/threads/${threadId}/proposals`,{method:'POST',body:payload}),
   priceProposal: id => request(`/api/pricing/proposals/${id}`),
   acceptPriceProposal: (id,payload) => request(`/api/pricing/proposals/${id}/accept`,{method:'POST',body:payload}),
+  revisePriceProposal: id => request(`/api/pricing/proposals/${id}/revise`,{method:'POST'}),
   rejectPriceProposal: id => request(`/api/pricing/proposals/${id}/reject`,{method:'POST'}),
   currentPricing: personId => request(`/api/pricing/person/${personId}/current`),
   pricingHistory: (personId,limit=30) => request(`/api/pricing/person/${personId}/history?limit=${limit}`)

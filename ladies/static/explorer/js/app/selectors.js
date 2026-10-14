@@ -7,7 +7,7 @@ export function visibleSearchRows(state) {
   const local=state.search.filters.local || {};
   return searchRows(state).filter(row=>{
     if(local.videoOnly && !row.hasVideo)return false;
-    if(local.likesOnly && row.preference!=='LIKE')return false;
+    if(local.hideDislikes!==false && row.preference==='DISLIKE')return false;
     if(local.photosOnly && !(row.thumbnail || row.media?.length))return false;
     const mode=String(local.imageMode || 'ALL').toUpperCase();
     const markerSource=row.markers ?? row.image_markers ?? '';
@@ -21,7 +21,7 @@ export function visibleSearchRows(state) {
 }
 export function discoverQueueRows(state) {
   const replay=state.settings.values.replay_likes !== false;
-  return visibleSearchRows(state).filter(row=>row.preference!=='DISLIKE' && (replay || row.preference!=='LIKE'));
+  return visibleSearchRows(state).filter(row=>replay || row.preference!=='LIKE');
 }
 
 export const bundleFor = (state, advertId) => state.profiles.bundles[String(advertId)] || null;
@@ -63,6 +63,10 @@ export const currentThread = state => {
   else if(detailState){vm.favorite=Boolean(detailState.favorite);vm.preference=detailState.preference||vm.preference;}
   else if(searchState){vm.favorite=Boolean(searchState.favorite);vm.preference=searchState.preference||vm.preference;}
   else if(listState){vm.favorite=Boolean(listState.favorite);vm.preference=listState.preference||vm.preference;}
+  const endpointId=Number(vm.selectedEndpoint?.endpoint_id||vm.selected_endpoint?.endpoint_id||vm.endpoint?.endpoint_id||vm.endpoints?.[0]?.endpoint_id||0);
+  const contact=endpointId?state.messaging.contactByEndpoint?.[String(endpointId)]||null:null;
+  vm.whatsappContact=contact;
+  vm.whatsappAvatar=contact?.profile_picture_url||'';
   return vm;
 };
 export const unreadTotal = state => (state.messaging.threads || []).reduce((sum,row)=>sum+Number(row.unread_count || row.unread || 0),0);

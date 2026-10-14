@@ -76,6 +76,11 @@ export function reducer(state=initialState, action={}) {
       if (action.value) next.messaging.presenceByThread[key] = action.value; else delete next.messaging.presenceByThread[key];
       return next;
     }
+    case 'MESSAGE_CONTACT_INFO': {
+      const key=String(Number(action.endpointId||0)); if(key==='0')return state;
+      next.messaging.contactByEndpoint[key]={...(next.messaging.contactByEndpoint[key]||{}),...(action.value||{})};
+      return next;
+    }
     case 'ASSIGNMENT': next.messaging.assignment = action.value || null; return next;
     case 'MESSAGE_RECORDING': next.messaging.recording = Boolean(action.value); return next;
     case 'PRICING_THREAD': next.pricing.byThread[String(action.threadId)] = {...(next.pricing.byThread[String(action.threadId)] || {}),...action.value}; return next;

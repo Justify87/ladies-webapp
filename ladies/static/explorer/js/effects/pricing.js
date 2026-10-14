@@ -15,24 +15,30 @@ export function createPricingEffects({store,getEffects}) {
   async function acceptPricing(form){
     const id=Number(form.dataset.extractionId),extraction=state().pricing.proposal;
     if(!id||!extraction?.proposal)return toast('Preisvorschlag fehlt');
-    const proposal=structuredClone(extraction.proposal),fd=new FormData(form);
-    proposal.offers=(proposal.offers||[]).flatMap((item,i)=>fd.has(`offer_keep_${i}`)?[{...item,label:String(fd.get(`offer_label_${i}`)||'').trim()||null,duration_minutes:fd.get(`offer_duration_${i}`)===''?null:Number(fd.get(`offer_duration_${i}`)),amount_cents:fd.get(`offer_amount_${i}`)===''?null:Math.round(Number(fd.get(`offer_amount_${i}`))*100)}]:[]);
-    proposal.service_rules=(proposal.service_rules||[]).flatMap((item,i)=>fd.has(`rule_keep_${i}`)?[{...item,raw_label:String(fd.get(`rule_label_${i}`)||item.raw_label||'').trim(),status:String(fd.get(`rule_status_${i}`)||item.status||'UNKNOWN'),amount_cents:fd.get(`rule_amount_${i}`)===''?null:Math.round(Number(fd.get(`rule_amount_${i}`))*100)}]:[]);
-    proposal.conditions=(proposal.conditions||[]).flatMap((item,i)=>fd.has(`condition_keep_${i}`)?[{...item,label:String(fd.get(`condition_label_${i}`)||item.label||'').trim(),amount_cents:fd.get(`condition_amount_${i}`)===''?null:Math.round(Number(fd.get(`condition_amount_${i}`))*100)}]:[]);
+    const proposal=structuredClone(extraction.proposal);
     try{
       await api.acceptPriceProposal(id,{proposal});
+      const t=S.currentThread(state());
+      if(t)await loadPricingForThread(t.threadId);
       store.dispatch({type:'PRICING_PROPOSAL',value:null});
       toast('Preise gespeichert');
-      const t=S.currentThread(state());
-      if(t)await Promise.all([loadPricingForThread(t.threadId),getEffects().loadThread?.(t.threadId)]);
       const route=S.currentRoute(state());
       if(route.params?.personId)await getEffects().loadPerson(route.params.personId,{force:true});
     }catch(error){toast(error.message);}
   }
 
-  async function rejectPricing(id){try{await api.rejectPriceProposal(id);store.dispatch({type:'PRICING_PROPOSAL',value:null});toast('Preisvorschlag abgelehnt');const t=S.currentThread(state());if(t)await loadPricingForThread(t.threadId);}catch(error){toast(error.message);} }
+  async function revisePricing(id){
+    try{
+      const proposal=await api.revisePriceProposal(id);
+      store.dispatch({type:'PRICING_PROPOSAL',value:proposal});
+      const t=S.currentThread(state());if(t)await loadPricingForThread(t.threadId);
+      toast('Preisvorschlag kann geändert werden');
+    }catch(error){toast(error.message);}
+  }
+
+  async function rejectPricing(id){try{await api.rejectPriceProposal(id);store.dispatch({type:'PRICING_PROPOSAL',value:null});toast('Preisvorschlag gelöscht');const t=S.currentThread(state());if(t)await loadPricingForThread(t.threadId);}catch(error){toast(error.message);} }
   async function sendPresence(threadId,stateValue){const t=S.currentThread(state());const endpointId=Number(t?.selectedEndpoint?.endpoint_id||t?.selected_endpoint?.endpoint_id||t?.endpoint?.endpoint_id||t?.endpoints?.[0]?.endpoint_id||0);try{return await api.presence(threadId,stateValue,endpointId||null);}catch{return null;}}
   async function savePricingSettings(form){const payload={};for(const [key,value] of new FormData(form).entries())payload[key]=value;for(const input of form.querySelectorAll('input[type=checkbox]'))payload[input.name]=input.checked;try{const d=await api.setPricingSettings(payload);store.dispatch({type:'PRICING_SETTINGS',value:d?.settings||d||{}});store.dispatch({type:'SHEET',value:null});toast('Pricing-Einstellungen gespeichert');}catch(error){toast(error.message);} }
 
-  return Object.freeze({loadPricingSettings,loadPricingForThread,openPricing,openExistingPricing,openPersonPricing,acceptPricing,rejectPricing,sendPresence,savePricingSettings});
+  return Object.freeze({loadPricingSettings,loadPricingForThread,openPricing,openExistingPricing,openPersonPricing,acceptPricing,revisePricing,rejectPricing,sendPresence,savePricingSettings});
 }

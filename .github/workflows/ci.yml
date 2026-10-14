@@ -91,6 +91,32 @@ jobs:
           assert search['_RADIUS_RE'].search('meldet Radius 70 km, angefordert waren 20 km').group(1) == '70'
           PY
 
+          node --experimental-default-type=module - <<'JS'
+          import assert from 'node:assert/strict';
+          import { canonicalPricingService, currentSavedPricingExtractionId } from './ladies/static/explorer/js/ux_patch.js';
+
+          const config={filter_groups:[{key:'service',options:[
+            {label:'ZK',value:'zungenkuss'},
+            {label:'Franz.',value:'franzoesisch'},
+            {label:'AV',value:'anal'},
+            {label:'erotische Massage',value:'erotische-massage'},
+            {label:'Body-to-Body M.',value:'body-to-body-massage'},
+            {label:'Girlfriend-Sex',value:'girlfriendsex'},
+            {label:'69',value:'69-stellung'}
+          ]}]};
+          assert.equal(canonicalPricingService({service_key:'KISSING',raw_label:'Küssen'},config)?.value,'zungenkuss');
+          assert.equal(canonicalPricingService({service_key:'FRENCH',raw_label:'Französisch'},config)?.value,'franzoesisch');
+          assert.equal(canonicalPricingService({service_key:'MASSAGE',raw_label:'Body to Body'},config)?.value,'body-to-body-massage');
+          assert.equal(canonicalPricingService({service_key:'GFE',raw_label:'GFE'},config)?.value,'girlfriendsex');
+          assert.equal(canonicalPricingService({service_key:'SIXTY_NINE',raw_label:'69'},config)?.value,'69-stellung');
+          assert.equal(canonicalPricingService({service_key:'unknown-old-service',raw_label:'legacy'},config),null);
+          assert.equal(currentSavedPricingExtractionId([
+            {price_extraction_id:4,status:'ACCEPTED',accepted_price_list_id:10},
+            {price_extraction_id:7,status:'ACCEPTED',accepted_price_list_id:11},
+            {price_extraction_id:8,status:'ACCEPTED_NO_CHANGE',accepted_price_list_id:11}
+          ]),8);
+          JS
+
       - name: Check project metadata syntax
         run: |
           python - <<'PY'

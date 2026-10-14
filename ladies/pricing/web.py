@@ -6,6 +6,7 @@ from ladies_v9.database import Database
 from ladies_v9.errors import ConflictError, NotFoundError, ValidationError
 from ladies_v9.request_parsing import read_int
 
+from .revision import create_revision
 from .service import PriceIntelligenceService
 
 
@@ -70,6 +71,15 @@ def install_pricing(app, *, data_dir, database: Database | None = None) -> Price
             if result.get("status") == "STALE":
                 raise ConflictError(result.get("error") or "Preisvorschlag ist veraltet")
             return jsonify(result)
+        except KeyError as exc:
+            raise NotFoundError("Preisvorschlag nicht gefunden") from exc
+        except (ValueError, TypeError) as exc:
+            raise ValidationError(str(exc)) from exc
+
+    @app.post("/api/pricing/proposals/<int:extraction_id>/revise")
+    def pricing_revise_proposal(extraction_id: int):
+        try:
+            return jsonify(create_revision(service, extraction_id))
         except KeyError as exc:
             raise NotFoundError("Preisvorschlag nicht gefunden") from exc
         except (ValueError, TypeError) as exc:
