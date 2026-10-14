@@ -6,16 +6,18 @@
 
 ## Open implementation steps
 - [x] Candidate/probe/assign/create-person effects implemented.
-- [ ] Browser verification of assignment workflows.
+- [x] Unassigned chat uses the productive selected endpoint when opening assignment.
+- [x] The active thread is refreshed after assignment/new-person creation so profile and sending state update immediately.
+- [ ] Manual runtime verification with a real unassigned WhatsApp contact.
 
 ## Acceptance Criteria
-- [ ] Unassigned contacts can be linked or converted to a new person correctly.
+- [ ] Unassigned contacts can be linked or converted to a new person correctly in the running Explorer.
 
 ## Verification
-Source/API evidence; UI verification pending.
+Source/API contract audit completed. Runtime/UI verification remains manual by design; no browser/E2E CI is required.
 
 ## Relevant commits
-PR #69 Messaging migration commits.
+PR #69 Messaging migration and contact-assignment hardening commits.
 
 ## PR / review notes
 No active review thread.
