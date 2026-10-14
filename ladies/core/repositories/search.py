@@ -20,6 +20,8 @@ from ladies_v9.models import (
     utcnow,
 )
 
+BUSINESS_PROFILE_SOURCE = "BUSINESS_PROFILE"
+
 
 def _dumps(value: Any) -> str:
     return orjson.dumps(value, option=orjson.OPT_SORT_KEYS).decode("utf-8")
@@ -85,6 +87,96 @@ class SearchRepository:
 
     def __init__(self, database: Database):
         self.database = database
+
+    @staticmethod
+    def _business_profile_payload(db: Session, listing: Listing) -> dict[str, Any]:
+        observation = db.scalar(
+            select(ListingObservation)
+            .where(
+                ListingObservation.listing_id == listing.listing_id,
+                ListingObservation.source == BUSINESS_PROFILE_SOURCE,
+            )
+            .order_by(desc(ListingObservation.observed_at))
+            .limit(1)
+        )
+        if observation is None:
+            return {
+                "business_profile_known": False,
+                "is_business_profile": False,
+                "business_website_url": None,
+                "business_profile_checked_at": None,
+            }
+        details = _loads(observation.details_json, {}) or {}
+        if "is_business_profile" not in details:
+            return {
+                "business_profile_known": False,
+                "is_business_profile": False,
+                "business_website_url": None,
+                "business_profile_checked_at": _iso(observation.observed_at),
+            }
+        return {
+            "business_profile_known": True,
+            "is_business_profile": bool(details.get("is_business_profile")),
+            "business_website_url": str(details.get("business_website_url") or "").strip() or None,
+            "business_profile_checked_at": _iso(observation.observed_at),
+        }
+
+    def business_profile_classification(self, advert_id: str) -> dict[str, Any] | None:
+        with self.database.session() as db:
+            listing = db.scalar(
+                select(Listing).where(
+                    Listing.source == "LADIES",
+                    Listing.external_listing_id == str(advert_id),
+                )
+            )
+            if listing is None:
+                return None
+            return self._business_profile_payload(db, listing)
+
+    def save_business_profile_classification(
+        self,
+        advert_id: str,
+        *,
+        is_business_profile: bool,
+        business_website_url: str | None,
+        http_status: int = 200,
+    ) -> dict[str, Any]:
+        with self.database.session() as db:
+            listing = db.scalar(
+                select(Listing).where(
+                    Listing.source == "LADIES",
+                    Listing.external_listing_id == str(advert_id),
+                )
+            )
+            if listing is None:
+                raise KeyError(advert_id)
+            current = self._business_profile_payload(db, listing)
+            website = str(business_website_url or "").strip() or None
+            if (
+                current.get("business_profile_known")
+                and bool(current.get("is_business_profile")) == bool(is_business_profile)
+                and (current.get("business_website_url") or None) == website
+            ):
+                return current
+            observed_at = utcnow()
+            db.add(ListingObservation(
+                listing_id=listing.listing_id,
+                observed_at=observed_at,
+                source=BUSINESS_PROFILE_SOURCE,
+                status="CLASSIFIED",
+                http_status=int(http_status),
+                details_json=_dumps({
+                    "is_business_profile": bool(is_business_profile),
+                    "business_website_url": website,
+                }),
+            ))
+            db.flush()
+            return {
+                "business_profile_known": True,
+                "is_business_profile": bool(is_business_profile),
+                "business_website_url": website,
+                "business_profile_checked_at": _iso(observed_at),
+            }
 
     def create_search_run(
         self,
@@ -341,6 +433,7 @@ class SearchRepository:
             .order_by(desc(ChangeEvent.created_at))
             .limit(1)
         )
+        classification = SearchRepository._business_profile_payload(db, listing)
         return {
             "advert_id": listing.external_listing_id,
             "listing_id": listing.listing_id,
@@ -366,4 +459,5 @@ class SearchRepository:
             "match_decision": listing.match_decision,
             "recent_change": _change_payload(recent_change),
             "recent_location_change": _change_payload(recent_location_change),
+            **classification,
         }
