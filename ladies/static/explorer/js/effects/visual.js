@@ -23,5 +23,7 @@ export function createVisualEffects({store,router,getEffects}) {
 
   async function saveDefaultFilters(){try{const d=await api.setSetting('default_filters',state().search.filters);store.dispatch({type:'SETTINGS',values:d?.settings||{}});toast('Standardfilter gespeichert');}catch(error){toast(error.message);} }
 
-  return Object.freeze({openArchive,clearVisual,loadMediaPipe,analyzeMedia,analyzeCurrent,autoAnalyzeCurrent,toggleSetting,saveDefaultFilters});
+  async function clearDefaultFilters(){try{const d=await api.setSetting('default_filters',null);store.dispatch({type:'SETTINGS',values:d?.settings||{}});toast('Standardfilter gelöscht');}catch(error){toast(error.message);} }
+
+  return Object.freeze({openArchive,clearVisual,loadMediaPipe,analyzeMedia,analyzeCurrent,autoAnalyzeCurrent,toggleSetting,saveDefaultFilters,clearDefaultFilters});
 }

@@ -63,6 +63,7 @@ export function createCommands({store,router,effects}) {
     'open-archive':el=>effects.openArchive(el.dataset.kind||'IMAGE'),
     'clear-visual':()=>effects.clearVisual(),
     'save-default-filters':()=>effects.saveDefaultFilters(),
+    'clear-default-filters':()=>effects.clearDefaultFilters(),
     'pricing-open':el=>effects.openPricing(Number(el.dataset.threadId),Number(el.dataset.messageId||0)||null),
     'pricing-open-existing':el=>effects.openExistingPricing(Number(el.dataset.extractionId)),
     'pricing-reject':el=>effects.rejectPricing(Number(el.dataset.extractionId)),
