@@ -65,8 +65,10 @@ export function personDetailVm(raw) {
   const d = asObject(raw);
   const person = asObject(d.person);
   const user = asObject(d.user_state);
-  const snapshot = asObject(d.latest_snapshot || d.profile || d.snapshot || d.listings?.[0]?.snapshot);
+  const listings=asArray(d.listings);
+  const snapshot = asObject(d.latest_snapshot || d.profile || d.snapshot || listings?.[0]?.snapshot);
   const media = asArray(snapshot.media || d.media).map((item,index)=>({...item,position:item.position ?? index,kind:String(item.kind || 'IMAGE').toUpperCase(),src:mediaUrl(item),poster:mediaPoster(item)}));
+  const latestListing=listings[0] || {};
   return {
     raw:d,
     person,
@@ -74,14 +76,21 @@ export function personDetailVm(raw) {
     personId:Number(person.person_id || 0),
     name:snapshot.name || person.display_name || `Person #${person.person_id || '?'}`,
     age:firstValue(snapshot.traits,['Alter','alter','Age']) || '',
-    city:snapshot.city || '',
+    city:snapshot.city || latestListing.city || '',
     description:snapshot.description || '',
     traits:asObject(snapshot.traits),
     services:asObject(snapshot.services),
     openingTimes:asObject(snapshot.opening_times),
     snapshot,
     media,
-    listings:asArray(d.listings),
+    hasVideo:media.some(x => String(x.kind).toUpperCase() === 'VIDEO'),
+    listings,
+    listingCount:Number(person.listing_count || listings.length || 1),
+    reappearCount:Number(person.reappear_count || Math.max(0,listings.length-1)),
+    personFirstSeen:person.first_seen_at || null,
+    personLastSeen:person.last_seen_at || latestListing.last_seen_at || null,
+    activeToday:todayish(person.last_seen_at || latestListing.last_seen_at),
+    sourceUrl:snapshot.source_url || latestListing.current_url || '',
     changes:asArray(d.timeline || d.changes || d.history),
     prices:asArray(d.price_lists || d.prices),
     encounters:asArray(d.encounters),

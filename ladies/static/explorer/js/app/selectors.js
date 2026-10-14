@@ -10,7 +10,8 @@ export function visibleSearchRows(state) {
     if(local.likesOnly && row.preference!=='LIKE')return false;
     if(local.photosOnly && !(row.thumbnail || row.media?.length))return false;
     const mode=String(local.imageMode || 'ALL').toUpperCase();
-    const markers=String(row.markers || row.image_markers || '').toLowerCase();
+    const markerSource=row.markers ?? row.image_markers ?? '';
+    const markers=(markerSource && typeof markerSource==='object' ? JSON.stringify(markerSource) : String(markerSource)).toLowerCase();
     if(mode==='AI' && !row.has_ai_content)return false;
     if(mode==='NATURAL' && row.has_ai_content)return false;
     if(mode==='STUDIO' && !markers.includes('studio'))return false;
