@@ -7,13 +7,13 @@
 ## Open implementation steps
 - [x] Render categories/filter groups from backend config.
 - [x] Map search state to server payload.
-- [ ] Verify representative full filter payloads in browser/E2E.
+- [ ] Manually verify representative production filter combinations in the running Explorer.
 
 ## Acceptance Criteria
 - [ ] Production filter combinations produce the expected server payload and results.
 
 ## Verification
-Source and contract-test evidence exists; browser verification pending.
+Source/API contract audit completed. Runtime/UI verification remains manual by design; no browser/E2E CI is required.
 
 ## Relevant commits
 PR #69 Search/Discover migration commits.
