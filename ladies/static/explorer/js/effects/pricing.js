@@ -5,7 +5,7 @@ export function createPricingEffects({store,getEffects}) {
   const toast=message=>store.dispatch({type:'TOAST',value:message});
   const state=()=>store.getState();
 
-  async function loadPricingSettings(){try{const [settings,runtime]=await Promise.all([api.pricingSettings(),api.pricingStatus().catch(()=>({}))]);store.dispatch({type:'PRICING_SETTINGS',value:settings?.settings||settings||{}});store.dispatch({type:'PRICING_RUNTIME',value:runtime||{});}catch{} }
+  async function loadPricingSettings(){try{const [settings,runtime]=await Promise.all([api.pricingSettings(),api.pricingStatus().catch(()=>({}))]);store.dispatch({type:'PRICING_SETTINGS',value:settings?.settings||settings||{}});store.dispatch({type:'PRICING_RUNTIME',value:runtime||{}});}catch{} }
   async function loadPricingForThread(threadId){try{const [signal,timeline]=await Promise.all([api.pricingSignal(threadId).catch(()=>({})),api.pricingTimeline(threadId,100).catch(()=>({items:[]}))]);store.dispatch({type:'PRICING_THREAD',threadId,value:{threadId,signal:signal?.signal||signal,timeline:timeline?.items||timeline}});}catch{} }
 
   async function openPricing(threadId,messageId=null){try{let proposal=await api.createPriceProposal(threadId,{trigger_type:messageId?'MESSAGE':'MANUAL',seed_message_id:messageId||null});if(proposal?.price_extraction_id)proposal=await api.priceProposal(proposal.price_extraction_id);store.dispatch({type:'PRICING_PROPOSAL',value:proposal});}catch(error){toast(error.message);} }
