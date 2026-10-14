@@ -45,7 +45,11 @@ export function reducer(state=initialState, action={}) {
     case 'STORAGE': next.settings.storage = action.value || {}; return next;
     case 'PRICING_SETTINGS': next.settings.pricing = action.value || {}; return next;
     case 'PRICING_RUNTIME': next.settings.pricingRuntime = action.value || {}; return next;
-    case 'MESSAGE_STATUS': next.messaging.status = action.value || {}; return next;
+    case 'MESSAGE_STATUS': {
+      next.messaging.status = action.value || {};
+      if (String(next.messaging.status.state || '').toUpperCase() !== 'CONNECTED') next.messaging.presenceByThread = {};
+      return next;
+    }
     case 'MESSAGE_FILTER': next.messaging.filter = action.value || 'ALL'; return next;
     case 'MESSAGE_QUERY': next.messaging.query = action.value || ''; return next;
     case 'THREADS': next.messaging.threads = action.items || []; next.messaging.loading = false; return next;
