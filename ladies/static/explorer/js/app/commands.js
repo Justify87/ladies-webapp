@@ -54,7 +54,7 @@ export function createCommands({store,router,effects}) {
     'chat-retry':el=>effects.retryMessage(Number(el.dataset.messageId)),
     'voice-start':()=>effects.startVoice(),
     'voice-stop':()=>effects.stopVoice(),
-    'chat-profile':()=>{const t=S.currentThread(state());if(t?.personId)effects.openProfile({personId:t.personId});else if(t?.endpoints?.[0]?.endpoint_id)effects.openAssignment(t.endpoints[0].endpoint_id);else effects.toast('Chat ist keiner Person zugeordnet');},
+    'chat-profile':()=>{const t=S.currentThread(state());if(t?.personId)return effects.openProfile({personId:t.personId});const endpointId=Number(t?.selectedEndpoint?.endpoint_id||t?.selected_endpoint?.endpoint_id||t?.endpoint?.endpoint_id||t?.endpoints?.[0]?.endpoint_id||0);if(endpointId)return effects.openAssignment(endpointId);effects.toast('Chat ist keiner Person zugeordnet');},
     'wa-connect':()=>effects.connectWhatsapp(),
     'wa-disconnect':()=>effects.disconnectWhatsapp(),
     'wa-logout':()=>effects.logoutWhatsapp(),
