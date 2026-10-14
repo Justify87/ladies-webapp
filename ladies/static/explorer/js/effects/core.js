@@ -12,13 +12,14 @@ export function createCoreEffects({store,router}) {
   }
 
   async function loadSettings() {
+    const hydrateDefaults=!state().settings.loaded;
     try {
       const [settings,storage,pricingRuntime] = await Promise.all([api.settings(),api.storage(),api.pricingStatus().catch(()=>({}))]);
       store.dispatch({type:'SETTINGS',values:settings?.settings || {}});
       store.dispatch({type:'STORAGE',value:storage || {}});
       store.dispatch({type:'PRICING_RUNTIME',value:pricingRuntime || {}});
       const defaults=settings?.settings?.default_filters;
-      if (defaults && typeof defaults === 'object') {
+      if (hydrateDefaults && defaults && typeof defaults === 'object') {
         const current=state().search.filters;
         store.dispatch({type:'SEARCH_FILTERS',filters:{...current,...defaults,selected:{...(current.selected||{}),...(defaults.selected||{})},local:{...(current.local||{}),...(defaults.local||{})}}});
       }
