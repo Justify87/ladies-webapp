@@ -33,7 +33,7 @@ def fetch_search_preview_count(
     height_max: int = 200,
     selected: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
-    """Fetch only page 1 and return the server-side advert count."""
+    """Fetch only page 1 and return a trustworthy exact-radius advert count."""
     filter_path = build_filter_path(
         category, age_min, age_max, height_min, height_max, selected
     )
@@ -64,9 +64,26 @@ def fetch_search_preview_count(
     config = parse_search_config(response.text)
     distance = config.get("distance_searched")
     if distance is not None and int(distance) != int(radius_km):
-        raise ValidationError(
-            f"Suchvorschau meldet Radius {distance} km, angefordert waren {radius_km} km."
+        # The upstream site may automatically enlarge the radius for sparse filter
+        # combinations. Never expose that widened count as if it matched the user's
+        # explicit radius. Treat it as an exact-radius boundary with zero trusted
+        # results instead of returning a validation error that leaves stale UI data.
+        LOGGER.info(
+            "Search preview hard-radius boundary requested_radius=%s server_radius=%s filter_path=%s",
+            radius_km,
+            distance,
+            filter_path or "<none>",
         )
+        return {
+            "count": 0,
+            "city": city_display,
+            "city_slug": city_slug,
+            "radius_km": radius_km,
+            "filter_path": filter_path,
+            "count_source": "radius-boundary-empty",
+            "radius_boundary_stopped": True,
+            "server_distance_seen": int(distance),
+        }
 
     count = config.get("advert_count")
     source = "search-config"
