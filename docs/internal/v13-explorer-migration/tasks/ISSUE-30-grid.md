@@ -6,16 +6,16 @@
 
 ## Open implementation steps
 - [x] Grid renderer/API state implemented.
-- [ ] Multi-browser verification including actions and profile opening.
+- [ ] Manually verify actions, markers and profile opening in the running Explorer.
 
 ## Acceptance Criteria
 - [ ] Grid parity is demonstrated against real contracts.
 
 ## Verification
-Current Chromium smoke covers result count/marker/profile-open only.
+Source/API/state-coherency audit completed. Runtime/UI verification remains manual by design; no browser/E2E CI is required.
 
 ## Relevant commits
-`ae665b7` — partial Chromium Grid coverage.
+PR #69 Grid/Profile migration commits.
 
 ## PR / review notes
 No active review thread.
