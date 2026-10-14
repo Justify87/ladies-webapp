@@ -14,6 +14,12 @@ export function createRouter(store) {
     update([...nav.stack,route(key,name,params)]);
     history.pushState({ladiesRoute:true},'',`#${name}`);
   };
+  const replace = (name,params={}) => {
+    const nav = store.getState().navigation; const key = `route-${nav.seq + 1}`;
+    const stack=nav.stack.length?[...nav.stack.slice(0,-1),route(key,name,params)]:[route(key,name,params)];
+    update(stack);
+    history.replaceState({ladiesRoute:true},'',`#${name}`);
+  };
   const back = () => {
     const nav = store.getState().navigation;
     if (nav.stack.length > 1) {
@@ -30,5 +36,5 @@ export function createRouter(store) {
     if (nav.stack.length > 1) update(nav.stack.slice(0,-1));
     else if (nav.stack[0]?.name !== 'search') update([route(`route-${nav.seq + 1}`,'search',{})]);
   });
-  return Object.freeze({current,replaceRoot,push,back});
+  return Object.freeze({current,replaceRoot,push,replace,back});
 }
