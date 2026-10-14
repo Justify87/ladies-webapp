@@ -1,12 +1,11 @@
 import * as S from './app/selectors.js';
 import { escapeHtml as e, escapeAttr as a, fmtDate, euro } from './shared/html.js';
 import { icon } from './shared/icons.js';
-import { availabilityMode } from './search_intelligence.js';
 
 const stateOf=store=>store.getState();
 const localDateTime=value=>{if(!value)return '';const d=new Date(value);if(Number.isNaN(d.getTime()))return '';const z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}T${z(d.getHours())}:${z(d.getMinutes())}`;};
-const ratingButtons=(name,value)=>`<div class="rating-row" data-rating-name="${a(name)}">${[1,2,3,4,5].map(n=>`<button type="button" class="${Number(value)===n?'selected':''}" data-action="rating-select" data-name="${a(name)}" data-value="${n}">${n}</button>`).join('')}</div>`;
-const choice=(name,value,options)=>`<div class="choice-field" data-choice-name="${a(name)}">${options.map(opt=>`<button type="button" class="${String(value||'UNKNOWN')===opt?'selected':''}" data-action="choice-select" data-name="${a(name)}" data-value="${a(opt)}">${e(opt)}</button>`).join('')}</div>`;
+const ratingButtons=(name,value)=>`<div class="rating-row" data-rating-name="${a(name)}">${[1,2,3,4,5].map(n=>`<button type="button" class="${Number(value)===n?'selected':''} ${Number(value)>=n?'active':''}" data-action="rating-select" data-name="${a(name)}" data-value="${n}" aria-label="${n} von 5 Sternen" title="${n} von 5">${icon('star')}</button>`).join('')}</div>`;
+const choice=(name,value,options)=>`<div class="choice-field" data-choice-name="${a(name)}">${options.map(opt=>`<button type="button" class="${String(value||'UNKNOWN')===opt?'selected':''}" data-action="choice-select" data-name="${a(name)}" data-value="${a(opt)}">${e(opt==='UNKNOWN'?'Keine Angabe':opt)}</button>`).join('')}</div>`;
 const repeatInterestLabel=value=>({YES:'Ja',MAYBE:'Vielleicht',NO:'Nein'}[String(value||'').toUpperCase()]||value||'UNKNOWN');
 
 export function createRequestedEffects({store,core}) {
@@ -120,7 +119,7 @@ function cleanSwipe(store) {
   const root=document.querySelector('#screenHost .swipe-screen');
   if(!root) {
     const heading=document.querySelector('#screenHost .empty-state h2');
-    if(heading&&/Keine weiteren Profile/i.test(heading.textContent||''))heading.textContent='Du hast alle Profile angeschaut.';
+    if(heading&&/Keine weiteren Profile/i.test(heading.textContent||''))heading.textContent=S.searchRows(stateOf(store)).length?'Du hast alle Profile angeschaut.':'Keine Profile gefunden.';
     return;
   }
   root.querySelectorAll('.swipe-details .profile-meta-place,.swipe-details .badge-row').forEach(node=>node.remove());
@@ -128,11 +127,9 @@ function cleanSwipe(store) {
   const nameRow=identity?.querySelector('.profile-name-row');
   const pill=root.querySelector('.online-pill');
   if(identity&&nameRow&&pill) {
-    const mode=availabilityMode(stateOf(store).search.filters);
-    const text=mode==='NOW'?'Jetzt laut Anzeige':mode==='TODAY'?'Heute laut Anzeige':'Heute verfügbar';
     pill.classList.remove('media-availability');
     pill.classList.add('requested-profile-availability');
-    pill.innerHTML=`${icon('calendar')}<span>${e(text)}</span>`;
+    pill.innerHTML=`${icon('calendar')}<span>Heute verfügbar</span>`;
     nameRow.insertAdjacentElement('afterend',pill);
   }
 }
