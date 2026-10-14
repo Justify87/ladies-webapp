@@ -54,9 +54,15 @@ export const threadRows = state => {
 export const currentThread = state => {
   const raw=state.messaging.currentThread;
   if(!raw)return null;
-  const vm=threadDetailVm(raw);
+  const vm=threadDetailVm(raw),pid=Number(vm.personId||0);
   const summary=(state.messaging.threads||[]).map(threadVm).find(row=>row.threadId===vm.threadId);
+  const detailState=pid?state.profiles.details[String(pid)]?.user_state:null;
+  const searchState=pid?(state.search.results||[]).find(row=>Number(row.person_id)===pid):null;
+  const listState=pid?(state.lists.items||[]).find(row=>Number(row.person_id)===pid):null;
   if(summary){vm.favorite=summary.favorite;vm.preference=summary.preference;}
+  else if(detailState){vm.favorite=Boolean(detailState.favorite);vm.preference=detailState.preference||vm.preference;}
+  else if(searchState){vm.favorite=Boolean(searchState.favorite);vm.preference=searchState.preference||vm.preference;}
+  else if(listState){vm.favorite=Boolean(listState.favorite);vm.preference=listState.preference||vm.preference;}
   return vm;
 };
 export const unreadTotal = state => (state.messaging.threads || []).reduce((sum,row)=>sum+Number(row.unread_count || row.unread || 0),0);
