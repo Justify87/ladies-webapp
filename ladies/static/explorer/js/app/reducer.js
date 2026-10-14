@@ -6,6 +6,7 @@ export function reducer(state=initialState, action={}) {
   switch (action.type) {
     case 'NAV_SET': next.navigation = action.navigation; return next;
     case 'SEARCH_FILTERS': next.search.filters = action.filters; return next;
+    case 'SEARCH_FILTER_QUERY': next.search.filterQuery = String(action.value || ''); return next;
     case 'SEARCH_PREVIEW': next.search.preview = {...next.search.preview,...action.patch}; return next;
     case 'SEARCH_LOADING': next.search.loading = Boolean(action.value); next.search.error = action.error || null; return next;
     case 'SEARCH_RESULTS': next.search.results = action.results || []; next.search.meta = action.meta || null; next.discover.index = 0; next.discover.history = []; return next;
