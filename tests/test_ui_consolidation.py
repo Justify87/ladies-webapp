@@ -76,6 +76,40 @@ class ExplorerUiConsolidationTests(unittest.TestCase):
         self.assertIn("/view-once", messaging)
         self.assertNotIn("<img src=\"/api/messaging/messages/${a(m.id)}/view-once", messaging)
 
+    def test_grid_preserves_status_video_ai_and_user_actions(self):
+        discover = (EXPLORER / "js" / "ui" / "screens" / "discover.js").read_text(encoding="utf-8")
+        for contract in ("row.status", "row.hasVideo", "row.has_ai_content", "grid-like", "grid-favorite", "open-profile"):
+            self.assertIn(contract, discover)
+
+    def test_encounter_service_details_are_editable_and_persisted(self):
+        effects = (EXPLORER / "js" / "effects" / "encounters.js").read_text(encoding="utf-8")
+        overlays = (EXPLORER / "js" / "ui" / "screens" / "overlays.js").read_text(encoding="utf-8")
+        controller = (EXPLORER / "js" / "app" / "controller.js").read_text(encoding="utf-8")
+        app_effects = (EXPLORER / "js" / "app" / "effects.js").read_text(encoding="utf-8")
+
+        self.assertIn("createEncounterEffects", app_effects)
+        self.assertIn("services", effects)
+        self.assertIn("updateEncounter", effects)
+        self.assertIn("addEncounter", effects)
+        self.assertIn("data-encounter-services-form", overlays)
+        self.assertIn("service_name", overlays)
+        self.assertIn("amount_eur", overlays)
+        self.assertIn("performed", overlays)
+        self.assertIn("saveEncounterServices", controller)
+
+    def test_pricing_preserves_current_and_history_views(self):
+        effects = (EXPLORER / "js" / "effects" / "pricing.js").read_text(encoding="utf-8")
+        commands = (EXPLORER / "js" / "app" / "commands.js").read_text(encoding="utf-8")
+        overlays = (EXPLORER / "js" / "ui" / "screens" / "overlays.js").read_text(encoding="utf-8")
+
+        self.assertIn("currentPricing", effects)
+        self.assertIn("pricingHistory", effects)
+        self.assertIn("openPersonPricing", effects)
+        self.assertIn("person-pricing", commands)
+        self.assertIn("Pricing aktuell & Historie", overlays)
+        self.assertIn("Aktuelle bestätigte Preise", overlays)
+        self.assertIn("Historie", overlays)
+
     def test_package_data_includes_nested_explorer_assets(self):
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         for pattern in (
