@@ -2,114 +2,35 @@
 <html lang="de">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-  <meta name="theme-color" content="#071c31">
-  <meta name="color-scheme" content="light">
-  <title>Ladies Explorer V{{ config["APP_VERSION"] }}</title>
-  <link rel="stylesheet" href="/static/app.css">
-  <link rel="stylesheet" href="/static/messaging.css">
-  <link rel="stylesheet" href="/static/css/profile_messaging_ui.css">
-  <link rel="stylesheet" href="/static/css/messaging_features.css">
-  <link rel="stylesheet" href="/static/css/search_ui.css">
-  <link rel="stylesheet" href="/static/css/filter_ui.css">
-  <link rel="stylesheet" href="/static/css/chat_profile.css">
-  <link rel="stylesheet" href="/static/pricing.css">
-  <script>window.__LADIES_CONFIG__={{ config["FRONTEND_CONFIG"]|tojson }};</script>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fafafd">
+  <title>Ladies Explorer</title>
+  <link rel="stylesheet" href="/static/explorer/css/tokens.css">
+  <link rel="stylesheet" href="/static/explorer/css/base.css">
+  <link rel="stylesheet" href="/static/explorer/css/shell.css">
+  <link rel="stylesheet" href="/static/explorer/css/components.css">
+  <link rel="stylesheet" href="/static/explorer/css/screens.css">
+  <script>window.__LADIES_CONFIG__ = {{ config["FRONTEND_CONFIG"]|tojson }};</script>
 </head>
 <body>
-<div id="app" class="app-frame view-home">
-  <header id="appHeader" class="app-header">
-    <button id="menuBtn" class="header-icon" type="button" aria-label="Menü"><svg><use href="/static/icons.svg#menu"/></svg></button>
-    <button id="brandBtn" class="brand" type="button" aria-label="Startseite">
-      <span class="brand-title">Ladies Explorer</span><span class="version-pill">V{{ config["APP_VERSION"] }}</span>
-      <small id="brandSubtitle">Neue Menschen. Echte Begegnungen.</small>
-    </button>
-    <button id="headerAction" class="header-icon notify-dot" type="button" aria-label="Benachrichtigungen"><svg><use href="/static/icons.svg#bell"/></svg></button>
-  </header>
-
-  <main id="screenStack" class="screen-stack">
-    <section id="homeScreen" class="screen active" data-screen="home" aria-label="Suche">
-      <div class="home-sheet"></div>
-    </section>
-
-    <section id="discoverScreen" class="screen" data-screen="discover" aria-label="Entdecken">
-      <div id="discoverHeader" class="discover-toolbar" aria-label="Entdecken-Werkzeuge">
-        <button id="discoverFilterBtn" class="discover-tool" type="button" aria-label="Filter öffnen"><svg><use href="/static/icons.svg#filter"/></svg></button>
-        <span class="discover-toolbar-spacer"></span>
-        <button id="discoverModeSwitch" class="discover-tool mode-tool" type="button" aria-label="Ansicht wechseln"><svg><use href="/static/icons.svg#list"/></svg><span>Grid</span></button>
-        <button id="discoverMore" class="discover-tool" type="button" aria-label="Mehr"><svg><use href="/static/icons.svg#more"/></svg></button>
+  <div class="stage">
+    <div id="app" class="phone">
+      <div class="statusbar" aria-hidden="true">
+        <span id="statusClock">09:41</span>
+        <span class="camera-hole"></span>
+        <span class="status-right">
+          <span class="signal-bars"><i></i><i></i><i></i><i></i></span>
+          <span>5G</span>
+          <span class="battery"></span>
+        </span>
       </div>
-      <div id="swipeView" class="discover-pane swipe-pane"></div>
-      <div id="gridView" class="discover-pane grid-pane hidden">
-        <div class="grid-toolbar"><div id="gridTabs" class="scroll-tabs"><button class="active" data-grid-filter="ALL">Alle <span id="gridAllCount">0</span></button><button data-grid-filter="VIDEO"><svg><use href="/static/icons.svg#play"/></svg>Mit Video</button><button data-grid-filter="LIKE"><svg><use href="/static/icons.svg#heart-fill"/></svg>Likes</button></div><button id="gridFilterBtn" class="square-filter" type="button"><svg><use href="/static/icons.svg#sliders"/></svg></button></div>
-        <div id="gridCards" class="profile-grid"></div>
-      </div>
-    </section>
-
-    <section id="listsScreen" class="screen" data-screen="lists" aria-label="Listen">
-      <div class="light-screen-pad">
-        <div id="listTabs" class="list-tabs"><button class="active" data-list-tab="LIKE"><svg><use href="/static/icons.svg#heart-fill"/></svg>Likes <span id="tabLikeCount"></span></button><button data-list-tab="FAVORITE"><svg><use href="/static/icons.svg#star-fill"/></svg>Favoriten <span id="tabFavoriteCount"></span></button><button data-list-tab="DISLIKE"><svg><use href="/static/icons.svg#heart"/></svg>Dislikes <span id="tabDislikeCount"></span></button></div>
-        <div class="status-check-card"><div class="status-check-line"><span><svg><use href="/static/icons.svg#list"/></svg><b id="statusCheckText">Statusprüfung bereit</b></span><small id="statusCheckedAt">Noch nicht geprüft</small></div><div class="progress-track"><i id="statusProgress"></i></div><button id="runStatusCheck" type="button" class="status-check-button"><svg><use href="/static/icons.svg#refresh"/></svg>Status jetzt prüfen</button></div>
-        <div id="peopleList" class="people-list"></div>
-      </div>
-    </section>
-
-    <section id="messagesScreen" class="screen messaging-screen" data-screen="messages" aria-label="Nachrichten">
-      <div class="messages-page">
-        <div class="messages-heading"><div><h1>Nachrichten</h1><p id="waConnectionMini">WhatsApp wird geladen …</p></div></div>
-        <label class="message-search"><svg aria-hidden="true"><use href="/static/icons.svg#search"/></svg><input id="messageSearch" placeholder="Nachrichten durchsuchen …"></label>
-        <div id="messageFilters" class="message-filters"><button class="active" data-message-filter="ALL">Alle</button><button data-message-filter="UNREAD">Ungelesen</button><button data-message-filter="UNASSIGNED">Nicht zugeordnet</button></div>
-        <div id="threadList" class="thread-list"></div>
-      </div>
-    </section>
-
-    <section id="historyScreen" class="screen" data-screen="history" aria-label="Verlauf">
-      <div class="light-screen-pad history-page"><div id="historyIntro"></div><div class="history-summary" id="historySummary"></div><div id="usageSummary"></div><div class="section-inline-head"><h2>Letzte Änderungen</h2><button id="historyRefresh" type="button"><svg><use href="/static/icons.svg#refresh"/></svg></button></div><div id="globalTimeline" class="global-timeline"></div></div>
-    </section>
-
-    <section id="settingsScreen" class="screen" data-screen="settings" aria-label="Einstellungen">
-      <div class="settings-page" id="settingsPage"></div>
-    </section>
-
-    <section id="moreScreen" class="screen" data-screen="more" aria-label="Mehr">
-      <div class="light-screen-pad more-page"><h1>Mehr</h1><p>Verlauf, Statistik und Einstellungen</p><div class="more-cards"><button data-more-go="history"><svg aria-hidden="true"><use href="/static/icons.svg#chart"/></svg><span><b>Verlauf &amp; Statistik</b><small>Änderungen, Wiederkehrer und Nutzung</small></span><svg aria-hidden="true"><use href="/static/icons.svg#chevron-right"/></svg></button><button data-more-go="settings"><svg aria-hidden="true"><use href="/static/icons.svg#settings"/></svg><span><b>Einstellungen</b><small>App, Speicher, WhatsApp &amp; Chat</small></span><svg aria-hidden="true"><use href="/static/icons.svg#chevron-right"/></svg></button></div></div>
-    </section>
-  </main>
-
-  <nav id="bottomNav" class="bottom-nav" aria-label="Hauptnavigation">
-    <button class="active" data-nav="home"><svg><use href="/static/icons.svg#search"/></svg><span>Home</span></button>
-    <button data-nav="discover"><svg><use href="/static/icons.svg#compass"/></svg><span>Entdecken</span></button>
-    <button data-nav="lists"><svg><use href="/static/icons.svg#list"/></svg><span>Listen</span></button>
-    <button data-nav="messages" class="message-nav-button"><svg><use href="/static/icons.svg#message"/></svg><span>Nachrichten</span><i id="messageNavBadge" class="message-nav-badge hidden"></i></button>
-    <button data-nav="more"><svg><use href="/static/icons.svg#more"/></svg><span>Mehr</span></button>
-  </nav>
-
-  <section id="profileLayer" class="full-layer profile-layer hidden" aria-label="Profil">
-    <div id="profileContent" class="profile-content"></div>
-  </section>
-
-  <section id="messagingChatLayer" class="full-layer messaging-chat-layer hidden" aria-label="Chat">
-    <header class="chat-header"><button id="chatBack" class="chat-icon-btn" type="button" aria-label="Zurück"><svg aria-hidden="true"><use href="/static/icons.svg#chevron-left"/></svg></button><div id="chatAvatar" class="chat-avatar"></div><button id="chatIdentity" class="chat-identity" type="button"><b id="chatName">Chat</b><small id="chatPresence">WhatsApp</small></button><button id="chatMore" class="chat-icon-btn" type="button" aria-label="Chat-Menü"><svg aria-hidden="true"><use href="/static/icons.svg#more"/></svg></button></header>
-    <div id="chatConnectionBanner" class="chat-connection-banner hidden"></div>
-    <div id="chatMessages" class="chat-messages"></div>
-    <form id="chatComposer" class="chat-composer">
-      <div id="chatReplyPreview" class="composer-reply hidden"><span><b>Antwort</b><small></small></span><button id="cancelReply" type="button" aria-label="Antwort abbrechen">×</button></div>
-      <div id="voiceRecordBar" class="voice-record-bar hidden"><i class="voice-record-dot"></i><strong id="voiceRecordTime">0:00</strong><button id="voiceRecordCancel" class="voice-record-cancel" type="button">Verwerfen</button><button id="voiceRecordSend" class="voice-record-send" type="button">Fertig</button></div>
-      <button id="chatPlus" type="button" class="composer-plus" aria-label="Anhängen">+</button>
-      <textarea id="chatInput" rows="1" maxlength="4000" enterkeyhint="send" placeholder="Nachricht schreiben …"></textarea>
-      <button id="chatMic" type="button" class="composer-mic" aria-label="Sprachnachricht">🎙</button>
-      <button id="chatSend" type="submit" class="composer-send" aria-label="Senden"><svg aria-hidden="true"><use href="/static/icons.svg#send"/></svg></button>
-      <input id="chatFile" type="file" hidden>
-    </form>
-  </section>
-
-  <section id="sheetLayer" class="sheet-layer hidden" aria-modal="true"><button class="sheet-backdrop" data-close-sheet type="button" aria-label="Schließen"></button><div class="bottom-sheet"><div class="sheet-handle"></div><div id="sheetContent"></div></div></section>
-  <div id="toast" class="toast" role="status"></div>
-</div>
-<script type="module" src="/static/app.js"></script>
-<script type="module" src="/static/profile_messaging_ui.js"></script>
-<script type="module" src="/static/messaging.js"></script>
-<script type="module" src="/static/js/chat_profile.js"></script>
-<script type="module" src="/static/pricing.js"></script>
+      <header id="appHeader" class="app-header"></header>
+      <main id="screenHost" class="screen-host"></main>
+      <nav id="bottomNav" class="bottom-nav" aria-label="Hauptnavigation"></nav>
+      <div id="overlayHost"></div>
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+  <script type="module" src="/static/explorer/js/bootstrap.js"></script>
 </body>
 </html>
