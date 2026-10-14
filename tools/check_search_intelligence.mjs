@@ -66,14 +66,29 @@ assert.deepEqual(rawBaseline.listings.map(item=>item.listing_id),[7,8]);
 
 // Focused guards for the Explorer follow-up fixes.
 const discoverSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/discover.js',import.meta.url),'utf8');
+const chromeSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/chrome.js',import.meta.url),'utf8');
 const encounterSource=readFileSync(new URL('../ladies/static/explorer/js/effects/encounters.js',import.meta.url),'utf8');
 const requestedSource=readFileSync(new URL('../ladies/static/explorer/js/requested_fixes.js',import.meta.url),'utf8');
-const requestedCss=readFileSync(new URL('../ladies/static/explorer/css/search-intelligence.css',import.meta.url),'utf8');
+const canonicalPricingSource=readFileSync(new URL('../ladies/pricing/canonical.py',import.meta.url),'utf8');
+const pricingWebSource=readFileSync(new URL('../ladies/pricing/web.py',import.meta.url),'utf8');
 assert.match(discoverSource,/grid-card-heart[^>]+data-action="grid-like"/s,'visible Grid heart must trigger Like');
+assert.doesNotMatch(discoverSource,/discover-mode-pills/,'availability controls must not be duplicated inside Grid or Swipe content');
+assert.match(chromeSource,/header-discovery-modes/,'Swipe and Grid availability controls must live in the shared header');
+assert.match(chromeSource,/route\.name==='swipe'.*data-route="grid".*gridGlyph\(\).*route\.name==='grid'.*data-route="swipe"/s,'shared header must expose both view switches with a real Grid glyph');
 assert.match(encounterSource,/querySelector\('\[name="base_price_eur"\]'\)\)payload\.base_price_eur=/,'hidden base price must only be sent when present');
 assert.match(encounterSource,/querySelector\('\[name="note"\]'\)\)payload\.note=/,'hidden note must only be sent when present');
 assert.match(encounterSource,/querySelector\('\[data-encounter-service-row\]'\)\)payload\.services=/,'hidden services must only be sent when present');
 assert.match(requestedSource,/mode==='NOW'\?'Jetzt laut Anzeige':mode==='TODAY'\?'Heute laut Anzeige':'Heute verfügbar'/,'availability label must respect the quick filter mode');
-assert.match(requestedCss,/\.swipe-details \.online-pill\.requested-profile-availability\s*\{[^}]*position:\s*static;[^}]*inset:\s*auto;/s,'availability badge must flow below the profile name');
+assert.match(requestedSource,/panel\.appendChild\(identity\)/,'Swipe identity must be anchored inside the image panel');
+assert.match(requestedSource,/panel\.appendChild\(pill\)/,'availability badge must be anchored in the opposite image corner');
+assert.match(requestedSource,/requested-new-encounter"><summary/,'new encounter capture must start collapsed');
+assert.doesNotMatch(requestedSource,/requested-new-encounter"\s+open/,'new encounter capture must never render open by default');
+assert.match(requestedSource,/data-requested-price-history/,'profile must provide a dedicated price history tab');
+assert.match(requestedSource,/api\.currentPricing\(personId\).*api\.pricingHistory\(personId,100\)/s,'profile pricing must read exclusively through canonical pricing APIs');
+assert.match(requestedSource,/removeCardsByHeading\(panel,\['Merkmale','Öffnungszeiten','Preislisten'\]\)/,'service tab must no longer own traits, opening hours or price lists');
+assert.match(requestedSource,/removeCardsByHeading\(panel,\['Aktuelle Filter'\]\)/,'analysis must not duplicate current filters');
+assert.match(canonicalPricingSource,/PriceList\.source == CANONICAL_PRICE_SOURCE/,'canonical pricing must filter legacy/manual price rows');
+assert.match(canonicalPricingSource,/CANONICAL_PRICE_SOURCE = "WHATSAPP_EXTRACTED"/,'chat-extracted prices are the source of truth');
+assert.match(pricingWebSource,/CanonicalPriceIntelligenceService\(database, data_dir\)/,'pricing routes must use the canonical chat pricing service');
 
 console.log('search intelligence regression checks passed');
