@@ -6,13 +6,13 @@
 
 ## Open implementation steps
 - [x] DISLIKE decision/effect path implemented.
-- [ ] Browser/E2E persistence and queue verification.
+- [ ] Manually verify persistence, queue exclusion and cross-view state in the running Explorer.
 
 ## Acceptance Criteria
 - [ ] DISLIKE persists and excludes/updates the queue as designed.
 
 ## Verification
-Source/contract evidence only; browser proof pending.
+Source/API/state-coherency audit completed. Runtime/UI verification remains manual by design; no browser/E2E CI is required.
 
 ## Relevant commits
 PR #69 Search/Discover migration commits.
