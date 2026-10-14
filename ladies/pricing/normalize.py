@@ -215,6 +215,16 @@ def extract_money(text: str) -> list[dict[str, Any]]:
             "explicit": explicit,
             "is_surcharge": prefix.strip().startswith("+") or "extra" in folded[max(0, match.start()-20):match.end()+20] or "aufpreis" in folded[max(0, match.start()-20):match.end()+20],
         })
+    for pair in extract_price_duration_pairs(text):
+        out.append({
+            "amount_cents": pair["amount_cents"],
+            "amount_max_cents": None,
+            "amount_type": "EXACT",
+            "start": pair["start"], "end": pair["end"], "raw": pair["raw"],
+            "explicit": True,
+            "is_surcharge": False,
+            "structured_pair": True,
+        })
     return sorted(out, key=lambda x: x["start"])
 
 
