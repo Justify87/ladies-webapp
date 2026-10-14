@@ -45,6 +45,7 @@ export const api = Object.freeze({
   searchPreview: (payload, signal) => request('/api/search-preview',{method:'POST',body:payload,signal}),
   search: payload => request('/api/search',{method:'POST',body:payload}),
   profile: advertId => request(`/api/profile/${encodeURIComponent(advertId)}`),
+  profileClassification: advertId => request(`/api/profile-classification/${encodeURIComponent(advertId)}`),
   listing: advertId => request(`/api/listing/${encodeURIComponent(advertId)}`),
   person: personId => request(`/api/person/${encodeURIComponent(personId)}`),
   personState: (personId, patch) => request(`/api/person/${personId}/state`,{method:'POST',body:patch}),

@@ -1,16 +1,41 @@
 import { searchResultVm, profileBundleVm, personDetailVm, listItemVm, threadVm, threadDetailVm } from '../data/adapters.js';
 
 export const currentRoute = state => state.navigation.stack.at(-1) || {name:'search',params:{}};
+
+export function businessProfileEvidence(row,bundle) {
+  const profile=bundle?.profile || bundle?.snapshot || bundle?.latest_snapshot || {};
+  const storedAuxiliary=profile?.auxiliary && typeof profile.auxiliary==='object' ? profile.auxiliary : {};
+  const nestedAuxiliary=storedAuxiliary?.auxiliary && typeof storedAuxiliary.auxiliary==='object' ? storedAuxiliary.auxiliary : storedAuxiliary;
+  const website=String(
+    profile?.business_website_url ||
+    nestedAuxiliary?.business_website_url ||
+    row?.business_website_url ||
+    ''
+  ).trim();
+  const explicit=profile?.is_business_profile ?? row?.is_business_profile;
+  const knownFlag=profile?.business_profile_known ?? row?.business_profile_known;
+  const known=knownFlag===undefined
+    ? (Boolean(bundle) || explicit !== undefined || Boolean(website))
+    : Boolean(knownFlag);
+  return {
+    isBusinessProfile:Boolean(explicit || website),
+    businessWebsiteUrl:website,
+    businessProfileKnown:known
+  };
+}
+
 export const searchRows = state => (state.search.results || []).map(raw=>{
   const row=searchResultVm(raw);
   const bundle=state.profiles.bundles[String(row.advertId)] || null;
   const identity=bundle?.identity || {};
   const canonicalPersonId=Number(identity.person_id || row.personId || 0) || null;
+  const business=businessProfileEvidence(row,bundle);
   return {
     ...row,
     personId:canonicalPersonId,
     preference:identity.preference || row.preference || 'NONE',
-    favorite:Boolean(identity.favorite ?? row.favorite)
+    favorite:Boolean(identity.favorite ?? row.favorite),
+    ...business
   };
 });
 export const currentSearchRow = state => discoverQueueRows(state)[state.discover.index] || null;
@@ -20,6 +45,7 @@ export function visibleSearchRows(state) {
     if(local.videoOnly && !row.hasVideo)return false;
     if(local.hideDislikes!==false && row.preference==='DISLIKE')return false;
     if(local.hideLikes===true && row.preference==='LIKE')return false;
+    if(local.hideBusinessProfiles!==false && row.isBusinessProfile)return false;
     if(local.photosOnly && !(row.thumbnail || row.media?.length))return false;
     const mode=String(local.imageMode || 'ALL').toUpperCase();
     const markerSource=row.markers ?? row.image_markers ?? '';

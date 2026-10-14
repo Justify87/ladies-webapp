@@ -221,6 +221,7 @@ export function createController({store,router,effects,commands}) {
       const f=structuredClone(store.getState().search.filters);
       f.local={...(f.local||{}),[input.dataset.localFilter]:input.checked};
       store.dispatch({type:'SEARCH_FILTERS',filters:f});
+      if(input.dataset.localFilter==='hideBusinessProfiles'&&input.checked)void effects.classifyBusinessProfiles();
     }else if(input.matches('[data-setting-key]'))effects.toggleSetting(input.dataset.settingKey,input.checked);
     else if(input.matches('[data-list-sort]'))store.dispatch({type:'LIST_SORT',value:input.value});
   });

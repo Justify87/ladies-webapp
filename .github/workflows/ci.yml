@@ -53,6 +53,20 @@ jobs:
           import runpy
           import sys
           import types
+          from pathlib import Path
+
+          business = runpy.run_path('ladies/business_profiles.py')
+          website = business['business_website_url']
+          assert website('<a class="cut-text einzelansicht-url" href="https://betrieb.example">Betrieb</a>') == 'https://betrieb.example'
+          assert website('<a class="social-link" href="https://social.example">Social</a>') is None
+          assert website('<a class="einzelansicht-url">Ohne href</a>') is None
+
+          profile_source = Path('ladies/core/services/profile.py').read_text(encoding='utf-8')
+          classifier_block = profile_source.split('def classify_business_profile', 1)[1].split('def load', 1)[0]
+          assert 'ingest_profile' not in classifier_block
+          repository_source = Path('ladies/core/repositories/search.py').read_text(encoding='utf-8')
+          assert 'BUSINESS_PROFILE_SOURCE = "BUSINESS_PROFILE"' in repository_source
+          assert '**classification' in repository_source
 
           normalize = runpy.run_path('ladies/pricing/normalize.py')
           text = '10045 Minuten\n130 Std'
@@ -95,6 +109,21 @@ jobs:
           import assert from 'node:assert/strict';
           import { canonicalPricingService, currentSavedPricingExtractionId } from './ladies/static/explorer/js/ux_patch.js';
           import { captureScrollState, updateScrollableRegion } from './ladies/static/explorer/js/app/scroll_state.js';
+          import { businessProfileEvidence, visibleSearchRows } from './ladies/static/explorer/js/app/selectors.js';
+
+          assert.equal(businessProfileEvidence({business_profile_known:false,is_business_profile:false},null).businessProfileKnown,false);
+          assert.equal(businessProfileEvidence({business_profile_known:true,is_business_profile:false},null).businessProfileKnown,true);
+          const businessState={
+            search:{
+              results:[{advert_id:'1',name:'Betrieb',thumbnail_url:'x',business_profile_known:true,is_business_profile:true}],
+              filters:{local:{photosOnly:false,videoOnly:false,hideDislikes:false,hideBusinessProfiles:true,imageMode:'ALL'}}
+            },
+            profiles:{bundles:{}},
+            settings:{values:{replay_likes:true}}
+          };
+          assert.equal(visibleSearchRows(businessState).length,0);
+          businessState.search.filters.local.hideBusinessProfiles=false;
+          assert.equal(visibleSearchRows(businessState).length,1);
 
           const config={filter_groups:[{key:'service',options:[
             {label:'ZK',value:'zungenkuss'},
