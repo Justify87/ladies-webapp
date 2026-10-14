@@ -116,11 +116,12 @@ export function createCoreEffects({store,router}) {
     if(!personId)return toast('Person konnte nicht aufgelöst werden');
     try {
       const before={preference:bundleVm?.preference || row.preference || 'NONE',favorite:bundleVm?.favorite ?? row.favorite ?? false,index:state().discover.index,personId};
+      const remainsInQueue=decision==='LIKE' && state().settings.values.replay_likes !== false;
       if(decision==='LIKE') await mutatePerson(personId,{preference:'LIKE'});
       else if(decision==='DISLIKE') await mutatePerson(personId,{preference:'DISLIKE'});
       else if(decision==='FAVORITE') await mutatePerson(personId,{favorite:!(bundleVm?.favorite ?? row.favorite)});
       store.dispatch({type:'DISCOVER_HISTORY_PUSH',entry:before});
-      if(decision!=='FAVORITE')store.dispatch({type:'DISCOVER_INDEX',index:state().discover.index+1});
+      if(decision!=='FAVORITE')store.dispatch({type:'DISCOVER_INDEX',index:remainsInQueue?before.index+1:before.index});
       loadDashboard(); prefetchCurrent();
     } catch(error){toast(error.message);}
   }
