@@ -1,4 +1,5 @@
 import { api } from '../api/client.js';
+import { formEnumWireValue } from '../data/adapters.js';
 
 export function createEncounterEffects({store,getEffects}) {
   const toast=message=>store.dispatch({type:'TOAST',value:message});
@@ -19,6 +20,7 @@ export function createEncounterEffects({store,getEffects}) {
     if(!personId)return toast('Person konnte nicht aufgelöst werden');
     const fd=new FormData(form);
     const selected=(kind,name)=>form.querySelector(`[data-${kind}-name="${name}"] .selected`)?.dataset.value || null;
+    const enumChoice=name=>formEnumWireValue(name,selected('choice',name)||'UNKNOWN');
     const payload={
       listing_id:fd.get('listing_id')||null,
       occurred_at:fd.get('occurred_at')||null,
@@ -27,11 +29,11 @@ export function createEncounterEffects({store,getEffects}) {
       total_price_eur:fd.get('total_price_eur')||null,
       overall_rating:selected('rating','overall_rating'),
       sympathy_rating:selected('rating','sympathy_rating'),
-      photo_status:selected('choice','photo_status')||'UNKNOWN',
-      service_accuracy:selected('choice','service_accuracy')||'UNKNOWN',
-      hygiene:selected('choice','hygiene')||'UNKNOWN',
-      kissing:selected('choice','kissing')||'UNKNOWN',
-      negotiable:selected('choice','negotiable')||'UNKNOWN',
+      photo_status:enumChoice('photo_status'),
+      service_accuracy:enumChoice('service_accuracy'),
+      hygiene:enumChoice('hygiene'),
+      kissing:enumChoice('kissing'),
+      negotiable:enumChoice('negotiable'),
       note:String(fd.get('note')||'').trim()||null,
       services:servicesFrom(form)
     };
