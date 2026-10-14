@@ -6,6 +6,8 @@ const infoItem=(ico,label,value)=>`<div class="info-item"><span>${icon(ico)}</sp
 const chips = values => `<div class="offer-chips">${values.map(v=>`<span>${e(v)}</span>`).join('') || '<small>Keine Angaben</small>'}</div>`;
 const traitValue=(detail,...keys)=>firstValue(detail.traits,keys) || '—';
 const serviceFlag=(detail,...aliases)=>{const names=flatten(detail.services).map(x=>String(x).toLowerCase());return names.some(n=>aliases.some(x=>n===x.toLowerCase()||n.includes(x.toLowerCase())))?'Ja':'—';};
+const recentish=value=>{const time=value?new Date(value).getTime():NaN;return Number.isFinite(time)&&Date.now()-time<36*60*60*1000;};
+const localDateTime=value=>{if(!value)return '';const d=new Date(value);if(Number.isNaN(d.getTime()))return '';const z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}T${z(d.getHours())}:${z(d.getMinutes())}`;};
 
 export function renderMedia(vm,index=0,{standalone=false,autoplay=false}={}) {
   const media=vm.media || []; const i=clamp(index,0,Math.max(0,media.length-1)); const current=media[i];
@@ -60,6 +62,7 @@ function renderAnalysis(detail,filters) {
 
 const ratingButtons=(name,value)=>`<div class="rating-row" data-rating-name="${a(name)}">${[1,2,3,4,5].map(n=>`<button type="button" class="${Number(value)===n?'selected':''}" data-action="rating-select" data-name="${a(name)}" data-value="${n}">${n}</button>`).join('')}</div>`;
 const choice=(name,value,options)=>`<div class="choice-field" data-choice-name="${a(name)}">${options.map(opt=>`<button type="button" class="${String(value||'UNKNOWN')===opt?'selected':''}" data-action="choice-select" data-name="${a(name)}" data-value="${a(opt)}">${e(opt)}</button>`).join('')}</div>`;
+const encounterServiceRow=item=>`<div class="encounter-service-row" data-encounter-service-row><input name="service_name" placeholder="Service" value="${a(item?.service_name||'')}"><input name="amount_eur" type="number" min="0" step="1" placeholder="€" value="${a(item?.amount_eur ?? '')}"><label class="check-row"><input name="performed" type="checkbox" ${item?.performed===false?'':'checked'}><span>Erbracht</span></label><input name="service_note" placeholder="Notiz" value="${a(item?.note||'')}"></div>`;
 
 function renderMyData(detail) {
   const encounter=detail.encounters[0] || {};
@@ -79,6 +82,34 @@ function renderMyData(detail) {
   </form>`;
 }
 
+function renderEncounterForm(detail,encounter={}) {
+  const services=[...(encounter.services||[]),{},{}];
+  const listingId=encounter.listing_id || detail.listings?.[0]?.listing_id || '';
+  return `<form class="my-data-form" data-encounter-services-form data-full-encounter="true" data-person-id="${a(detail.personId)}" data-encounter-id="${a(encounter.encounter_id||'')}">
+    <input type="hidden" name="listing_id" value="${a(listingId)}">
+    <div class="field-grid"><label class="field-input"><span>Zeitpunkt</span><input name="occurred_at" type="datetime-local" value="${a(localDateTime(encounter.occurred_at))}"></label><label class="field-input"><span>Dauer Minuten</span><input name="duration_minutes" type="number" min="0" value="${a(encounter.duration_minutes ?? '')}"></label></div>
+    <div class="field-grid"><label class="field-input"><span>Basispreis €</span><input name="base_price_eur" type="number" min="0" step="1" value="${a(encounter.base_price_eur ?? '')}"></label><label class="field-input"><span>Gesamtpreis €</span><input name="total_price_eur" type="number" min="0" step="1" value="${a(encounter.total_price_eur ?? '')}"></label></div>
+    <label><span>Gesamteindruck</span>${ratingButtons('overall_rating',encounter.overall_rating)}</label>
+    <label><span>Sympathie</span>${ratingButtons('sympathy_rating',encounter.sympathy_rating)}</label>
+    <label><span>Fotos</span>${choice('photo_status',encounter.photo_status,['UNKNOWN','Wie auf Anzeige','Besser','Schlechter'])}</label>
+    <label><span>Service korrekt</span>${choice('service_accuracy',encounter.service_accuracy,['UNKNOWN','Ja','Teilweise','Nein'])}</label>
+    <label><span>Hygiene</span>${choice('hygiene',encounter.hygiene,['UNKNOWN','Sehr gut','Gut','Okay','Schlecht'])}</label>
+    <label><span>Küssen</span>${choice('kissing',encounter.kissing,['UNKNOWN','Ja','Teilweise','Nein'])}</label>
+    <label><span>Verhandelbar</span>${choice('negotiable',encounter.negotiable,['UNKNOWN','Ja','Teilweise','Nein'])}</label>
+    <div class="encounter-services-editor"><b>Services</b>${services.map(encounterServiceRow).join('')}</div>
+    <label class="field-input"><span>Notiz</span><textarea name="note" rows="3">${e(encounter.note||'')}</textarea></label>
+    <button class="settings-primary" type="submit">${icon('check')}${encounter.encounter_id?'Treffen aktualisieren':'Treffen speichern'}</button>
+  </form>`;
+}
+
+function renderEncounters(detail) {
+  const encounters=detail.encounters || [];
+  return `<section class="profile-card"><div class="profile-card-head"><h2>${icon('calendar')}Treffen</h2><small>${e(encounters.length)} gespeichert</small></div>
+    ${encounters.length?encounters.map((encounter,index)=>`<details class="price-list-block" ${index===0?'open':''}><summary><b>${e(fmtDate(encounter.occurred_at))}</b> · ${e(encounter.duration_minutes?`${encounter.duration_minutes} Min.`:'Dauer offen')} · ${e(euro(encounter.total_price_eur))}</summary>${renderEncounterForm(detail,encounter)}</details>`).join(''):'<p class="muted">Noch kein Treffen gespeichert.</p>'}
+    <details class="price-list-block"><summary><b>${icon('plus')} Neues Treffen erfassen</b></summary>${renderEncounterForm(detail,{})}</details>
+  </section>`;
+}
+
 function eventTitle(event){const type=String(event.event_type || event.field_key || '').toUpperCase();if(type==='LISTING_FIRST_SNAPSHOT')return 'Anzeige entdeckt';if(type==='NEW_LISTING_FOR_PERSON')return 'Person wiedererkannt';if(type.includes('MEDIA'))return 'Bilder geändert';if(type==='STATUS_CHANGED')return 'Status geändert';return event.field_key?`${event.field_key} geändert`:'Profil geändert';}
 function renderHistory(detail,{showDescriptionChanges=false}={}) {
   const changes=showDescriptionChanges?(detail.changes||[]):(detail.changes||[]).filter(ev=>String(ev.field_key||'').toLowerCase()!=='description');
@@ -87,13 +118,14 @@ function renderHistory(detail,{showDescriptionChanges=false}={}) {
 }
 
 export function renderTabs(detail,active,filters,{showDescriptionChanges=false}={}) {
-  const tabs=[['info','Info'],['offer','Angebot'],['analysis','Analyse'],['data','Meine Daten'],['history','Verlauf']];
-  const panels={info:renderInfo(detail),offer:renderOffer(detail),analysis:renderAnalysis(detail,filters),data:renderMyData(detail),history:renderHistory(detail,{showDescriptionChanges})};
+  const tabs=[['info','Info'],['offer','Angebot'],['analysis','Analyse'],['data','Meine Daten'],['encounters','Treffen'],['history','Verlauf']];
+  const panels={info:renderInfo(detail),offer:renderOffer(detail),analysis:renderAnalysis(detail,filters),data:renderMyData(detail),encounters:renderEncounters(detail),history:renderHistory(detail,{showDescriptionChanges})};
   return `<div class="profile-details"><nav class="profile-tabs">${tabs.map(([id,label])=>`<button class="${active===id?'active':''}" data-action="profile-tab" data-tab="${id}" data-person-id="${a(detail.personId)}">${e(label)}</button>`).join('')}</nav><div class="profile-panel active">${panels[active] || panels.info}</div></div>`;
 }
 
 export function renderIdentity(vm) {
-  return `<div class="profile-identity"><div class="profile-name-row"><h1>${e(vm.name)}${vm.age?`, ${e(String(vm.age).replace(/\s*Jahre?.*/i,''))}`:''}</h1>${vm.activeToday?'<span class="online-pill">Heute online</span>':''}</div><div class="profile-meta-place">${icon('pin')}${e(vm.city || 'Ort unbekannt')}</div><div class="badge-row">${vm.listingCount>1?`<span class="badge purple">${icon('users')}Person bekannt · ${vm.listingCount} Anzeigen</span>`:''}${vm.hasVideo?`<span class="badge blue">${icon('play')}Video</span>`:''}</div></div>`;
+  const listing=vm.listing || vm.listings?.[0] || {};const status=String(listing.current_status||vm.status||'UNKNOWN').toUpperCase();const listingNew=recentish(listing.published_at||listing.first_seen_at||vm.listingPublishedAt||vm.listingFirstSeenAt);const personNew=Number(vm.listingCount||1)<=1&&recentish(vm.personFirstSeen);const statusText=status==='ACTIVE'?'Anzeige aktiv':status==='UNAVAILABLE'?'Anzeige nicht verfügbar':'Status unbekannt';
+  return `<div class="profile-identity"><div class="profile-name-row"><h1>${e(vm.name)}${vm.age?`, ${e(String(vm.age).replace(/\s*Jahre?.*/i,''))}`:''}</h1>${vm.activeToday?'<span class="online-pill">Heute online</span>':''}</div><div class="profile-meta-place">${icon('pin')}${e(vm.city || 'Ort unbekannt')}</div><div class="badge-row">${vm.listingCount>1?`<span class="badge purple">${icon('users')}Person bekannt · ${vm.listingCount} Anzeigen</span>`:personNew?`<span class="badge blue">${icon('user')}Person neu erkannt</span>`:''}${listingNew?`<span class="badge blue">${icon('sparkles')}Anzeige neu</span>`:''}<span class="badge">${icon('shield')}${e(statusText)}</span>${vm.hasVideo?`<span class="badge blue">${icon('play')}Video</span>`:''}</div></div>`;
 }
 
 export function renderStandalone(detail,{activeTab='info',mediaIndex=0,filters={selected:{}},autoplay=false,showDescriptionChanges=false}={}) {
