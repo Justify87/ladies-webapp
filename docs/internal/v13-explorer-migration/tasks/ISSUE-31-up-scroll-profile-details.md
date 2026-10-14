@@ -6,16 +6,16 @@
 
 ## Open implementation steps
 - [x] Shared details are in the swipe scroll surface.
-- [ ] Verify Chromium and Firefox interaction/layout in CI.
+- [ ] Manually verify vertical interaction/layout on the actual target browser/device.
 
 ## Acceptance Criteria
 - [ ] Up-scroll reveals details without a separate open-profile button.
 
 ## Verification
-Existing Chromium test proves vertical reveal; Firefox/CI proof pending.
+Source/layout audit completed. Runtime/UI verification remains manual by design; no browser matrix or E2E CI is required.
 
 ## Relevant commits
-`ae665b7` — Chromium interaction coverage.
+PR #69 Swipe/shared-profile migration commits.
 
 ## PR / review notes
 No active review thread.
