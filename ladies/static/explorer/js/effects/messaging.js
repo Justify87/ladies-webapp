@@ -4,8 +4,11 @@ import * as S from '../app/selectors.js';
 export function createMessagingEffects({store,router,getEffects}) {
   let events=null;
   let recorder=null, recorderChunks=[], recorderStream=null;
+  const presenceTimers=new Map();
   const toast=message=>store.dispatch({type:'TOAST',value:message});
   const state=()=>store.getState();
+
+  function applyPresence(payload){const threadId=Number(payload?.thread_id||0);if(!threadId)return;const presence=String(payload?.state||'').toLowerCase();const timer=presenceTimers.get(threadId);if(timer)clearTimeout(timer);presenceTimers.delete(threadId);if(!['composing','recording','available'].includes(presence)){store.dispatch({type:'MESSAGE_PRESENCE',threadId,value:null});return;}store.dispatch({type:'MESSAGE_PRESENCE',threadId,value:{state:presence,updatedAt:Date.now()}});if(presence==='composing'||presence==='recording')presenceTimers.set(threadId,setTimeout(()=>{presenceTimers.delete(threadId);store.dispatch({type:'MESSAGE_PRESENCE',threadId,value:null});},6500));}
 
   async function loadMessagingStatus(){try{store.dispatch({type:'MESSAGE_STATUS',value:await api.messagingStatus()});}catch{} }
 
@@ -47,7 +50,7 @@ export function createMessagingEffects({store,router,getEffects}) {
 
   async function createPersonAndAssign(form){const endpointId=Number(form.dataset.endpointId),name=String(new FormData(form).get('display_name')||'WhatsApp-Kontakt');try{await api.assignEndpoint(endpointId,{create_person:true,display_name:name});store.dispatch({type:'SHEET',value:null});toast('Person erstellt und zugeordnet');await loadThreads();}catch(error){toast(error.message);} }
 
-  function connectEvents(){if(events)return;try{events=new EventSource('/api/messaging/events');events.onopen=()=>store.dispatch({type:'MESSAGE_EVENTS',value:true});events.onerror=()=>store.dispatch({type:'MESSAGE_EVENTS',value:false});events.onmessage=async ev=>{let payload={};try{payload=JSON.parse(ev.data||'{}');}catch{};await Promise.allSettled([loadMessagingStatus(),loadThreads()]);const t=S.currentThread(state());if(t&&(payload.thread_id===t.threadId||payload.message?.thread_id===t.threadId||!payload.thread_id))loadThread(t.threadId).catch(()=>{});};}catch(error){logClient('warning','sse',error.message);}}
+  function connectEvents(){if(events)return;try{events=new EventSource('/api/messaging/events');events.onopen=()=>store.dispatch({type:'MESSAGE_EVENTS',value:true});events.onerror=()=>store.dispatch({type:'MESSAGE_EVENTS',value:false});events.onmessage=async ev=>{let payload={};try{payload=JSON.parse(ev.data||'{}');}catch{};if(payload.type==='presence'){applyPresence(payload);return;}await Promise.allSettled([loadMessagingStatus(),loadThreads()]);const t=S.currentThread(state());if(t&&(payload.thread_id===t.threadId||payload.message?.thread_id===t.threadId||!payload.thread_id))loadThread(t.threadId).catch(()=>{});};}catch(error){logClient('warning','sse',error.message);}}
 
   return Object.freeze({loadMessagingStatus,connectWhatsapp,disconnectWhatsapp,logoutWhatsapp,showQr,loadThreads,loadThread,openChat,openPersonChat,sendChat,sendAttachment,findMessage,reactMessage,deleteMessage,retryMessage,startVoice,stopVoice,openAssignment,assignEndpoint,createPersonAndAssign,connectEvents});
 }
