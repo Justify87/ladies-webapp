@@ -25,6 +25,7 @@ export function renderActionRail(vm) {
     <button class="profile-action ${vm.favorite?'selected':''}" data-action="profile-favorite" data-person-id="${a(vm.personId)}" aria-pressed="${vm.favorite}">${icon('star')}<span>Favorit</span></button>
     <button class="profile-action" data-action="profile-chat" data-person-id="${a(vm.personId)}">${icon('chat')}<span>Chat</span></button>
     <button class="profile-action" data-action="profile-contact" data-person-id="${a(vm.personId)}">${icon('phone')}<span>Kontakt</span></button>
+    <button class="profile-action" data-action="profile-share" data-person-id="${a(vm.personId)}" data-source-url="${a(vm.sourceUrl||'')}">${icon('external')}<span>Teilen</span></button>
   </div>`;
 }
 
