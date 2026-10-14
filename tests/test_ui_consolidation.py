@@ -1,182 +1,138 @@
 from __future__ import annotations
 
-import tomllib
+import tempfile
 import unittest
 from pathlib import Path
 
-from ladies_v9.config import frontend_config
+from ladies_v9.app import create_app
 
 
 ROOT = Path(__file__).resolve().parents[1]
-STATIC = ROOT / "ladies" / "static"
 TEMPLATE = ROOT / "ladies" / "templates" / "index.html"
+STATIC = ROOT / "ladies" / "static"
+EXPLORER = STATIC / "explorer"
 
 
-class UiConsolidationTests(unittest.TestCase):
-    def test_template_uses_canonical_assets_without_transitional_runtime(self):
-        index = TEMPLATE.read_text(encoding="utf-8")
-
+class ExplorerUiConsolidationTests(unittest.TestCase):
+    def test_index_uses_only_v13_explorer_runtime(self):
+        html = TEMPLATE.read_text(encoding="utf-8")
         for asset in (
+            "/static/explorer/css/tokens.css",
+            "/static/explorer/css/base.css",
+            "/static/explorer/css/shell.css",
+            "/static/explorer/css/components.css",
+            "/static/explorer/css/screens.css",
+            "/static/explorer/js/bootstrap.js",
+        ):
+            self.assertIn(asset, html)
+
+        for legacy in (
             "/static/app.js",
+            "/static/app.css",
             "/static/profile_messaging_ui.js",
             "/static/messaging.js",
-            "/static/js/chat_profile.js",
+            "/static/messaging.css",
             "/static/pricing.js",
-            "/static/css/profile_messaging_ui.css",
-            "/static/css/messaging_features.css",
-            "/static/css/search_ui.css",
-            "/static/css/filter_ui.css",
-            "/static/css/chat_profile.css",
-        ):
-            with self.subTest(asset=asset):
-                self.assertIn(asset, index)
-
-        for removed in (
-            "/static/js/runtime.js",
-            "/static/js/search_ui.js",
-            "/static/js/filter_ui.js",
-            "/static/ui_consolidation.js",
-            "/static/ui_followup.js",
-            "/static/messaging_bridge.js",
-            "/static/css/messaging_complete.css",
-        ):
-            with self.subTest(removed=removed):
-                self.assertNotIn(removed, index)
-
-    def test_transitional_frontend_files_are_deleted(self):
-        for relative in (
-            "js/runtime.js",
-            "js/search_ui.js",
-            "js/filter_ui.js",
-            "ui_consolidation.js",
-            "ui_followup.js",
-            "messaging_bridge.js",
-            "css/messaging_complete.css",
-        ):
-            with self.subTest(relative=relative):
-                self.assertFalse((STATIC / relative).exists())
-
-    def test_browser_entrypoints_are_real_es_modules(self):
-        index = TEMPLATE.read_text(encoding="utf-8")
-        for asset in (
-            "/static/app.js",
-            "/static/profile_messaging_ui.js",
-            "/static/messaging.js",
+            "/static/pricing.css",
             "/static/js/chat_profile.js",
-            "/static/pricing.js",
         ):
-            with self.subTest(asset=asset):
-                self.assertIn(f'<script type="module" src="{asset}"></script>', index)
+            self.assertNotIn(legacy, html)
 
-        app = (STATIC / "app.js").read_text(encoding="utf-8")
-        self.assertIn("export { state, api, toast", app)
-        self.assertNotIn("window.LadiesApp", app)
+        for host_id in ("app", "appHeader", "screenHost", "bottomNav", "overlayHost", "toast"):
+            self.assertIn(f'id="{host_id}"', html)
 
-    def test_feature_modules_import_explicit_app_contracts(self):
-        profile_messaging = (STATIC / "profile_messaging_ui.js").read_text(encoding="utf-8")
-        messaging = (STATIC / "messaging.js").read_text(encoding="utf-8")
-        chat_profile = (STATIC / "js" / "chat_profile.js").read_text(encoding="utf-8")
-        pricing = (STATIC / "pricing.js").read_text(encoding="utf-8")
-
-        self.assertIn("from './app.js'", profile_messaging)
-        self.assertIn("from './app.js'", messaging)
-        self.assertIn("from '../app.js'", chat_profile)
-        self.assertIn("from './app.js'", pricing)
-        for source in (profile_messaging, messaging, chat_profile, pricing):
-            self.assertNotIn("window.LadiesApp", source)
-
-    def test_messaging_shell_is_static_and_has_single_owner(self):
-        index = TEMPLATE.read_text(encoding="utf-8")
-        messaging = (STATIC / "messaging.js").read_text(encoding="utf-8")
-        profile_messaging = (STATIC / "profile_messaging_ui.js").read_text(encoding="utf-8")
-
-        for marker in (
-            'id="messagesScreen"',
-            'id="moreScreen"',
-            'id="messagingChatLayer"',
-            'data-nav="messages"',
-            'id="messageNavBadge"',
-        ):
-            self.assertIn(marker, index)
-
-        self.assertNotIn("insertAdjacentHTML", messaging)
-        self.assertNotIn("nav.innerHTML", messaging)
-        self.assertNotIn("q('#menuBtn').onclick", messaging)
-        self.assertNotIn("injectShell", messaging)
-        self.assertIn("function bindShell()", messaging)
-
-        self.assertNotIn("stopImmediatePropagation", profile_messaging)
-        self.assertNotIn("cleanMessagesUi", profile_messaging)
-        self.assertNotIn("observe(document.body", profile_messaging)
-        self.assertNotIn(".profile-chat-section", profile_messaging)
-        self.assertIn("ladies:open-person-chat", profile_messaging)
-        self.assertIn("ladies:messaging-thread-opened", profile_messaging)
-        self.assertIn("ladies:open-person-chat", messaging)
-
-    def test_backend_config_is_filter_and_version_source_of_truth(self):
-        config = frontend_config(default_city="leipzig", default_radius=20)
-        self.assertEqual(config["defaults"], {"city": "leipzig", "radius_km": 20})
-        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-        self.assertEqual(config["version"], project["project"]["version"])
-
-        categories = {item["value"] for item in config["categories"]}
-        self.assertIn("huren-hostessen", categories)
-        self.assertIn("bordelle-laufhaeuser", categories)
-        self.assertIn("onlineservice", categories)
-
-        groups = {item["key"]: item["options"] for item in config["filter_groups"]}
-        self.assertIn("service", groups)
-        service_labels = {item["label"] for item in groups["service"]}
-        self.assertIn("Messebegleitung", service_labels)
-        self.assertIn("Dusch-/Badeservice", service_labels)
-
-    def test_pricing_does_not_monkeypatch_fetch(self):
-        pricing = (STATIC / "pricing.js").read_text(encoding="utf-8")
-        self.assertNotIn("window.fetch =", pricing)
-        self.assertNotIn("window.fetch=", pricing)
-        self.assertIn("ladies:messaging-thread-opened", pricing)
-        self.assertIn("ladies:messaging-thread-updated", pricing)
-        self.assertIn("ladies:messaging-thread-closed", pricing)
-
-    def test_pricing_review_is_inline_and_not_a_blocking_sheet(self):
-        pricing = (STATIC / "pricing.js").read_text(encoding="utf-8")
-        styles = (STATIC / "pricing.css").read_text(encoding="utf-8")
-
-        self.assertIn("/timeline?limit=100", pricing)
-        self.assertNotIn("/timeline?limit=40", pricing)
-        self.assertIn("data-price-magic-trigger", pricing)
-        self.assertIn("data-price-inline-artifact", pricing)
-        self.assertIn(".message-bubble", pricing)
-        self.assertNotIn("priceMagicBar", pricing)
-        self.assertNotIn("renderProposalSheet", pricing)
-        self.assertNotIn("openSheet", pricing)
-        self.assertNotIn(".price-magic-bar", styles)
-        self.assertIn(".price-inline-trigger", styles)
-        self.assertIn(".price-inline-card", styles)
-
-    def test_pricing_inline_state_survives_message_dom_rerenders(self):
-        pricing = (STATIC / "pricing.js").read_text(encoding="utf-8")
-
-        self.assertIn("function handleInlineInput(e)", pricing)
-        self.assertIn("document.addEventListener('input',handleInlineInput,true)", pricing)
-        self.assertIn("document.addEventListener('change',handleInlineInput,true)", pricing)
-        self.assertIn("function chatStructureChanged(records)", pricing)
-        self.assertIn("function observeChatMessages()", pricing)
-        self.assertIn("P.chatObserver.observe(box,{childList:true})", pricing)
-        self.assertIn("renderInlinePricing()", pricing)
-
-    def test_messaging_styles_are_static_assets(self):
-        index = TEMPLATE.read_text(encoding="utf-8")
-        messaging = (STATIC / "messaging.js").read_text(encoding="utf-8")
-        self.assertIn('/static/css/profile_messaging_ui.css', index)
-        self.assertIn('/static/css/messaging_features.css', index)
-        self.assertLess(
-            index.index('/static/css/profile_messaging_ui.css'),
-            index.index('/static/css/messaging_features.css'),
+    def test_legacy_explorer_assets_are_removed(self):
+        legacy_paths = (
+            STATIC / "app.js",
+            STATIC / "app.css",
+            STATIC / "messaging.js",
+            STATIC / "messaging.css",
+            STATIC / "pricing.js",
+            STATIC / "pricing.css",
+            STATIC / "profile_messaging_ui.js",
+            STATIC / "js" / "chat_profile.js",
+            STATIC / "css" / "chat_profile.css",
+            STATIC / "css" / "filter_ui.css",
+            STATIC / "css" / "messaging_features.css",
+            STATIC / "css" / "profile_messaging_ui.css",
+            STATIC / "css" / "search_ui.css",
         )
-        self.assertNotIn("messagingCompleteStyle", messaging)
-        self.assertNotIn("document.createElement('style')", messaging)
-        self.assertNotIn('document.createElement("style")', messaging)
+        for path in legacy_paths:
+            self.assertFalse(path.exists(), f"Legacy Explorer asset still exists: {path.relative_to(ROOT)}")
+
+    def test_v13_runtime_is_modular_and_reuses_profile_component(self):
+        bootstrap = (EXPLORER / "js" / "bootstrap.js").read_text(encoding="utf-8")
+        render = (EXPLORER / "js" / "ui" / "render.js").read_text(encoding="utf-8")
+        discover = (EXPLORER / "js" / "ui" / "screens" / "discover.js").read_text(encoding="utf-8")
+        messaging = (EXPLORER / "js" / "ui" / "screens" / "messaging.js").read_text(encoding="utf-8")
+
+        self.assertIn("createStore", bootstrap)
+        self.assertIn("createRouter", bootstrap)
+        self.assertIn("createEffects", bootstrap)
+        self.assertIn("createController", bootstrap)
+        self.assertIn("renderStandalone", render)
+        self.assertIn("renderSwipe", discover)
+        self.assertIn("../profile.js", discover)
+        self.assertIn("/view-once", messaging)
+        self.assertNotIn("<img src=\"/api/messaging/messages/${a(m.id)}/view-once", messaging)
+
+    def test_grid_preserves_status_video_ai_and_user_actions(self):
+        discover = (EXPLORER / "js" / "ui" / "screens" / "discover.js").read_text(encoding="utf-8")
+        for contract in ("row.status", "row.hasVideo", "row.has_ai_content", "grid-like", "grid-favorite", "open-profile"):
+            self.assertIn(contract, discover)
+
+    def test_encounter_service_details_are_editable_and_persisted(self):
+        effects = (EXPLORER / "js" / "effects" / "encounters.js").read_text(encoding="utf-8")
+        overlays = (EXPLORER / "js" / "ui" / "screens" / "overlays.js").read_text(encoding="utf-8")
+        controller = (EXPLORER / "js" / "app" / "controller.js").read_text(encoding="utf-8")
+        app_effects = (EXPLORER / "js" / "app" / "effects.js").read_text(encoding="utf-8")
+
+        self.assertIn("createEncounterEffects", app_effects)
+        self.assertIn("services", effects)
+        self.assertIn("updateEncounter", effects)
+        self.assertIn("addEncounter", effects)
+        self.assertIn("data-encounter-services-form", overlays)
+        self.assertIn("service_name", overlays)
+        self.assertIn("amount_eur", overlays)
+        self.assertIn("performed", overlays)
+        self.assertIn("saveEncounterServices", controller)
+
+    def test_pricing_preserves_current_and_history_views(self):
+        effects = (EXPLORER / "js" / "effects" / "pricing.js").read_text(encoding="utf-8")
+        commands = (EXPLORER / "js" / "app" / "commands.js").read_text(encoding="utf-8")
+        overlays = (EXPLORER / "js" / "ui" / "screens" / "overlays.js").read_text(encoding="utf-8")
+
+        self.assertIn("currentPricing", effects)
+        self.assertIn("pricingHistory", effects)
+        self.assertIn("openPersonPricing", effects)
+        self.assertIn("person-pricing", commands)
+        self.assertIn("Pricing aktuell & Historie", overlays)
+        self.assertIn("Aktuelle bestätigte Preise", overlays)
+        self.assertIn("Historie", overlays)
+
+    def test_package_data_includes_nested_explorer_assets(self):
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        for pattern in (
+            '"static/explorer/css/*.css"',
+            '"static/explorer/css/components/*.css"',
+            '"static/explorer/css/screens/*.css"',
+            '"static/explorer/js/app/*.js"',
+            '"static/explorer/js/effects/*.js"',
+            '"static/explorer/js/ui/screens/*.js"',
+        ):
+            self.assertIn(pattern, pyproject)
+        self.assertNotIn('"static/js/*.js"', pyproject)
+        self.assertNotIn('"static/css/*.css"', pyproject)
+
+    def test_index_injects_frontend_config(self):
+        with tempfile.TemporaryDirectory() as td:
+            app = create_app(db_path=Path(td) / "app.sqlite3", data_dir=Path(td) / "data")
+            response = app.test_client().get("/")
+            self.assertEqual(response.status_code, 200)
+            body = response.get_data(as_text=True)
+            self.assertIn("window.__LADIES_CONFIG__", body)
+            self.assertIn('"defaults"', body)
+            self.assertIn('"filter_groups"', body)
 
 
 if __name__ == "__main__":

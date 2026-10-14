@@ -34,11 +34,18 @@ include-package-data = true
 [tool.setuptools.package-data]
 ladies_v9 = [
   "templates/*.html",
-  "static/*.js",
-  "static/*.css",
   "static/*.svg",
-  "static/js/*.js",
-  "static/css/*.css",
+  "static/explorer/css/*.css",
+  "static/explorer/css/components/*.css",
+  "static/explorer/css/screens/*.css",
+  "static/explorer/js/*.js",
+  "static/explorer/js/api/*.js",
+  "static/explorer/js/app/*.js",
+  "static/explorer/js/data/*.js",
+  "static/explorer/js/effects/*.js",
+  "static/explorer/js/shared/*.js",
+  "static/explorer/js/ui/*.js",
+  "static/explorer/js/ui/screens/*.js",
   "messaging/whatsapp_worker/*.mjs",
   "messaging/whatsapp_worker/*.json",
 ]

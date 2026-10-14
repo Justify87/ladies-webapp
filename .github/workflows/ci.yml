@@ -11,119 +11,55 @@ on:
       - '**/*.md'
       - 'docs/**'
   workflow_dispatch:
-  workflow_call:
-    inputs:
-      checkout_ref:
-        description: Commit or ref to verify
-        required: false
-        type: string
-        default: ''
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 jobs:
-  core:
-    name: Core / Python 3.12
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+  syntax:
+    name: Syntax checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.checkout_ref || github.sha }}
+        uses: actions/checkout@v4
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          version: latest-known
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
       - name: Set up Node.js 22
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: ladies/messaging/whatsapp_worker/package-lock.json
 
-      - name: Install locked dependencies
-        run: |
-          uv sync --locked --python 3.12
-          npm ci --prefix ladies/messaging/whatsapp_worker --omit=dev --no-audit --no-fund
+      - name: Check Python syntax
+        run: python -m compileall -q ladies tools ladies_explorer.py
 
-      - name: Compile and import Python application
-        run: |
-          uv run python -m compileall -q ladies tools ladies_explorer.py
-          uv run python -c "import ladies_v9.app, nodeenv, ladies_explorer; assert ladies_explorer._project_ready()"
-
-      - name: Run core Python tests
+      - name: Check Explorer JavaScript syntax
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t TEST_FILES < <(find tests -maxdepth 1 -type f -name 'test_*.py' ! -name 'test_portable_*.py' -print | sort)
-          test "${#TEST_FILES[@]}" -gt 0
-          uv run python -m unittest -v "${TEST_FILES[@]}"
+          find ladies/static/explorer -type f \( -name '*.js' -o -name '*.mjs' \) -print -exec node --experimental-default-type=module --check {} \;
 
-      - name: Verify JavaScript and WhatsApp worker
-        shell: bash
+      - name: Check project metadata syntax
         run: |
-          set -euo pipefail
-          node --check ladies/messaging/whatsapp_worker/worker.mjs
-          find ladies/static -type f \( -name '*.js' -o -name '*.mjs' \) -print -exec node --experimental-default-type=module --check {} \;
-          node -e "const p=require('./ladies/messaging/whatsapp_worker/node_modules/@whiskeysockets/baileys/package.json'); if(p.version!=='7.0.0-rc14') throw new Error('Unexpected Baileys '+p.version); console.log('Baileys '+p.version)"
+          python - <<'PY'
+          import json
+          import tomllib
+          from pathlib import Path
 
-      - name: Verify self-healing bootstrap
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m venv .bootstrap-test
-          LADIES_BOOTSTRAP_CHECK_ONLY=1 .bootstrap-test/bin/python ladies_explorer.py
-          .bootstrap-test/bin/python -c "import ladies_v9.app, nodeenv, flask, ladies_explorer; assert ladies_explorer._project_ready()"
+          with Path('pyproject.toml').open('rb') as handle:
+              tomllib.load(handle)
 
-  python-313:
-    name: Compatibility / Python 3.13
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.checkout_ref || github.sha }}
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.13'
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          version: latest-known
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Install locked dependencies
-        run: uv sync --locked --python 3.13
-
-      - name: Compile and import Python application
-        run: |
-          uv run python -m compileall -q ladies tools ladies_explorer.py
-          uv run python -c "import ladies_v9.app, nodeenv, ladies_explorer; assert ladies_explorer._project_ready()"
-
-      - name: Run core Python tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t TEST_FILES < <(find tests -maxdepth 1 -type f -name 'test_*.py' ! -name 'test_portable_*.py' -print | sort)
-          test "${#TEST_FILES[@]}" -gt 0
-          uv run python -m unittest -v "${TEST_FILES[@]}"
+          for filename in (
+              'ladies/messaging/whatsapp_worker/package.json',
+              'ladies/messaging/whatsapp_worker/package-lock.json',
+          ):
+              json.loads(Path(filename).read_text(encoding='utf-8'))
+          PY

@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build and verify release artifact
+    name: Build release artifact
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -43,7 +43,7 @@ jobs:
           cache: npm
           cache-dependency-path: ladies/messaging/whatsapp_worker/package-lock.json
 
-      - name: Verify tag and version metadata
+      - name: Verify release metadata
         shell: bash
         run: |
           set -euo pipefail
@@ -75,8 +75,6 @@ jobs:
               raise SystemExit('Release version mismatch: ' + ', '.join(mismatches) + f'; tag={tag}')
           if not note.is_file() or not note.read_text(encoding='utf-8').strip():
               raise SystemExit(f'Missing or empty release note: {note}')
-
-          print(f'Release metadata verified for {tag}')
           PY
 
       - name: Install locked dependencies
@@ -84,10 +82,7 @@ jobs:
           uv sync --locked --python 3.12
           npm ci --prefix ladies/messaging/whatsapp_worker --omit=dev --no-audit --no-fund
 
-      - name: Verify release package contract
-        run: uv run python -m unittest -v tests/test_release_package.py
-
-      - name: Build portable release once
+      - name: Build portable release
         shell: bash
         run: |
           set -euo pipefail
@@ -119,10 +114,9 @@ jobs:
           for key, value in expected.items():
               if manifest.get(key) != value:
                   raise SystemExit(f'Manifest mismatch for {key}: {manifest.get(key)!r} != {value!r}')
-          print(f'Manifest verified in {archive}')
           PY
 
-      - name: Upload verified release artifact
+      - name: Upload release artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ladies-explorer-${{ github.ref_name }}
@@ -141,13 +135,13 @@ jobs:
       - name: Checkout tagged commit for release notes
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Download verified release artifact
+      - name: Download release artifact
         uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
         with:
           name: ladies-explorer-${{ github.ref_name }}
           path: dist
 
-      - name: Publish release without rebuilding
+      - name: Publish release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

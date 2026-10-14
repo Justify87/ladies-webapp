@@ -282,7 +282,8 @@ class ReviewHardeningTests(unittest.TestCase):
         self.assertIn("test_portable_*.py", platform)
         self.assertIn("windows-2025", platform)
         self.assertIn("macos-15", platform)
-        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", ci)
+        self.assertIn("cancel-in-progress: false", ci)
+        self.assertIn("cancel-in-progress: false", platform)
 
     def test_source_version_fallback_comes_from_pyproject(self):
         import tomllib

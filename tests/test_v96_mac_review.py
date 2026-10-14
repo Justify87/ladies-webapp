@@ -14,6 +14,7 @@ from ladies_v9.messaging.gateway import WhatsAppGateway
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EXPLORER = ROOT / "ladies" / "static" / "explorer"
 
 
 class SearchRegressionTests(unittest.TestCase):
@@ -114,20 +115,24 @@ class RuntimeRegressionTests(unittest.TestCase):
         self.assertIn("https://storage.googleapis.com", BROWSER_CSP)
 
     def test_search_action_is_a_permanent_dock_above_navigation(self):
-        css = (ROOT / "ladies" / "static" / "css" / "search_ui.css").read_text(encoding="utf-8")
-        self.assertIn("width:min(100vw,430px)", css)
-        self.assertIn("bottom:calc(var(--nav-h) + var(--safe-bottom))", css)
-        self.assertIn("@media (min-width:431px)", css)
-        self.assertIn("max(16px", css)
+        css = (EXPLORER / "css" / "screens" / "01a.css").read_text(encoding="utf-8")
+        shell = (EXPLORER / "css" / "shell.css").read_text(encoding="utf-8")
+        self.assertIn(".search-screen { display:grid; grid-template-rows:minmax(0,1fr) auto; }", css)
+        self.assertIn(".search-footer {", css)
+        self.assertIn("grid-template-rows: var(--status-h) var(--header-h) minmax(0, 1fr) var(--nav-h);", shell)
 
     def test_removed_messaging_stylesheet_is_not_imported(self):
-        css = (ROOT / "ladies" / "static" / "css" / "chat_profile.css").read_text(encoding="utf-8")
+        css = (EXPLORER / "css" / "screens.css").read_text(encoding="utf-8")
+        template = (ROOT / "ladies" / "templates" / "index.html").read_text(encoding="utf-8")
         self.assertNotIn("messaging_complete.css", css)
+        self.assertNotIn("/static/messaging.css", template)
 
     def test_preview_error_copy_is_distinct_from_zero_results(self):
-        app_js = (ROOT / "ladies" / "static" / "app.js").read_text(encoding="utf-8")
-        self.assertIn("Trefferzahl nicht verfügbar", app_js)
-        self.assertIn("previewCount=null;previewStatus='error'", app_js)
+        search_js = (EXPLORER / "js" / "ui" / "screens" / "search.js").read_text(encoding="utf-8")
+        core_js = (EXPLORER / "js" / "effects" / "core.js").read_text(encoding="utf-8")
+        self.assertIn("Trefferzahl nicht verfügbar", search_js)
+        self.assertIn("status:'error',count:null", core_js)
+        self.assertIn("status:'ready',count:Number", core_js)
 
 
 class WhatsAppRecoveryRegressionTests(unittest.TestCase):

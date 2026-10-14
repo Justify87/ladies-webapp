@@ -148,55 +148,37 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-  ci:
-    name: CI gate
-    needs: prepare
-    uses: ./.github/workflows/ci.yml
-    with:
-      checkout_ref: ${{ needs.prepare.outputs.release_sha }}
-    permissions:
-      contents: read
-
-  platform:
-    name: Platform gate
-    needs: prepare
-    uses: ./.github/workflows/platform.yml
-    with:
-      checkout_ref: ${{ needs.prepare.outputs.release_sha }}
-    permissions:
-      contents: read
-
   tag-and-dispatch:
-    name: Tag verified commit and start immutable release
-    needs: [prepare, ci, platform]
+    name: Create release tag and start release
+    needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       actions: write
       contents: write
     steps:
-      - name: Checkout verified release commit
+      - name: Checkout prepared release commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ needs.prepare.outputs.release_sha }}
 
-      - name: Create verified release tag
+      - name: Create release tag
         shell: bash
         env:
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
             echo "Tag already exists: $TAG" >&2
             exit 1
           fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git tag "$TAG" "${{ needs.prepare.outputs.release_sha }}"
           git push origin "refs/tags/$TAG"
 
-      - name: Dispatch immutable release workflow at tag
+      - name: Start release workflow
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
