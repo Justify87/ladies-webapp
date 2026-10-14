@@ -55,7 +55,7 @@ export function createMessagingEffects({store,router,getEffects}) {
   async function stopVoice(){return finishVoice(false);}
   async function cancelVoice(){return finishVoice(true);}
 
-  async function openAssignment(endpointId){try{const [candidates,probe]=await Promise.all([api.assignmentCandidates(endpointId),api.endpointProbe(endpointId).catch(()=>null)]);store.dispatch({type:'SHEET',value:{kind:'assign',payload:{endpointId,candidates:candidates?.items||[],probe}}});}catch(error){toast(error.message);} }
+  async function openAssignment(endpointId){try{const [candidates,probe]=await Promise.all([api.assignmentCandidates(endpointId),api.endpointProbe(endpointId).catch(()=>null)]);const items=(candidates?.items||[]).map(candidate=>({...candidate,city:(candidate.evidence||[]).map(ev=>`${ev.decision||ev.kind}: ${ev.text||ev.kind||''}`).join(' · ')}));store.dispatch({type:'SHEET',value:{kind:'assign',payload:{endpointId,candidates:items,probe}}});}catch(error){toast(error.message);} }
 
   async function openAssignedThread(personId,endpointId){const summary=await api.personMessaging(Number(personId));await loadThreads();const threadId=Number(summary?.thread_id||0);if(!threadId)return;router.replace('chat',{threadId});await loadThread(threadId);if(endpointId)store.dispatch({type:'THREAD_ENDPOINT',endpointId:Number(endpointId)});}
 
