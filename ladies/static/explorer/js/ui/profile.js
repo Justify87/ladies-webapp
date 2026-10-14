@@ -74,8 +74,8 @@ function renderMyData(detail) {
     <label><span>Fotos</span>${choice('photo_status',encounter.photo_status,['UNKNOWN','Wie auf Anzeige','Besser','Schlechter'])}</label>
     <label><span>Wiederholungsinteresse</span>${choice('repeat_interest',detail.repeatInterest,['UNKNOWN','Ja','Vielleicht','Nein'])}</label>
     <label><span>Service korrekt</span>${choice('service_accuracy',encounter.service_accuracy,['UNKNOWN','Ja','Teilweise','Nein'])}</label>
-    <label><span>Hygiene</span>${choice('hygiene',encounter.hygiene,['UNKNOWN','Sehr gut','Gut','Okay','Schlecht'])}</label>
-    <label><span>Küssen</span>${choice('kissing',encounter.kissing,['UNKNOWN','Ja','Teilweise','Nein'])}</label>
+    <label><span>Hygiene</span>${choice('hygiene',encounter.hygiene,['UNKNOWN','Sehr gut','Okay','Schlecht'])}</label>
+    <label><span>Küssen</span>${choice('kissing',encounter.kissing,['UNKNOWN','Ja','Auf Wunsch','Nein'])}</label>
     <label><span>Verhandelbar</span>${choice('negotiable',encounter.negotiable,['UNKNOWN','Ja','Teilweise','Nein'])}</label>
     <div class="field-grid"><label class="field-input"><span>Dauer Minuten</span><input name="duration_minutes" type="number" min="0" value="${a(encounter.duration_minutes ?? '')}"></label><label class="field-input"><span>Gesamtpreis €</span><input name="total_price_eur" type="number" min="0" step="1" value="${a(encounter.total_price_eur ?? '')}"></label></div>
     <label class="field-input"><span>Private Notiz</span><textarea name="private_note" rows="4">${e(detail.privateNote)}</textarea></label>
@@ -94,8 +94,8 @@ function renderEncounterForm(detail,encounter={}) {
     <label><span>Sympathie</span>${ratingButtons('sympathy_rating',encounter.sympathy_rating)}</label>
     <label><span>Fotos</span>${choice('photo_status',encounter.photo_status,['UNKNOWN','Wie auf Anzeige','Besser','Schlechter'])}</label>
     <label><span>Service korrekt</span>${choice('service_accuracy',encounter.service_accuracy,['UNKNOWN','Ja','Teilweise','Nein'])}</label>
-    <label><span>Hygiene</span>${choice('hygiene',encounter.hygiene,['UNKNOWN','Sehr gut','Gut','Okay','Schlecht'])}</label>
-    <label><span>Küssen</span>${choice('kissing',encounter.kissing,['UNKNOWN','Ja','Teilweise','Nein'])}</label>
+    <label><span>Hygiene</span>${choice('hygiene',encounter.hygiene,['UNKNOWN','Sehr gut','Okay','Schlecht'])}</label>
+    <label><span>Küssen</span>${choice('kissing',encounter.kissing,['UNKNOWN','Ja','Auf Wunsch','Nein'])}</label>
     <label><span>Verhandelbar</span>${choice('negotiable',encounter.negotiable,['UNKNOWN','Ja','Teilweise','Nein'])}</label>
     <div class="encounter-services-editor"><b>Services</b>${services.map(encounterServiceRow).join('')}</div>
     <label class="field-input"><span>Notiz</span><textarea name="note" rows="3">${e(encounter.note||'')}</textarea></label>
