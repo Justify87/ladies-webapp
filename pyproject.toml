@@ -34,11 +34,7 @@ include-package-data = true
 [tool.setuptools.package-data]
 ladies_v9 = [
   "templates/*.html",
-  "static/*.js",
-  "static/*.css",
   "static/*.svg",
-  "static/js/*.js",
-  "static/css/*.css",
   "static/explorer/css/*.css",
   "static/explorer/css/components/*.css",
   "static/explorer/css/screens/*.css",

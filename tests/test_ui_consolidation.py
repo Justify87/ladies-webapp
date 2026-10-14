@@ -9,7 +9,8 @@ from ladies_v9.app import create_app
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "ladies" / "templates" / "index.html"
-EXPLORER = ROOT / "ladies" / "static" / "explorer"
+STATIC = ROOT / "ladies" / "static"
+EXPLORER = STATIC / "explorer"
 
 
 class ExplorerUiConsolidationTests(unittest.TestCase):
@@ -40,6 +41,25 @@ class ExplorerUiConsolidationTests(unittest.TestCase):
         for host_id in ("app", "appHeader", "screenHost", "bottomNav", "overlayHost", "toast"):
             self.assertIn(f'id="{host_id}"', html)
 
+    def test_legacy_explorer_assets_are_removed(self):
+        legacy_paths = (
+            STATIC / "app.js",
+            STATIC / "app.css",
+            STATIC / "messaging.js",
+            STATIC / "messaging.css",
+            STATIC / "pricing.js",
+            STATIC / "pricing.css",
+            STATIC / "profile_messaging_ui.js",
+            STATIC / "js" / "chat_profile.js",
+            STATIC / "css" / "chat_profile.css",
+            STATIC / "css" / "filter_ui.css",
+            STATIC / "css" / "messaging_features.css",
+            STATIC / "css" / "profile_messaging_ui.css",
+            STATIC / "css" / "search_ui.css",
+        )
+        for path in legacy_paths:
+            self.assertFalse(path.exists(), f"Legacy Explorer asset still exists: {path.relative_to(ROOT)}")
+
     def test_v13_runtime_is_modular_and_reuses_profile_component(self):
         bootstrap = (EXPLORER / "js" / "bootstrap.js").read_text(encoding="utf-8")
         render = (EXPLORER / "js" / "ui" / "render.js").read_text(encoding="utf-8")
@@ -67,6 +87,8 @@ class ExplorerUiConsolidationTests(unittest.TestCase):
             '"static/explorer/js/ui/screens/*.js"',
         ):
             self.assertIn(pattern, pyproject)
+        self.assertNotIn('"static/js/*.js"', pyproject)
+        self.assertNotIn('"static/css/*.css"', pyproject)
 
     def test_index_injects_frontend_config(self):
         with tempfile.TemporaryDirectory() as td:
