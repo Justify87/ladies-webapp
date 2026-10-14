@@ -6,10 +6,11 @@ const SEARCH_RADII=[5,10,20,30,50,70,100];
 const normalizeRadius=value=>SEARCH_RADII.includes(Number(value))?Number(value):20;
 
 export function createCoreEffects({store,router}) {
-  let previewAbort=null, previewTimer=null, previewSeq=0;
+  let previewAbort=null, previewTimer=null, previewSeq=0, businessScanSeq=0;
   const toast=message=>store.dispatch({type:'TOAST',value:message});
   const state=()=>store.getState();
   const searchPayload=()=>{const payload=filterPayload(state().search.filters);payload.radius=normalizeRadius(payload.radius);return payload;};
+  const businessFilterEnabled=()=>state().search.filters.local?.hideBusinessProfiles!==false;
 
   function rawSearchRowAt(index=state().discover.index) {
     return S.discoverQueueRows(state())[index] || null;
@@ -74,6 +75,7 @@ export function createCoreEffects({store,router}) {
   }
 
   async function performSearch() {
+    businessScanSeq+=1;
     store.dispatch({type:'SEARCH_LOADING',value:true});
     try {
       const data=await api.search(searchPayload());
@@ -84,6 +86,7 @@ export function createCoreEffects({store,router}) {
       router.replaceRoot('swipe');
       if(meta?.radius_auto_expanded)toast(`Ladies hat den Umkreis automatisch von ${meta.requested_radius_km} auf ${meta.effective_radius_km} km erweitert.`);
       await prefetchCurrent();
+      void classifyBusinessProfiles();
     } catch(error) {
       store.dispatch({type:'SEARCH_LOADING',value:false,error:error.message}); toast(error.message);
     }
@@ -114,9 +117,35 @@ export function createCoreEffects({store,router}) {
     finally { store.dispatch({type:'PROFILE_LOADING',key:`person:${personId}`,value:false}); }
   }
 
+  async function classifyBusinessProfiles() {
+    const sequence=++businessScanSeq;
+    if(!businessFilterEnabled())return;
+    const advertIds=S.searchRows(state()).map(row=>row.advertId).filter(Boolean);
+    for(const advertId of advertIds){
+      if(sequence!==businessScanSeq||!businessFilterEnabled())return;
+      const rows=S.searchRows(state());
+      const row=rows.find(item=>item.advertId===advertId);
+      if(!row||row.businessProfileKnown)continue;
+      const queue=S.discoverQueueRows(state());
+      const queueIndex=queue.findIndex(item=>item.advertId===advertId);
+      // The active and already-passed part of the swipe queue is handled by
+      // prefetchCurrent.  Only classify future rows in the background so that
+      // removing a business profile can never shift the card currently shown.
+      if(queueIndex>=0&&queueIndex<=state().discover.index)continue;
+      await loadBundle(row,{detail:false,quiet:true});
+    }
+  }
+
   async function prefetchCurrent() {
-    const row=rawSearchRowAt(); if(!row)return;
-    await loadBundle(row,{detail:true,quiet:true});
+    const seen=new Set();
+    while(true){
+      const row=rawSearchRowAt();
+      if(!row||seen.has(row.advertId))return;
+      seen.add(row.advertId);
+      await loadBundle(row,{detail:true,quiet:true});
+      const current=rawSearchRowAt();
+      if(!businessFilterEnabled()||current?.advertId===row.advertId)break;
+    }
     [1,2].forEach((offset)=>{const next=rawSearchRowAt(state().discover.index+offset);if(next)setTimeout(()=>loadBundle(next,{detail:false,quiet:true}),offset*300);});
   }
 
