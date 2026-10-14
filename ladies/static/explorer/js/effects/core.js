@@ -120,7 +120,7 @@ export function createCoreEffects({store,router}) {
   async function classifyBusinessProfiles() {
     const sequence=++businessScanSeq;
     if(!businessFilterEnabled())return;
-    const advertIds=S.searchRows(state()).map(row=>row.advertId).filter(Boolean);
+    const advertIds=S.searchRows(state()).filter(row=>!row.businessProfileKnown).map(row=>row.advertId).filter(Boolean);
     for(const advertId of advertIds){
       if(sequence!==businessScanSeq||!businessFilterEnabled())return;
       const rows=S.searchRows(state());
@@ -128,11 +128,24 @@ export function createCoreEffects({store,router}) {
       if(!row||row.businessProfileKnown)continue;
       const queue=S.discoverQueueRows(state());
       const queueIndex=queue.findIndex(item=>item.advertId===advertId);
-      // The active and already-passed part of the swipe queue is handled by
-      // prefetchCurrent.  Only classify future rows in the background so that
-      // removing a business profile can never shift the card currently shown.
-      if(queueIndex>=0&&queueIndex<=state().discover.index)continue;
-      await loadBundle(row,{detail:false,quiet:true});
+      // The active/already-passed card is classified by normal profile loading.
+      // Background work is limited to future visible rows and uses the lightweight
+      // HTML-only endpoint, never the full profile/media ingestion path.
+      if(queueIndex<0||queueIndex<=state().discover.index)continue;
+      try {
+        const result=await api.profileClassification(advertId);
+        if(sequence!==businessScanSeq)return;
+        store.dispatch({
+          type:'SEARCH_RESULT_PATCH',
+          advertId,
+          patch:{
+            business_profile_known:Boolean(result?.business_profile_known),
+            is_business_profile:Boolean(result?.is_business_profile),
+            business_website_url:result?.business_website_url || null,
+            business_profile_checked_at:result?.business_profile_checked_at || null
+          }
+        });
+      } catch {}
     }
   }
 
@@ -229,5 +242,5 @@ export function createCoreEffects({store,router}) {
 
   async function snapshotCompare(a,b) { try{const [x,y]=await Promise.all([api.snapshot(a),api.snapshot(b)]);store.dispatch({type:'SHEET',value:{kind:'snapshot',payload:{before:x?.snapshot,after:y?.snapshot}}});}catch(error){toast(error.message);} }
 
-  return Object.freeze({loadSettings,loadDashboard,loadRecentSearches,openHistoryDrill,schedulePreview,performSearch,loadBundle,loadPerson,prefetchCurrent,mutatePerson,discoverDecision,undoDecision,openProfile,refreshProfile,loadList,runStatusCheck,statusSingle,saveProfileData,addPrice,merge,split,snapshotCompare,rawSearchRowAt,toast});
+  return Object.freeze({loadSettings,loadDashboard,loadRecentSearches,openHistoryDrill,schedulePreview,performSearch,loadBundle,loadPerson,classifyBusinessProfiles,prefetchCurrent,mutatePerson,discoverDecision,undoDecision,openProfile,refreshProfile,loadList,runStatusCheck,statusSingle,saveProfileData,addPrice,merge,split,snapshotCompare,rawSearchRowAt,toast});
 }
