@@ -1,0 +1,78 @@
+/* Requested Explorer behavior/UI fixes layered after prototype + intelligence CSS. */
+
+.grid-screen .discover-intelligence-bar {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.grid-card-chips { display: none !important; }
+.grid-card-copy h3 { margin-bottom: 0 !important; }
+.grid-card-actions .grid-card-heart.selected {
+  background: var(--color-accent) !important;
+  color: #fff !important;
+}
+
+.swipe-details .profile-meta-place { display: none !important; }
+.swipe-details .requested-availability-row {
+  margin-top: 9px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+}
+.swipe-details .requested-availability-row .online-pill {
+  position: static !important;
+  inset: auto !important;
+  min-height: 34px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(255,255,255,.72);
+  border-radius: 18px;
+  color: var(--color-accent);
+  background: rgba(255,239,247,.96);
+  font-size: 11px;
+  box-shadow: none;
+}
+.swipe-details .requested-availability-row .online-pill svg {
+  width: 15px;
+  height: 15px;
+}
+.swipe-shell > .discover-intelligence-bar {
+  top: 12px !important;
+}
+
+.requested-data-capture .profile-card-head {
+  align-items: flex-start;
+}
+.requested-data-intro {
+  margin: -4px 0 14px;
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.requested-new-encounter,
+.requested-encounter-block {
+  margin-bottom: 12px;
+}
+.requested-new-encounter > summary,
+.requested-encounter-block > summary {
+  cursor: pointer;
+}
+.requested-encounter-form {
+  margin-top: 12px;
+}
+.requested-encounter-form > label,
+.requested-encounter-form > .field-grid {
+  margin-bottom: 13px;
+}
+.requested-encounter-form .settings-primary {
+  width: 100%;
+  margin-top: 4px;
+}
+
+@media (max-width: 430px) {
+  .grid-screen .discover-intelligence-bar {
+    padding-top: 3px;
+  }
+}

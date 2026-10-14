@@ -6,6 +6,7 @@ from .archive import ArchiveRepository
 from .history import HistoryRepository
 from .person_read import PersonReadRepository
 from .persons import PersonRepository
+from .encounter_data import EncounterAwarePersonRepository, EncounterDataRepository
 from .search import SearchRepository
 from .settings import SettingsRepository
 
@@ -20,14 +21,22 @@ class RepositoryBundle:
 
     @classmethod
     def from_dependencies(cls, database, archive):
-        # Schema creation/migration is an application-composition concern. It
-        # must happen before any repository constructor touches settings/tables.
+        # Importing the repository package registers additive feature tables on
+        # Base.metadata before schema reconciliation happens here.
         database.create_schema()
         settings = SettingsRepository(database)
         person_read = PersonReadRepository(database)
+        encounter_data = EncounterDataRepository(database)
+        encounter_data.backfill_legacy()
         return cls(
             search=SearchRepository(database),
-            persons=PersonRepository(database, archive, settings, person_read),
+            persons=EncounterAwarePersonRepository(
+                database,
+                archive,
+                settings,
+                person_read,
+                encounter_data,
+            ),
             history=HistoryRepository(database),
             settings=settings,
             archive=ArchiveRepository(database, archive),
@@ -36,6 +45,7 @@ class RepositoryBundle:
 
 __all__ = [
     "ArchiveRepository",
+    "EncounterDataRepository",
     "HistoryRepository",
     "PersonReadRepository",
     "PersonRepository",
