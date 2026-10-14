@@ -38,7 +38,9 @@ export function createMessagingEffects({store,router,getEffects}) {
 
   function findMessage(id){const t=S.currentThread(state());return t?.messages.find(m=>Number(m.id)===Number(id))||null;}
 
-  async function reactMessage(id){const emoji=prompt('Reaktion (Emoji):','❤️');if(!emoji)return;try{await api.reactMessage(id,emoji);store.dispatch({type:'SHEET',value:null});await loadThread(S.currentThread(state()).threadId);}catch(error){toast(error.message);} }
+  async function reactMessage(id){const message=findMessage(id);const own=(message?.reactions||[]).find(r=>String(r.actor||'').toUpperCase()==='ME');const emoji=prompt('Reaktion (Emoji, leer = entfernen):',own?.emoji||'❤️');if(emoji===null)return;try{await api.reactMessage(id,String(emoji).trim());store.dispatch({type:'SHEET',value:null});const t=S.currentThread(state());if(t)await loadThread(t.threadId);}catch(error){toast(error.message);} }
+
+  async function openViewOnce(id){const message=findMessage(id);if(!message||message.direction!=='IN'||message.viewOnceConsumed)return;const t=S.currentThread(state());const viewer=window.open('about:blank','_blank');if(viewer)try{viewer.opener=null;}catch{}try{const response=await fetch(`/api/messaging/messages/${encodeURIComponent(id)}/view-once`,{cache:'no-store'});if(!response.ok){let payload={};try{payload=await response.json();}catch{}throw new Error(payload.error||`HTTP ${response.status}`);}const blob=await response.blob();const url=URL.createObjectURL(blob);if(viewer)viewer.location.replace(url);else window.location.assign(url);setTimeout(()=>URL.revokeObjectURL(url),120000);if(t)await loadThread(t.threadId);}catch(error){try{viewer?.close();}catch{}toast(error.message);if(t)await loadThread(t.threadId).catch(()=>{});} }
 
   async function deleteMessage(id){if(!confirm('Nachricht für alle löschen?'))return;try{await api.deleteMessage(id);store.dispatch({type:'SHEET',value:null});await loadThread(S.currentThread(state()).threadId);}catch(error){toast(error.message);} }
 
@@ -58,5 +60,5 @@ export function createMessagingEffects({store,router,getEffects}) {
 
   function connectEvents(){if(events)return;try{events=new EventSource('/api/messaging/events');events.onopen=()=>store.dispatch({type:'MESSAGE_EVENTS',value:true});events.onerror=()=>store.dispatch({type:'MESSAGE_EVENTS',value:false});events.onmessage=async ev=>{let payload={};try{payload=JSON.parse(ev.data||'{}');}catch{};if(payload.type==='presence'){applyPresence(payload);return;}await Promise.allSettled([loadMessagingStatus(),loadThreads()]);const t=S.currentThread(state());if(t&&(payload.thread_id===t.threadId||payload.message?.thread_id===t.threadId||!payload.thread_id))loadThread(t.threadId).catch(()=>{});};}catch(error){logClient('warning','sse',error.message);}}
 
-  return Object.freeze({loadMessagingStatus,connectWhatsapp,disconnectWhatsapp,logoutWhatsapp,showQr,loadThreads,loadThread,openChat,openPersonChat,sendChat,sendAttachment,findMessage,reactMessage,deleteMessage,retryMessage,startVoice,stopVoice,openAssignment,assignEndpoint,createPersonAndAssign,connectEvents});
+  return Object.freeze({loadMessagingStatus,connectWhatsapp,disconnectWhatsapp,logoutWhatsapp,showQr,loadThreads,loadThread,openChat,openPersonChat,sendChat,sendAttachment,findMessage,reactMessage,openViewOnce,deleteMessage,retryMessage,startVoice,stopVoice,openAssignment,assignEndpoint,createPersonAndAssign,connectEvents});
 }
