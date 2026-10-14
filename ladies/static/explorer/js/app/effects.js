@@ -20,8 +20,8 @@ export function createEffects({store,router}) {
       messaging.loadMessagingStatus(), messaging.loadThreads(), pricing.loadPricingSettings()
     ]);
     messaging.connectEvents();
-    regressions.schedulePreview({immediate:true});
+    core.schedulePreview({immediate:true});
   };
-  effects=Object.freeze({...core,...regressions,...visual,...messaging,...pricing,...encounters,boot});
+  effects=Object.freeze({...core,...regressions,...visual,...messaging,...pricing,...encounters,schedulePreview:core.schedulePreview,boot});
   return effects;
 }
