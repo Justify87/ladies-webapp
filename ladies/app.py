@@ -9,6 +9,7 @@ from flask import jsonify, redirect, request
 
 from .background import BackgroundTasks
 from .config import frontend_config
+from .encounter_metadata import install_encounter_metadata
 from .lan_access import LanAccessManager
 from .messaging import install_messaging
 from .messaging.integration import install_identity_merge_listener, reconcile_identity_events
@@ -71,6 +72,7 @@ def create_app(
         default_radius=default_radius,
         profile_delay=profile_delay,
     )
+    install_encounter_metadata(app, database=app.extensions["ladies_database"])
     install_search_preview(app, default_city=default_city, default_radius=default_radius)
 
     public_config = frontend_config(default_city=default_city, default_radius=default_radius)
