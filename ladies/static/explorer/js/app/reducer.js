@@ -51,8 +51,8 @@ export function reducer(state=initialState, action={}) {
       if (String(next.messaging.status.state || '').toUpperCase() !== 'CONNECTED') next.messaging.presenceByThread = {};
       return next;
     }
-    case 'MESSAGE_FILTER': next.messaging.filter = action.value || 'ALL'; return next;
-    case 'MESSAGE_VIEW_FILTER': next.messaging.viewFilter = action.value || 'ALL'; return next;
+    case 'MESSAGE_FILTER': next.messaging.filter = action.value || 'ALL'; next.messaging.viewFilter = next.messaging.filter; return next;
+    case 'MESSAGE_VIEW_FILTER': next.messaging.viewFilter = action.value || 'ALL'; next.messaging.filter = 'ALL'; return next;
     case 'MESSAGE_QUERY': next.messaging.query = action.value || ''; return next;
     case 'THREADS': next.messaging.threads = action.items || []; next.messaging.loading = false; return next;
     case 'THREADS_LOADING': next.messaging.loading = Boolean(action.value); return next;
