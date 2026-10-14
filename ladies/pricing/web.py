@@ -6,6 +6,7 @@ from ladies_v9.database import Database
 from ladies_v9.errors import ConflictError, NotFoundError, ValidationError
 from ladies_v9.request_parsing import read_int
 
+from .canonical import CanonicalPriceIntelligenceService
 from .revision import create_revision
 from .service import PriceIntelligenceService
 
@@ -14,7 +15,7 @@ def install_pricing(app, *, data_dir, database: Database | None = None) -> Price
     database = database or app.extensions.get("ladies_database")
     if not isinstance(database, Database):
         raise RuntimeError("Pricing benötigt die gemeinsame Application-Database")
-    service = PriceIntelligenceService(database, data_dir)
+    service = CanonicalPriceIntelligenceService(database, data_dir)
     app.extensions["ladies_pricing"] = service
 
     @app.get("/api/pricing/runtime/status")
