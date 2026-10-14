@@ -4,14 +4,29 @@ import logging
 import threading
 import time
 
+from bs4 import BeautifulSoup
+
 from ladies_v9.domain import SearchProfile
 from ladies_v9.errors import ConflictError, ExternalServiceError, NotFoundError, ValidationError
 from ladies_v9.parser import ADVERT_ID_RE, parse_profile_html
 from ladies_v9.source import http_get
-from ladies_v9.utils import category_from_url, safe_profile_url
+from ladies_v9.utils import category_from_url, clean_text, safe_profile_url
 
 LOGGER = logging.getLogger("ladies_explorer.profile")
 PROFILE_SOURCE_CACHE_SECONDS = 120.0
+
+
+def _business_website_url(raw_html: str) -> str | None:
+    """Return the advertiser-supplied website marked by Ladies on profile pages.
+
+    Ladies uses ``a.einzelansicht-url[href]`` for the website attached to the
+    advert itself.  Other external links on the page (social, ads, navigation)
+    deliberately do not count as business-profile evidence.
+    """
+    soup = BeautifulSoup(raw_html, "html.parser")
+    link = soup.select_one("a.einzelansicht-url[href]")
+    href = clean_text(link.get("href")) if link else ""
+    return href or None
 
 
 class ProfileService:
@@ -111,17 +126,34 @@ class ProfileService:
                     self._remember_source(advert_id, response_text, response_url)
 
                 profile = parse_profile_html(response_text, response_url, fallback)
+                business_website_url = _business_website_url(response_text)
+                if business_website_url:
+                    profile.auxiliary["business_website_url"] = business_website_url
+                    profile.provenance["business_website_url"] = {
+                        "source": "DOM_VISIBLE",
+                        "rank": 100,
+                    }
                 payload = self.repository.ingest_profile(
                     external_listing_id=advert_id,
                     profile=profile,
                     raw_html=response_text,
                     http_session=self.http,
                 )
+                # The repository can legitimately reuse an older identical
+                # snapshot whose auxiliary metadata predates this classifier.
+                # Always attach the current HTML-derived classification to the
+                # response so filtering is correct immediately, without a DB
+                # migration or waiting for another profile change.
+                profile_payload = payload.get("profile")
+                if isinstance(profile_payload, dict):
+                    profile_payload["is_business_profile"] = bool(business_website_url)
+                    profile_payload["business_website_url"] = business_website_url
                 LOGGER.info(
-                    "Profile load complete advert_id=%s person_id=%s media=%s",
+                    "Profile load complete advert_id=%s person_id=%s media=%s business_profile=%s",
                     advert_id,
                     payload.get("identity", {}).get("person_id"),
                     len(payload.get("profile", {}).get("media", [])),
+                    bool(business_website_url),
                 )
                 return payload
         except (ValidationError, NotFoundError, ConflictError):
