@@ -233,12 +233,23 @@ jobs:
           assert.equal(newSheet.scrollTop,215);
           JS
 
-          python tools/check_messaging_architecture.py
-          node --experimental-default-type=module tools/check_messaging_provider_identity.mjs
-          node --experimental-default-type=module tools/check_search_intelligence.mjs
-          node --experimental-default-type=module tools/check_har_runtime_fixes.mjs
-          node --experimental-default-type=module tools/check_favorites_redesign.mjs
-          node --experimental-default-type=module tools/check_css_architecture.mjs
+      - name: Messaging architecture regressions
+        run: python tools/check_messaging_architecture.py
+
+      - name: Messaging provider identity
+        run: node --experimental-default-type=module tools/check_messaging_provider_identity.mjs
+
+      - name: Search intelligence regressions
+        run: node --experimental-default-type=module tools/check_search_intelligence.mjs
+
+      - name: HAR runtime regressions
+        run: node --experimental-default-type=module tools/check_har_runtime_fixes.mjs
+
+      - name: Favorites redesign regressions
+        run: node --experimental-default-type=module tools/check_favorites_redesign.mjs
+
+      - name: CSS architecture regressions
+        run: node --experimental-default-type=module tools/check_css_architecture.mjs
 
       - name: Check project metadata syntax
         run: |
