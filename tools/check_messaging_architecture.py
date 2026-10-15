@@ -26,10 +26,12 @@ service = source("ladies/messaging/service_v2.py")
 assert "PersonUserState" not in service
 assert 'payload["favorite"]' not in service
 assert "def _ingest_provider_batch" in service
+assert "def _register_raw_message" in service
 assert "history_metadata" in service
 assert "provider_chat_deleted" in service
 assert "ProviderPeerState" in service
 assert "message_identity" in service
+assert "Build the thread index before inserting the current row" in service
 
 worker = source("ladies/messaging/whatsapp_worker/worker_v2.mjs")
 assert "messageIdentity" in worker
@@ -64,5 +66,16 @@ assert "preference" not in thread_vm
 message_list = source("ladies/static/explorer/js/ui/screens/message_list.js")
 assert "Favoriten" not in message_list
 assert "FAVORITE" not in message_list
+assert "message-filter" not in message_list
+assert 'data-action="message-view-filter"' in message_list
+
+commands = source("ladies/static/explorer/js/app/commands.js")
+assert "'message-filter'" not in commands
+assert "'chat-favorite'" not in commands
+
+messaging_effects = source("ladies/static/explorer/js/effects/messaging.js")
+assert "async function loadThreads()" in messaging_effects
+assert "api.threads('ALL')" in messaging_effects
+assert "api.threads(filter)" not in messaging_effects
 
 print("messaging architecture checks passed")
