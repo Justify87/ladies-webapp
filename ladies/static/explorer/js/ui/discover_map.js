@@ -9,6 +9,7 @@ const SOURCE_ID='discover-profiles';
 const EMPTY_GEOJSON=Object.freeze({type:'FeatureCollection',features:[]});
 
 let maplibrePromise=null;
+let maplibreModule=null;
 let map=null;
 let mapContainer=null;
 let currentData=EMPTY_GEOJSON;
@@ -94,7 +95,7 @@ function renderPreview(host,state){
 }
 
 function fitData(state,data){
-  if(!map||!data.features.length)return;
+  if(!map||!maplibreModule||!data.features.length)return;
   const runId=Number(state.discover.map?.runId||0)||'local';
   if(lastFitRunId===runId)return;
   lastFitRunId=runId;
@@ -102,11 +103,11 @@ function fitData(state,data){
     map.easeTo({center:data.features[0].geometry.coordinates,zoom:12.5,duration:350});
     return;
   }
-  const bounds=data.features.reduce((acc,feature)=>acc.extend(feature.geometry.coordinates),new map.__lib.LngLatBounds());
+  const bounds=data.features.reduce((acc,feature)=>acc.extend(feature.geometry.coordinates),new maplibreModule.LngLatBounds());
   map.fitBounds(bounds,{padding:42,maxZoom:13,duration:350});
 }
 
-function installLayers(lib,state){
+function installLayers(state){
   if(!map||map.getSource(SOURCE_ID))return;
   map.addSource(SOURCE_ID,{type:'geojson',data:currentData,cluster:true,clusterMaxZoom:14,clusterRadius:46});
   map.addLayer({
@@ -147,15 +148,18 @@ function installLayers(lib,state){
 
 async function ensureMap(container,state){
   if(map&&mapContainer===container)return map;
-  cleanupMap();
+  if(mapContainer!==container){
+    cleanupMap();
+    mapContainer=container;
+  }
   const lib=await loadMapLibre();
-  if(!container.isConnected)return null;
-  mapContainer=container;
+  if(!container.isConnected||mapContainer!==container)return null;
+  if(map)return map;
+  maplibreModule=lib;
   currentData=visibleGeoJson(state);
   map=new lib.Map({container,style:MAP_STYLE,center:centerFor(state,currentData),zoom:10.5,attributionControl:true});
-  map.__lib=lib;
   map.addControl(new lib.NavigationControl({showCompass:false}),'bottom-right');
-  map.once('load',()=>installLayers(lib,bindings?.store.getState()||state));
+  map.once('load',()=>installLayers(bindings?.store.getState()||state));
   return map;
 }
 
@@ -190,7 +194,7 @@ export function syncDiscoverMap({host,state,store,effects,router}){
   installNavigation();
   const route=S.currentRoute(state);
   if(route.name!=='map'){
-    if(map)cleanupMap();
+    if(map||mapContainer)cleanupMap();
     return;
   }
 
