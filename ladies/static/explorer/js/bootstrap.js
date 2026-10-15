@@ -7,6 +7,8 @@ import { logClient } from './api/client.js';
 import { installRegressionUi } from './regressions.js';
 import { installUxPatch } from './ux_patch.js';
 import { installSearchIntelligence } from './search_intelligence.js';
+import { installActiveSearchSync } from './search_runtime.js';
+import { installSavedSearches } from './saved_searches.js';
 import { installRequestedFixes } from './requested_fixes.js';
 
 const store=createStore();
@@ -16,6 +18,8 @@ const commands=createCommands({store,router,effects});
 installUxPatch({store});
 createController({store,router,effects,commands});
 installSearchIntelligence({store,effects,router});
+installActiveSearchSync({store,effects});
+installSavedSearches({store,effects,router});
 installRegressionUi({store,effects});
 installRequestedFixes({store,effects});
 window.addEventListener('error',event=>logClient('error','window',event.message,{source:event.filename,line:event.lineno,column:event.colno}));
