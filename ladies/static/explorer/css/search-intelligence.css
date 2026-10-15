@@ -1,4 +1,4 @@
-/* Search intelligence: saved searches, person-aware deltas and quick availability modes. */
+/* Search intelligence: saved searches and quick availability modes. */
 .availability-card .choice-row { margin-top: 14px; }
 .availability-quick button { min-width: 76px; }
 .availability-note { margin: 10px 0 0; color: var(--color-muted); font-size: 11px; line-height: 1.45; }
@@ -20,6 +20,7 @@
 .saved-search-copy b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #2b374b; font-size: 13px; }
 .saved-search-copy small { color: #7d8799; font-size: 10px; }
 .saved-search-delta { color: #b52a6b; font-size: 10px; font-weight: 700; line-height: 1.35; }
+.saved-search-error { color: #a85858; }
 .saved-search-name-line { min-width: 0; display: flex; align-items: center; gap: 7px; }
 .saved-search-name-line b { min-width: 0; }
 .saved-search-new-pill { flex: 0 0 auto; padding: 2px 7px; border-radius: 10px; background: var(--color-accent-soft); color: var(--color-accent-strong); font-size: 9px; font-weight: 800; }
@@ -37,7 +38,11 @@
   background: var(--color-accent); box-shadow: 0 0 0 2px #fff; pointer-events: none;
 }
 .saved-search-header-title { flex: 1; margin-left: 4px; }
-.saved-search-screen .screen-scroll { padding-bottom: 24px; }
+.saved-search-screen .screen-scroll,
+.saved-search-results-screen .screen-scroll { padding-bottom: 24px; }
+.saved-search-results-summary { margin-bottom: 12px; }
+.saved-search-result-card { cursor: pointer; }
+.saved-search-result-card .grid-card-copy small { display: block; margin-top: 2px; color: #7d8799; font-size: 10px; }
 .saved-search-editor { display: block; }
 .saved-search-editor .filter-card + .filter-card { margin-top: 12px; }
 .saved-search-editor-card .choice-row { margin-top: 12px; }
