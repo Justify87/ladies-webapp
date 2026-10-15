@@ -9,7 +9,7 @@ from pathlib import Path
 from flask import Flask, Response, g, jsonify, render_template, request, send_from_directory, stream_with_context
 
 from .core.repositories import RepositoryBundle
-from .core.services import ProfileService, SearchService
+from .core.services import MapService, ProfileService, SearchService
 from .database import Database
 from .errors import ExternalServiceError, NotFoundError, ValidationError, install_error_handlers
 from .logging_utils import redact_text, sanitize_log_value
@@ -46,10 +46,12 @@ def create_app(
         limiter,
         classification_repository=repos.search,
     )
+    map_service = MapService(repos.map, data_dir=data_dir)
     app.extensions["ladies_database"] = database
     app.extensions["ladies_archive"] = archive
     app.extensions["ladies_repositories"] = repos
     app.extensions["ladies_http"] = http
+    app.extensions["ladies_map_service"] = map_service
     LOGGER.info(
         "Web app initialized db=%s data_dir=%s default_city=%s default_radius=%s",
         Path(db_path).resolve(),
@@ -166,6 +168,13 @@ def create_app(
     @app.post("/api/search")
     def api_search():
         return jsonify(**search_service.execute(request.get_json(silent=True) or {}))
+
+    @app.get("/api/map-points/<int:search_run_id>")
+    def api_map_points(search_run_id: int):
+        try:
+            return jsonify(map_service.feature_collection(search_run_id))
+        except KeyError as exc:
+            raise NotFoundError("Suchlauf für Karte nicht gefunden") from exc
 
     @app.get("/api/profile/<advert_id>")
     def api_profile(advert_id: str):
