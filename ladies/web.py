@@ -112,28 +112,6 @@ def create_app(
         limit = read_int(request.args, "limit", default=8, minimum=1, maximum=100)
         return jsonify(items=repos.search.recent_searches(limit))
 
-    @app.post("/api/saved-search/context")
-    def api_saved_search_context():
-        payload = request.get_json(silent=True) or {}
-        raw_ids = payload.get("listing_ids") or []
-        if not isinstance(raw_ids, list):
-            raise ValidationError("listing_ids muss eine Liste sein")
-        if len(raw_ids) > 10000:
-            raise ValidationError("Zu viele Listings für den Delta-Vergleich")
-        listing_ids: list[int] = []
-        for raw in raw_ids:
-            try:
-                value = int(raw)
-            except (TypeError, ValueError):
-                continue
-            if value > 0:
-                listing_ids.append(value)
-        since = str(payload.get("since") or "").strip() or None
-        try:
-            return jsonify(repos.search.saved_search_context(listing_ids, since=since))
-        except ValueError as exc:
-            raise ValidationError(str(exc)) from exc
-
     @app.get("/api/storage")
     def api_storage():
         return jsonify(repos.archive.storage_info())

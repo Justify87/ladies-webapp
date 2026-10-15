@@ -5,7 +5,7 @@ from typing import Any
 
 from flask import Flask, jsonify, request
 
-from .core.services.search import parse_search_request
+from .core.services.search import SearchService, parse_search_request
 from .errors import ExternalServiceError, ValidationError
 from .source import (
     build_filter_path,
@@ -98,6 +98,12 @@ def install_search_preview(
     default_radius: int = 20,
 ) -> None:
     http = app.extensions.get("ladies_http") or build_session()
+    search_service = SearchService(
+        app.extensions["ladies_repositories"].search,
+        http,
+        default_city=default_city,
+        default_radius=default_radius,
+    )
 
     @app.post("/api/search-preview")
     def api_search_preview():
@@ -126,3 +132,7 @@ def install_search_preview(
         except Exception as exc:
             LOGGER.exception("Search preview failed")
             raise ExternalServiceError("Suchvorschau konnte nicht geladen werden.") from exc
+
+    @app.post("/api/search-transient")
+    def api_search_transient():
+        return jsonify(**search_service.execute_transient(request.get_json(silent=True) or {}))

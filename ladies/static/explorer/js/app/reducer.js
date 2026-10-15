@@ -46,6 +46,17 @@ export function reducer(state=initialState, action={}) {
     case 'RECENT_SEARCHES':
       return updateSlice(state, 'search', {recent: action.items || []});
 
+    case 'SAVED_SEARCH_ITEMS':
+      return updateSlice(state, 'savedSearches', {items: action.items || []});
+    case 'SAVED_SEARCH_RESULTS':
+      return updateMappedSlice(state, 'savedSearches', 'resultsById', {
+        [String(action.savedId)]: action.items || [],
+      });
+    case 'SAVED_SEARCH_LOADING':
+      return updateMappedSlice(state, 'savedSearches', 'loadingById', {
+        [String(action.savedId)]: Boolean(action.value),
+      });
+
     case 'DISCOVER_INDEX':
       return updateSlice(state, 'discover', {index: Math.max(0, action.index)});
     case 'DISCOVER_MODE':

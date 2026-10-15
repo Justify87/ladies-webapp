@@ -6,6 +6,7 @@ from .archive import ArchiveRepository
 from .history import HistoryRepository
 from .person_read import PersonReadRepository
 from .persons import PersonRepository
+from .saved_searches import SavedSearchRepository
 from .search import SearchRepository
 from .settings import SettingsRepository
 
@@ -13,6 +14,7 @@ from .settings import SettingsRepository
 @dataclass(slots=True)
 class RepositoryBundle:
     search: SearchRepository
+    saved_searches: SavedSearchRepository
     persons: PersonRepository
     history: HistoryRepository
     settings: SettingsRepository
@@ -20,13 +22,13 @@ class RepositoryBundle:
 
     @classmethod
     def from_dependencies(cls, database, archive):
-        # Schema creation/migration is an application-composition concern. It
-        # must happen before any repository constructor touches settings/tables.
+        # Importing repository modules registers additive tables before schema creation.
         database.create_schema()
         settings = SettingsRepository(database)
         person_read = PersonReadRepository(database)
         return cls(
             search=SearchRepository(database),
+            saved_searches=SavedSearchRepository(database),
             persons=PersonRepository(database, archive, settings, person_read),
             history=HistoryRepository(database),
             settings=settings,
@@ -40,6 +42,7 @@ __all__ = [
     "PersonReadRepository",
     "PersonRepository",
     "RepositoryBundle",
+    "SavedSearchRepository",
     "SearchRepository",
     "SettingsRepository",
 ]

@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import {
   availabilityMode,
   filtersWithAvailabilityMode,
-  normalizeAvailabilityFilters,
-  baselineFromResults,
-  computeSavedSearchDelta
+  normalizeAvailabilityFilters
 } from '../ladies/static/explorer/js/search_intelligence.js';
+import { savedSearchHasUnread } from '../ladies/static/explorer/js/saved_searches.js';
+import { installActiveSearchSync } from '../ladies/static/explorer/js/search_runtime.js';
 import { threadRows, unreadTotal } from '../ladies/static/explorer/js/app/selectors.js';
 import { canonicalPriceRows, invalidatesProfilePricing } from '../ladies/static/explorer/js/requested_fixes.js';
 
@@ -26,45 +27,133 @@ assert.deepEqual(
   filtersWithAvailabilityMode({selected:{zeiten:['heute-offen','nach-22']}},'ALL').selected.zeiten,
   ['nach-22']
 );
+assert.equal(savedSearchHasUnread({savedSearches:{items:[{unread_new_results:false},{unread_new_results:true}]}}),true);
+assert.equal(savedSearchHasUnread({savedSearches:{items:[{unread_new_results:false}]}}),false);
 
-const previousResults=[
-  {listing_id:1,person_id:101,advert_id:'1001',name:'A'},
-  {listing_id:2,person_id:202,advert_id:'1002',name:'B'}
-];
-const baseline=baselineFromResults(previousResults,'2026-10-10T10:00:00+00:00');
-const saved={
-  baseline,
-  // Listing 3 was part of this saved search in an older run, but not the immediately previous run.
-  seen_listing_ids:[1,2,3]
+// Manual A must suppress only the concurrent automatic fetch, not future A hydration after B.
+const baseFilters=city=>({city,radius:20,category:'',ageMin:18,ageMax:45,heightMin:140,heightMax:200,selected:{},local:{}});
+const runtimeState={
+  search:{filters:baseFilters('Leipzig'),preview:{status:'idle'},loading:false,error:null,results:[],meta:null},
+  navigation:{stack:[{name:'search',params:{}}]}
 };
-const currentResults=[
-  // Deliberately stale/provisional person IDs; context must win.
-  {listing_id:2,person_id:999,advert_id:'1002',name:'B'},
-  {listing_id:3,person_id:998,advert_id:'1003',name:'C'},
-  // New advert, but identity resolves to already-known person 202.
-  {listing_id:4,person_id:997,advert_id:'1004',name:'B neu'},
-  // Truly new person.
-  {listing_id:5,person_id:996,advert_id:'1005',name:'D'}
-];
-const context={
-  canonical_person_by_listing:{'1':101,'2':202,'3':303,'4':202,'5':404},
-  observed_changed_person_ids:[202,404]
+const runtimeListeners=new Set();
+const runtimeStore={
+  getState:()=>runtimeState,
+  subscribe(fn){runtimeListeners.add(fn);return()=>runtimeListeners.delete(fn);},
+  dispatch(action){
+    if(action.type==='SEARCH_FILTERS')runtimeState.search.filters=action.filters;
+    else if(action.type==='SEARCH_PREVIEW')runtimeState.search.preview={...runtimeState.search.preview,...action.patch};
+    else if(action.type==='SEARCH_LOADING'){runtimeState.search.loading=Boolean(action.value);runtimeState.search.error=action.error||null;}
+    else if(action.type==='SEARCH_RESULTS'){runtimeState.search.results=action.results||[];runtimeState.search.meta=action.meta||null;}
+    for(const fn of runtimeListeners)fn(runtimeState,action);
+  }
 };
-const delta=computeSavedSearchDelta(saved,currentResults,context,'2026-10-11T10:00:00+00:00',0);
-assert.equal(delta.initial,false);
-assert.equal(delta.new_people_count,1,'only canonical person 404 is genuinely new');
-assert.equal(delta.returned_people_count,1,'canonical person 303 returned after an older saved-search appearance');
-assert.equal(delta.known_people_new_listing_count,1,'listing 4 belongs to already-known canonical person 202');
-assert.equal(delta.disappeared_people_count,1,'canonical person 101 disappeared from the source result');
-assert.equal(delta.observed_changed_people_count,2,'only scoped observed profile changes are counted');
-assert.equal(delta.new_listings_count,2,'listings 4 and 5 were never seen by this saved search');
+const runtimeCalls=[];
+installActiveSearchSync({
+  store:runtimeStore,
+  effects:{prefetchCurrent:async()=>{}},
+  search:async payload=>{runtimeCalls.push(payload.city);return {results:[{advert_id:String(runtimeCalls.length),person_id:runtimeCalls.length}],meta:{}};}
+});
+const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
+await tick();
+runtimeStore.dispatch({type:'SEARCH_LOADING',value:true});
+runtimeStore.dispatch({type:'SEARCH_RESULTS',results:[{advert_id:'manual-a',person_id:10}],meta:{}});
+runtimeStore.dispatch({type:'SEARCH_LOADING',value:false});
+runtimeStore.dispatch({type:'SEARCH_PREVIEW',patch:{status:'ready'}});
+await tick();
+assert.deepEqual(runtimeCalls,[],'successful manual A must be treated as hydrated');
 
-// Local UI filtering must not affect baseline construction: the caller passes raw search results.
-const rawBaseline=baselineFromResults([
-  {listing_id:7,person_id:707,advert_id:'1007',preference:'DISLIKE'},
-  {listing_id:8,person_id:808,advert_id:'1008',has_video:false}
-]);
-assert.deepEqual(rawBaseline.listings.map(item=>item.listing_id),[7,8]);
+runtimeStore.dispatch({type:'SEARCH_FILTERS',filters:baseFilters('Berlin')});
+runtimeStore.dispatch({type:'SEARCH_PREVIEW',patch:{status:'loading'}});
+runtimeStore.dispatch({type:'SEARCH_PREVIEW',patch:{status:'ready'}});
+await tick();
+assert.deepEqual(runtimeCalls,['Berlin'],'B must hydrate automatically');
+
+runtimeStore.dispatch({type:'SEARCH_FILTERS',filters:baseFilters('Leipzig')});
+runtimeStore.dispatch({type:'SEARCH_PREVIEW',patch:{status:'loading'}});
+runtimeStore.dispatch({type:'SEARCH_PREVIEW',patch:{status:'ready'}});
+await tick();
+assert.deepEqual(runtimeCalls,['Berlin','Leipzig'],'returning to A must hydrate automatically again');
+
+// Saved searches must execute through the read-only probe boundary. An edit during
+// an in-flight probe invalidates that result, while explicit result opening is the
+// only bridge back into canonical profile materialization.
+execFileSync('python', ['-c', String.raw`
+import copy
+import runpy
+import threading
+
+module = runpy.run_path('ladies/core/services/saved_searches.py')
+filter_results = module['filter_saved_search_results']
+SavedSearchService = module['SavedSearchService']
+
+rows = [
+    {'advert_id':'1','thumbnail_url':'x','has_video':True,'preference':'NONE','is_business_profile':False,'has_ai_content':False,'markers':[]},
+    {'advert_id':'2','thumbnail_url':'x','has_video':False,'preference':'NONE','is_business_profile':False,'has_ai_content':False,'markers':[]},
+    {'advert_id':'3','thumbnail_url':'x','has_video':True,'preference':'DISLIKE','is_business_profile':False,'has_ai_content':False,'markers':[]},
+    {'advert_id':'4','thumbnail_url':'x','has_video':True,'preference':'NONE','is_business_profile':True,'has_ai_content':False,'markers':[]},
+    {'advert_id':'5','thumbnail_url':'x','has_video':True,'preference':'NONE','is_business_profile':False,'has_ai_content':True,'markers':[]},
+]
+filters = {'local':{'photosOnly':True,'videoOnly':True,'hideDislikes':True,'hideBusinessProfiles':True,'imageMode':'NATURAL'}}
+assert [row['advert_id'] for row in filter_results(rows, filters)] == ['1']
+
+class Repository:
+    def __init__(self): self.items={}; self.results_by_id={}
+    def list(self): return [copy.deepcopy(value) for value in self.items.values()]
+    def get(self, saved_id):
+        value=self.items.get(str(saved_id)); return copy.deepcopy(value) if value else None
+    def create(self, saved_id, *, name, filters):
+        self.items[str(saved_id)]={'id':str(saved_id),'name':name,'filters':copy.deepcopy(filters),'definition_version':1,'last_run_at':None,'last_attempt_at':None,'last_error':None,'last_delta':None,'unread_new_results':False}
+        return self.list()
+    def update_definition(self, saved_id, *, name, filters):
+        item=self.items[str(saved_id)]; changed=item['filters']!=filters; item['name']=name; item['filters']=copy.deepcopy(filters)
+        if changed: item['definition_version']+=1; item['last_run_at']=None; self.results_by_id[str(saved_id)]=[]
+        return self.list(), changed
+    def delete(self, saved_id): del self.items[str(saved_id)]; return self.list()
+    def acknowledge_all(self):
+        for item in self.items.values(): item['unread_new_results']=False
+        return self.list()
+    def record_success(self, saved_id, *, definition_version, results, visible_keys, mark_seen):
+        item=self.items.get(str(saved_id))
+        if not item or item['definition_version']!=definition_version: return {'stale':True,'delta':None}
+        visible=[copy.deepcopy(row) for row in results if row['advert_id'] in visible_keys]
+        self.results_by_id[str(saved_id)]=visible
+        item['last_run_at']='done'; item['last_attempt_at']='done'; item['last_error']=None
+        delta={'initial':True,'current_result_count':len(visible),'new_results_count':0,'removed_results_count':0,'new_result_keys':[]}
+        item['last_delta']=delta
+        return {'stale':False,'delta':delta}
+    def record_failure(self, saved_id, *, definition_version, error):
+        item=self.items.get(str(saved_id))
+        if item and item['definition_version']==definition_version: item['last_attempt_at']='failed'; item['last_error']=error; return True
+        return False
+    def results(self, saved_id): return copy.deepcopy(self.results_by_id.get(str(saved_id),[]))
+    def result(self, saved_id, result_key):
+        return next((copy.deepcopy(row) for row in self.results(saved_id) if row['advert_id']==result_key),None)
+
+class Search:
+    def __init__(self): self.started=threading.Event(); self.release=threading.Event(); self.materialized=[]
+    def execute_probe(self, payload):
+        self.started.set(); self.release.wait(2)
+        return {'results':[{'advert_id':'10','profile_url':'https://example/10','thumbnail_url':'x','has_video':True,'preference':'NONE','is_business_profile':False,'has_ai_content':False,'markers':[]}], 'meta':{}}
+    def materialize_probe_result(self, payload): self.materialized.append(payload['advert_id']); return {'advert_id':payload['advert_id'],'person_id':99}
+
+repo=Repository(); search=Search(); service=SavedSearchService(repo, search)
+items=service.create(name='Alt', filters={'city':'Leipzig','radius':20,'category':'','ageMin':18,'ageMax':45,'heightMin':140,'heightMax':200,'selected':{},'local':{}})
+saved_id=items[0]['id']
+result={}
+thread=threading.Thread(target=lambda: result.update(service.run(saved_id, mark_seen=False)))
+thread.start(); assert search.started.wait(1)
+service.update(saved_id, name='Neu', filters={'city':'Berlin','radius':20,'category':'','ageMin':18,'ageMax':45,'heightMin':140,'heightMax':200,'selected':{},'local':{}})
+search.release.set(); thread.join(2)
+assert result.get('stale') is True
+assert service.list()[0]['name']=='Neu' and service.list()[0]['filters']['city']=='Berlin'
+
+# A successful probe populates only the saved-search result repository.
+search.started.clear(); search.release.set(); service.run(saved_id, mark_seen=True)
+assert [row['advert_id'] for row in service.results(saved_id)]==['10']
+opened=service.materialize_result(saved_id,'10')
+assert opened['person_id']==99 and search.materialized==['10']
+`], {stdio:'inherit'});
 
 // Message filters are local views over one canonical all-thread collection.
 const messageState={messaging:{query:'',viewFilter:'UNASSIGNED',threads:[
@@ -93,6 +182,17 @@ const discoverSource=readFileSync(new URL('../ladies/static/explorer/js/ui/scree
 const profileSource=readFileSync(new URL('../ladies/static/explorer/js/ui/profile.js',import.meta.url),'utf8');
 const prototypeSource=readFileSync(new URL('../ladies/static/explorer/css/prototype.css',import.meta.url),'utf8');
 const chromeSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/chrome.js',import.meta.url),'utf8');
+const searchScreenSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/search.js',import.meta.url),'utf8');
+const savedSearchScreenSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/saved_searches.js',import.meta.url),'utf8');
+const savedSearchSource=readFileSync(new URL('../ladies/static/explorer/js/saved_searches.js',import.meta.url),'utf8');
+const savedSearchBackendSource=readFileSync(new URL('../ladies/core/services/saved_searches.py',import.meta.url),'utf8');
+const savedSearchRepositorySource=readFileSync(new URL('../ladies/core/repositories/saved_searches.py',import.meta.url),'utf8');
+const settingsRepositorySource=readFileSync(new URL('../ladies/core/repositories/settings.py',import.meta.url),'utf8');
+const savedSearchWebSource=readFileSync(new URL('../ladies/saved_searches.py',import.meta.url),'utf8');
+const activeSearchSource=readFileSync(new URL('../ladies/static/explorer/js/search_runtime.js',import.meta.url),'utf8');
+const searchServiceSource=readFileSync(new URL('../ladies/core/services/search.py',import.meta.url),'utf8');
+const searchRepositorySource=readFileSync(new URL('../ladies/core/repositories/search.py',import.meta.url),'utf8');
+const searchPreviewSource=readFileSync(new URL('../ladies/search_preview.py',import.meta.url),'utf8');
 const clientSource=readFileSync(new URL('../ladies/static/explorer/js/api/client.js',import.meta.url),'utf8');
 const encounterSource=readFileSync(new URL('../ladies/static/explorer/js/effects/encounters.js',import.meta.url),'utf8');
 const requestedSource=readFileSync(new URL('../ladies/static/explorer/js/requested_fixes.js',import.meta.url),'utf8');
@@ -102,6 +202,37 @@ assert.match(discoverSource,/grid-card-heart[^>]+data-action="grid-like"/s,'visi
 assert.doesNotMatch(discoverSource,/discover-mode-pills/,'availability controls must not be duplicated inside Grid or Swipe content');
 assert.match(chromeSource,/header-discovery-modes/,'Swipe and Grid availability controls must live in the shared header');
 assert.match(chromeSource,/route\.name==='swipe'.*data-route="grid".*gridGlyph\(\).*route\.name==='grid'.*data-route="swipe"/s,'shared header must expose both view switches with a real Grid glyph');
+assert.match(chromeSource,/data-saved-search-action="open"/,'search header action must open the dedicated saved-search screen');
+assert.match(chromeSource,/saved-search-notification/,'header must expose a dedicated new-result indicator');
+assert.match(chromeSource,/saved-search-results/,'saved result browsing must have its own header route');
+assert.doesNotMatch(searchScreenSource,/savedSearchesCard|saved-searches-card/,'saved searches must no longer render inside the filter screen');
+assert.match(savedSearchScreenSource,/data-saved-search-action="results"/,'saved searches must expose their cached result list');
+assert.match(savedSearchScreenSource,/data-saved-search-action="open-result"/,'saved result cards must open the actual profile explicitly');
+assert.match(savedSearchSource,/api\.runSavedSearch/,'saved searches must execute through their dedicated backend service');
+assert.match(savedSearchSource,/stateEpoch/,'poll responses must be invalidated across saved-search mutations');
+assert.match(savedSearchSource,/mutationActive/,'polls must not apply while a saved-search mutation is active');
+assert.match(savedSearchSource,/api\.openSavedSearchResult/,'profile materialization must happen only on explicit result opening');
+assert.doesNotMatch(savedSearchSource,/searchTransient|BACKGROUND_REFRESH_MS|refreshDue/,'the browser must not execute saved-search background searches');
+assert.doesNotMatch(savedSearchSource,/type:'SEARCH_FILTERS'|type:'SEARCH_RESULTS'|type:'SETTINGS'/,'saved-search UI must never mutate active search or generic settings state');
+assert.match(savedSearchBackendSource,/self\.search\.execute_probe/,'saved-search execution must use the read-only probe path');
+assert.doesNotMatch(savedSearchBackendSource,/execute_transient|sync_search_profiles|business_classifier/,'saved-search background execution must not canonicalize or ingest profile state');
+assert.match(savedSearchBackendSource,/BACKGROUND_REFRESH_SECONDS = 15 \* 60/,'saved searches must retain the 15-minute background interval');
+assert.match(savedSearchBackendSource,/BACKGROUND_RETRY_SECONDS = 5 \* 60/,'failed saved searches must use a bounded retry interval');
+assert.match(savedSearchRepositorySource,/class SavedSearchResultRecord/,'saved-search result history must be relational instead of growing settings JSON');
+assert.match(savedSearchRepositorySource,/definition_version/,'saved-search result writes must be revision guarded');
+assert.doesNotMatch(settingsRepositorySource,/saved_searches/,'generic app settings must not own saved-search state');
+assert.match(savedSearchWebSource,/\/results\/<result_key>\/open/,'saved results need an explicit profile-open bridge');
+assert.doesNotMatch(savedSearchWebSource,/ProfileService|classify_business_profile/,'saved-search background wiring must not invoke profile ingestion/classification');
+assert.match(activeSearchSource,/type:'SEARCH_RESULTS'.*automatic:true,transient:true/s,'automatic full-result hydration must populate the active result set without becoming a manual search');
+assert.doesNotMatch(activeSearchSource,/suppressedKey/,'manual searches must not permanently blacklist a filter key');
+assert.match(searchServiceSource,/def execute_transient/,'canonical SearchService must own active transient execution');
+assert.match(searchServiceSource,/def execute_probe/,'SearchService must expose a read-only saved-search probe boundary');
+assert.match(searchServiceSource,/probe_search_profiles\(profiles\)/,'saved-search probes must only read canonical local state');
+assert.match(searchServiceSource,/def materialize_probe_result/,'explicit saved-result opening must have a narrow canonicalization bridge');
+assert.match(searchRepositorySource,/def probe_search_profiles/,'repository must expose read-only search enrichment');
+assert.match(searchRepositorySource,/self\._canonical_write_lock/,'canonical listing writes must be serialized across concurrent searches');
+assert.match(searchPreviewSource,/search_service\.execute_transient/,'active transient API must still delegate to canonical SearchService');
+assert.match(clientSource,/savedSearchResults:/,'frontend must read cached saved-search results through the dedicated API');
 assert.match(clientSource,/threads:\s*\(\)\s*=>\s*request\('\/api\/messaging\/threads\?filter=ALL'\)/,'thread API must always load the canonical unfiltered collection');
 assert.match(encounterSource,/querySelector\('\[name="base_price_eur"\]'\)\)payload\.base_price_eur=/,'hidden base price must only be sent when present');
 assert.match(encounterSource,/querySelector\('\[name="note"\]'\)\)payload\.note=/,'hidden note must only be sent when present');

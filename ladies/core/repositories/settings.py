@@ -18,7 +18,6 @@ DEFAULT_SETTINGS = {
     "autoplay_videos": False,
     "reduced_motion": False,
     "default_filters": None,
-    "saved_searches": [],
 }
 
 
@@ -36,11 +35,7 @@ def _loads(value: str | None, default: Any = None) -> Any:
 
 
 class SettingsRepository:
-    """Persistence boundary for application settings.
-
-    This repository no longer delegates through the legacy aggregate Repository;
-    callers depend directly on the shared Database contract.
-    """
+    """Persistence boundary for application settings."""
 
     def __init__(self, database: Database):
         self.database = database
@@ -56,7 +51,7 @@ class SettingsRepository:
         with self.database.session() as db:
             rows = db.scalars(select(AppSetting)).all()
             out = dict(DEFAULT_SETTINGS)
-            out.update({row.key: _loads(row.value_json) for row in rows})
+            out.update({row.key: _loads(row.value_json) for row in rows if row.key in DEFAULT_SETTINGS})
             return out
 
     def set(self, key: str, value: Any) -> dict[str, Any]:
