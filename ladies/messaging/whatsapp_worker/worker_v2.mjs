@@ -16,6 +16,7 @@ import path from 'node:path'
 import pino from 'pino'
 import readline from 'node:readline'
 import process from 'node:process'
+import { messageIdentity, providerKey, rawMessageId } from './provider_identity.mjs'
 
 const authDir = process.env.LADIES_WHATSAPP_AUTH_DIR
 if (!authDir) {
@@ -55,8 +56,6 @@ const localMessageIds = new Map()
 const pendingOwnMessages = new Map()
 const pendingMessageUpdates = []
 
-// Baileys accepts a cache with the NodeCache-style get/set/del contract. Keep it
-// outside connect() so retry counters survive socket restarts in this process.
 const retryCounters = new Map()
 const msgRetryCounterCache = {
   get: key => retryCounters.get(key),
@@ -69,6 +68,7 @@ const emit = event => process.stdout.write(`${JSON.stringify(event)}\n`)
 const reply = (id, ok, payload = null, message = null) => emit({ type: 'response', id, ok, payload, message })
 const isPhoneJid = jid => typeof jid === 'string' && jid.endsWith('@s.whatsapp.net')
 const isLidJid = jid => typeof jid === 'string' && jid.endsWith('@lid')
+const isDirectJid = jid => typeof jid === 'string' && jid !== 'status@broadcast' && !jid.endsWith('@g.us') && !jid.endsWith('@broadcast')
 
 function rememberLocalSend(providerId, clientMessageId) {
   if (!providerId) return
@@ -88,18 +88,6 @@ function errorText(error) {
   return error?.message || String(error || 'unknown error')
 }
 
-function providerKey(key) {
-  if (!key) return null
-  return {
-    remoteJid: key.remoteJid || null,
-    remoteJidAlt: key.remoteJidAlt || null,
-    participant: key.participant || null,
-    participantAlt: key.participantAlt || null,
-    id: key.id || null,
-    fromMe: Boolean(key.fromMe),
-  }
-}
-
 function asProviderKey(value) {
   if (!value?.id) throw new Error('Provider-Nachrichten-Key fehlt')
   return {
@@ -112,8 +100,8 @@ function asProviderKey(value) {
   }
 }
 
-function messageCachePath(messageId) {
-  const digest = crypto.createHash('sha256').update(String(messageId || '')).digest('hex')
+function messageCachePath(identity) {
+  const digest = crypto.createHash('sha256').update(String(identity || '')).digest('hex')
   return path.join(messageCacheDir, `${digest}.bin`)
 }
 
@@ -135,10 +123,10 @@ async function trimRawMessageCache() {
 }
 
 async function rememberRawMessage(msg) {
-  const id = msg?.key?.id
-  if (!id || !msg?.message) return
+  const identity = messageIdentity(msg?.key)
+  if (!identity || !msg?.message) return
   try {
-    const target = messageCachePath(id)
+    const target = messageCachePath(identity)
     const temporary = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`
     const encoded = Buffer.from(proto.WebMessageInfo.encode(msg).finish())
     await fs.promises.writeFile(temporary, encoded, { flag: 'wx' })
@@ -146,15 +134,15 @@ async function rememberRawMessage(msg) {
     rawCacheWrites += 1
     if (rawCacheWrites % 100 === 0) void trimRawMessageCache()
   } catch (error) {
-    logger.debug({ err: errorText(error), id }, 'raw message cache write failed')
+    logger.debug({ err: errorText(error), identity }, 'raw message cache write failed')
   }
 }
 
 async function cachedMessage(key) {
-  const id = key?.id
-  if (!id) return undefined
+  const identity = messageIdentity(key)
+  if (!identity) return undefined
   try {
-    const encoded = await fs.promises.readFile(messageCachePath(id))
+    const encoded = await fs.promises.readFile(messageCachePath(identity))
     const decoded = proto.WebMessageInfo.decode(encoded)
     return decoded?.message || undefined
   } catch {
@@ -409,14 +397,15 @@ async function buildMessagePayload(current, msg, { downloadMedia = true, rehydra
   const content = contentOf(raw)
   if (!content || content.reactionMessage || content.protocolMessage) return null
   const { primary: jid, phoneJid: directPhoneJid } = directMessageAddresses(msg.key)
-  if (!jid || jid === 'status@broadcast' || jid.endsWith('@g.us')) return null
+  if (!isDirectJid(jid)) return null
   const phoneJid = directPhoneJid || await resolvePhoneJid(current, jid)
   const viewOnce = isViewOnceMessage(raw, msg.key)
   const media = downloadMedia
     ? await messageMediaWithFile(current, msg, content, viewOnce)
     : messageMedia(content)
   return {
-    provider_message_id: msg.key?.id || null,
+    provider_message_id: messageIdentity(msg.key),
+    provider_raw_id: rawMessageId(msg.key),
     provider_key: providerKey(msg.key),
     jid,
     phone_jid: phoneJid,
@@ -437,6 +426,38 @@ async function emitMessage(current, msg, { rehydrated = false, downloadMedia = t
   if (payload) emit({ type: 'message', payload })
 }
 
+function peerDisplayName(item) {
+  const verified = typeof item?.verifiedName === 'string' ? item.verifiedName : null
+  return item?.notify || item?.name || verified || null
+}
+
+async function compactPeer(current, item, { chat = false } = {}) {
+  const address = item?.id || item?.jid || null
+  if (!isDirectJid(address)) return null
+  const phoneJid = isPhoneJid(address) ? address : await resolvePhoneJid(current, address)
+  const compact = {
+    provider_address: address,
+    phone_jid: phoneJid,
+    display_name: peerDisplayName(item),
+  }
+  if (chat) {
+    const unread = Number(item?.unreadCount)
+    const timestamp = Number(item?.conversationTimestamp || 0)
+    compact.unread_count = Number.isFinite(unread) ? Math.max(0, unread) : null
+    compact.conversation_timestamp = Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null
+  }
+  return compact
+}
+
+async function compactPeers(current, rows, options = {}) {
+  const out = []
+  for (const row of rows || []) {
+    const compact = await compactPeer(current, row, options)
+    if (compact) out.push(compact)
+  }
+  return out
+}
+
 async function emitHistory(current, event) {
   const ordered = [...(event?.messages || [])]
     .sort((a, b) => Number(a.messageTimestamp || 0) - Number(b.messageTimestamp || 0))
@@ -452,6 +473,13 @@ async function emitHistory(current, event) {
     }
   }
   if (batch.length) emit({ type: 'history_batch', payloads: batch })
+  const [contacts, chats] = await Promise.all([
+    compactPeers(current, event?.contacts || []),
+    compactPeers(current, event?.chats || [], { chat: true }),
+  ])
+  if (contacts.length || chats.length) {
+    emit({ type: 'history_metadata', contacts, chats, is_latest: Boolean(event?.isLatest) })
+  }
 }
 
 async function flushBufferedOwnMessages() {
@@ -459,15 +487,16 @@ async function flushBufferedOwnMessages() {
   const items = [...pendingOwnMessages.values()]
   pendingOwnMessages.clear()
   for (const { current, msg } of items) {
-    const providerId = msg.key?.id || null
+    const providerId = messageIdentity(msg.key)
     if (providerId && locallySentIds.has(providerId)) continue
     await emitMessage(current, msg)
   }
 }
 
 function emitMessageUpdate(item) {
-  const providerId = item.key?.id || null
+  const providerId = messageIdentity(item.key)
   if (!providerId) return
+  const key = providerKey(item.key)
 
   const editedRaw = item.update?.message?.editedMessage?.message
   const edited = editedRaw ? contentOf(editedRaw) : null
@@ -476,6 +505,7 @@ function emitMessageUpdate(item) {
       type: 'message_content_update',
       payload: {
         provider_message_id: providerId,
+        provider_key: key,
         action: 'EDIT',
         text: messageText(edited),
         message_type: messageType(edited),
@@ -486,7 +516,10 @@ function emitMessageUpdate(item) {
   const revoked = item.update?.message === null
     && Number(item.update?.messageStubType) === Number(WAMessageStubType.REVOKE)
   if (revoked) {
-    emit({ type: 'message_content_update', payload: { provider_message_id: providerId, action: 'DELETE' } })
+    emit({
+      type: 'message_content_update',
+      payload: { provider_message_id: providerId, provider_key: key, action: 'DELETE' },
+    })
   }
 
   const mapped = mapReceiptStatus(item.update?.status)
@@ -495,6 +528,7 @@ function emitMessageUpdate(item) {
     type: 'message_update',
     payload: {
       provider_message_id: providerId,
+      provider_key: key,
       client_message_id: localMessageIds.get(providerId) || null,
       status: mapped,
     },
@@ -522,10 +556,11 @@ async function sendAndReply(id, command, content, options = {}) {
     const quoted = minimalQuotedMessage(command.quote)
     const sent = await sock.sendMessage(target, content, quoted ? { ...options, quoted } : options)
     await rememberRawMessage(sent)
-    const providerId = sent?.key?.id || null
+    const providerId = messageIdentity(sent?.key)
     rememberLocalSend(providerId, command.client_message_id)
     reply(id, true, {
       provider_message_id: providerId,
+      provider_raw_id: rawMessageId(sent?.key),
       provider_key: providerKey(sent?.key),
       provider_address: target,
     })
@@ -614,7 +649,7 @@ async function processEvents(current, events, saveCreds) {
     const rehydrated = upsert.type !== 'notify'
     for (const msg of upsert.messages || []) {
       await rememberRawMessage(msg)
-      const providerId = msg.key?.id || null
+      const providerId = messageIdentity(msg.key)
       if (msg.key?.fromMe && providerId && locallySentIds.has(providerId)) continue
       if (!rehydrated && msg.key?.fromMe && localSendsInFlight > 0 && providerId) {
         pendingOwnMessages.set(providerId, { current, msg })
@@ -629,10 +664,25 @@ async function processEvents(current, events, saveCreds) {
     else emitMessageUpdate(item)
   }
 
+  const deletedMessages = events['messages.delete']
+  for (const key of deletedMessages?.keys || []) {
+    const providerId = messageIdentity(key)
+    if (!providerId) continue
+    emit({
+      type: 'message_content_update',
+      payload: {
+        provider_message_id: providerId,
+        provider_key: providerKey(key),
+        action: 'DELETE',
+      },
+    })
+  }
+
   for (const item of events['messages.reaction'] || []) {
     emit({
       type: 'reaction',
       payload: {
+        target_provider_message_id: messageIdentity(item.key),
         target_key: providerKey(item.key),
         reaction_key: providerKey(item.reaction?.key),
         emoji: item.reaction?.text || '',
@@ -640,6 +690,23 @@ async function processEvents(current, events, saveCreds) {
         timestamp_ms: Number(item.reaction?.senderTimestampMs || Date.now()),
       },
     })
+  }
+
+  const contactRows = [...(events['contacts.upsert'] || []), ...(events['contacts.update'] || [])]
+  if (contactRows.length) {
+    const items = await compactPeers(current, contactRows)
+    if (items.length) emit({ type: 'provider_contacts', items })
+  }
+
+  const chatRows = [...(events['chats.upsert'] || []), ...(events['chats.update'] || [])]
+  if (chatRows.length) {
+    const items = await compactPeers(current, chatRows, { chat: true })
+    if (items.length) emit({ type: 'provider_chats', items })
+  }
+
+  const chatDeletes = (events['chats.delete'] || []).filter(isDirectJid)
+  if (chatDeletes.length) {
+    emit({ type: 'provider_chat_deleted', addresses: chatDeletes })
   }
 
   const presence = events['presence.update']
@@ -751,7 +818,7 @@ async function handle(command) {
         const key = asProviderKey(command.target_key)
         const sent = await sock.sendMessage(target, { react: { text: String(command.emoji || ''), key } })
         await rememberRawMessage(sent)
-        rememberLocalSend(sent?.key?.id || null, null)
+        rememberLocalSend(messageIdentity(sent?.key), null)
         reply(id, true, { provider_key: providerKey(sent?.key), provider_address: target })
         break
       }
@@ -760,7 +827,7 @@ async function handle(command) {
         const key = asProviderKey(command.target_key)
         const sent = await sock.sendMessage(target, { text: String(command.text || ''), edit: key })
         await rememberRawMessage(sent)
-        rememberLocalSend(sent?.key?.id || null, null)
+        rememberLocalSend(messageIdentity(sent?.key), null)
         reply(id, true, { provider_key: providerKey(sent?.key), provider_address: target })
         break
       }
@@ -769,7 +836,7 @@ async function handle(command) {
         const key = asProviderKey(command.target_key)
         const sent = await sock.sendMessage(target, { delete: key })
         await rememberRawMessage(sent)
-        rememberLocalSend(sent?.key?.id || null, null)
+        rememberLocalSend(messageIdentity(sent?.key), null)
         reply(id, true, { provider_key: providerKey(sent?.key), provider_address: target })
         break
       }
