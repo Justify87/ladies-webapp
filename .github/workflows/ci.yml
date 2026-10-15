@@ -46,6 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           find ladies/static/explorer -type f \( -name '*.js' -o -name '*.mjs' \) -print -exec node --experimental-default-type=module --check {} \;
+          find ladies/messaging/whatsapp_worker tools -type f -name '*.mjs' -print -exec node --experimental-default-type=module --check {} \;
 
       - name: Focused behavior smoke checks
         run: |
@@ -232,10 +233,35 @@ jobs:
           assert.equal(newSheet.scrollTop,215);
           JS
 
-          node --experimental-default-type=module tools/check_search_intelligence.mjs
-          node --experimental-default-type=module tools/check_har_runtime_fixes.mjs
-          node --experimental-default-type=module tools/check_favorites_redesign.mjs
-          node --experimental-default-type=module tools/check_css_architecture.mjs
+      - name: Messaging identity architecture
+        run: python tools/check_messaging_architecture.py identity
+
+      - name: Messaging backend architecture
+        run: python tools/check_messaging_architecture.py backend
+
+      - name: Messaging worker architecture
+        run: python tools/check_messaging_architecture.py worker
+
+      - name: Messaging frontend architecture
+        run: python tools/check_messaging_architecture.py frontend
+
+      - name: Messaging frontend behavior
+        run: node --experimental-default-type=module tools/check_messaging_frontend.mjs
+
+      - name: Messaging provider identity
+        run: node --experimental-default-type=module tools/check_messaging_provider_identity.mjs
+
+      - name: Search intelligence regressions
+        run: node --experimental-default-type=module tools/check_search_intelligence.mjs
+
+      - name: HAR runtime regressions
+        run: node --experimental-default-type=module tools/check_har_runtime_fixes.mjs
+
+      - name: Favorites redesign regressions
+        run: node --experimental-default-type=module tools/check_favorites_redesign.mjs
+
+      - name: CSS architecture regressions
+        run: node --experimental-default-type=module tools/check_css_architecture.mjs
 
       - name: Check project metadata syntax
         run: |

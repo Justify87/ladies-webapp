@@ -145,8 +145,7 @@ export function threadVm(thread) {
     preview:t.last_message?.text || t.last_message_text || t.preview || (t.last_message?.message_type ? `[${t.last_message.message_type}]` : ''),
     time:t.last_message_at || t.updated_at || t.last_message?.timestamp || '',
     unread:Number(t.unread_count || t.unread || 0),
-    assigned:Boolean(t.person_id),
-    preference:t.preference || 'NONE', favorite:Boolean(t.favorite)
+    assigned:Boolean(t.person_id)
   };
 }
 
