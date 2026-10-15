@@ -55,6 +55,12 @@ class WhatsAppConnectionLifecycle:
             return False
         return payload.get("registered") is True
 
+    def has_local_auth_data(self) -> bool:
+        try:
+            return any(self.auth_dir.iterdir())
+        except (FileNotFoundError, OSError):
+            return False
+
     def _resume_saved_session(self) -> None:
         try:
             self.service.gateway.command("connect", timeout=15)
@@ -121,6 +127,7 @@ class WhatsAppConnectionLifecycle:
                 detail=detail,
                 pairing_requested=bool(self._pairing_requested),
                 has_saved_session=bool(has_saved_session),
+                has_local_auth_data=bool(self.has_local_auth_data()),
                 qr_available=bool(visible_qr),
                 qr=visible_qr,
             )
@@ -168,7 +175,8 @@ class WhatsAppConnectionLifecycle:
 
         Baileys credentials and Signal keys are one session. Reset therefore
         removes the whole auth directory while leaving messages/media/history
-        untouched in their separate stores.
+        untouched in their separate stores. It does not reconnect; the next
+        explicit connect request creates a completely fresh Baileys session.
         """
         with self._lock:
             self._pairing_requested = False
