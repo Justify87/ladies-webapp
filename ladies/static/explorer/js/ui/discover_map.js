@@ -219,9 +219,8 @@ function ensureMap(target,state,getState){
     return instance;
   })();
   mapInit={target,generation,promise};
-  void promise.finally(()=>{
-    if(mapInit?.generation===generation)mapInit=null;
-  });
+  const clearInit=()=>{if(mapInit?.generation===generation)mapInit=null;};
+  void promise.then(clearInit,clearInit);
   return promise;
 }
 
