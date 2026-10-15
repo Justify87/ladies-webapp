@@ -6,7 +6,7 @@ import { formatSavedResultDelta } from '../../saved_searches.js';
 const RADIUS_OPTIONS=[5,10,20,30,50,70,100];
 const IMAGE_MODES=[['ALL','Alle'],['NATURAL','Natürlich'],['STUDIO','Studio'],['FACEAPP','FaceApp'],['AI','KI-optimiert']];
 
-function items(state){return Array.isArray(state.settings?.values?.saved_searches)?state.settings.values.saved_searches:[];}
+function items(state){return Array.isArray(state.savedSearches?.items)?state.savedSearches.items:[];}
 function meta(item){const f=item?.filters||{},mode=availabilityMode(f);const suffix=mode==='NOW'?' · Jetzt':mode==='TODAY'?' · Heute':'';return `${f.city||'Ort'} · ${Number(f.radius||20)} km${suffix}`;}
 function delta(item){return formatSavedResultDelta(item?.last_delta);}
 function titleRow(iconName,title,description=''){return `<div class="filter-title-row">${icon(iconName,'filter-title-icon')}<div class="filter-title-copy"><h3>${e(title)}</h3>${description?`<p>${e(description)}</p>`:''}</div></div>`;}
@@ -15,8 +15,21 @@ function toggle(key,label,description,on){return `<label class="option-row"><spa
 
 function renderList(state){
   const saved=items(state);
-  const rows=saved.map(item=>`<div class="saved-search-entry ${item.unread_new_results?'has-new-results':''}"><div class="saved-search-copy"><div class="saved-search-name-line"><b>${e(item.name||'Gespeicherte Suche')}</b>${item.unread_new_results?'<span class="saved-search-new-pill">Neu</span>':''}</div><small>${e(meta(item))}</small><span class="saved-search-delta">${e(delta(item))}</span></div><div class="saved-search-actions"><button data-saved-search-action="run" data-saved-id="${a(item.id||'')}" title="Suche aktualisieren">${icon('refresh')}<span>Prüfen</span></button><button data-saved-search-action="edit" data-saved-id="${a(item.id||'')}" title="Gespeicherte Suche bearbeiten">${icon('edit')}<span>Ändern</span></button><button class="saved-search-delete" data-saved-search-action="delete" data-saved-id="${a(item.id||'')}" title="Gespeicherte Suche löschen" aria-label="Gespeicherte Suche löschen">${icon('trash')}</button></div></div>`).join('');
+  const rows=saved.map(item=>`<div class="saved-search-entry ${item.unread_new_results?'has-new-results':''}"><div class="saved-search-copy"><div class="saved-search-name-line"><b>${e(item.name||'Gespeicherte Suche')}</b>${item.unread_new_results?'<span class="saved-search-new-pill">Neu</span>':''}</div><small>${e(meta(item))}</small><span class="saved-search-delta">${e(delta(item))}</span>${item.last_error?`<small class="saved-search-error">Letzte Prüfung fehlgeschlagen</small>`:''}</div><div class="saved-search-actions"><button data-saved-search-action="results" data-saved-id="${a(item.id||'')}" title="Ergebnisse ansehen">${icon('users')}<span>Ergebnisse</span></button><button data-saved-search-action="run" data-saved-id="${a(item.id||'')}" title="Suche aktualisieren">${icon('refresh')}<span>Prüfen</span></button><button data-saved-search-action="edit" data-saved-id="${a(item.id||'')}" title="Gespeicherte Suche bearbeiten">${icon('edit')}<span>Ändern</span></button><button class="saved-search-delete" data-saved-search-action="delete" data-saved-id="${a(item.id||'')}" title="Gespeicherte Suche löschen" aria-label="Gespeicherte Suche löschen">${icon('trash')}</button></div></div>`).join('');
   return `<div class="screen-view saved-search-screen"><div class="screen-scroll" data-scroll-root><section class="filter-card saved-searches-card">${titleRow('star','Gespeicherte Suchen','Werden regelmäßig getrennt von deiner aktuellen Suche geprüft. Neue Treffer beeinflussen Swipe und Entdecken nicht.')}<div class="saved-search-toolbar"><button data-saved-search-action="save-current">${icon('plus')}<span>Aktuelle Filter speichern</span></button></div>${saved.length?`<div class="saved-search-list">${rows}</div>`:'<p class="availability-note">Noch keine gespeicherten Suchen. Speichere deine aktuelle Filterkombination, um sie unabhängig im Hintergrund prüfen zu lassen.</p>'}</section></div></div>`;
+}
+
+function renderResults(state,route){
+  const id=String(route?.params?.id||'');
+  const item=items(state).find(entry=>String(entry.id)===id);
+  const rows=state.savedSearches?.resultsById?.[id]||[];
+  const loading=Boolean(state.savedSearches?.loadingById?.[id]);
+  const cards=rows.map(row=>{
+    const advertId=String(row.advert_id||row.external_listing_id||'');
+    return `<article class="grid-card saved-search-result-card" data-saved-search-action="open-result" data-saved-id="${a(id)}" data-result-key="${a(advertId)}" title="Profil öffnen">${row.thumbnail_url?`<img src="${a(row.thumbnail_url)}" alt="${a(row.name||'Profil')}">`:`<div class="media-fallback">${icon('image')}</div>`}<div class="grid-card-copy"><h3>${e(row.name||'Profil')}</h3>${row.city?`<small>${e(row.city)}</small>`:''}</div></article>`;
+  }).join('');
+  const body=loading&&!rows.length?'<div class="loading-state"><span class="spinner"></span>Ergebnisse werden geladen …</div>':rows.length?`<div class="cards-grid">${cards}</div>`:`<div class="list-empty">${icon('users')}Noch keine Treffer für diese gespeicherte Suche.</div>`;
+  return `<div class="screen-view saved-search-results-screen"><div class="screen-scroll" data-scroll-root><section class="filter-card saved-search-results-summary">${titleRow('users',item?.name||'Gespeicherte Suche',item?`${meta(item)} · ${Number(item?.last_delta?.current_result_count||rows.length)} Treffer`:'Gespeicherte Ergebnisse')}</section>${body}</div></div>`;
 }
 
 function renderEditor(state,item){
@@ -40,6 +53,7 @@ function renderEditor(state,item){
 }
 
 export function renderSavedSearches(state,route){
+  if(route?.name==='saved-search-results')return renderResults(state,route);
   const editId=String(route?.params?.edit||'');
   if(!editId)return renderList(state);
   const item=items(state).find(entry=>String(entry.id)===editId);
