@@ -2,6 +2,10 @@ import { searchResultVm, profileBundleVm, personDetailVm, listItemVm, threadVm, 
 
 export const currentRoute = state => state.navigation.stack.at(-1) || {name:'search',params:{}};
 export const isSwipeDiscover = state => currentRoute(state).name==='discover' && state.discover.mode==='swipe';
+export const pricingExtractionEnabled = state => state.settings.pricing?.price_intelligence_enabled === true;
+export const pricingRuntimeReady = state => state.settings.pricingRuntime?.extractor?.ready === true;
+export const pricingExtractionAvailable = state => pricingExtractionEnabled(state) && pricingRuntimeReady(state);
+export const pricingManualAvailable = state => pricingExtractionAvailable(state) && state.settings.pricing?.price_magic_button_enabled === true;
 
 export function businessProfileEvidence(row,bundle) {
   const profile=bundle?.profile || bundle?.snapshot || bundle?.latest_snapshot || {};

@@ -41,18 +41,13 @@ class MapRepository:
             }
 
             items: list[dict] = []
-            seen_people: set[int] = set()
             for listing_id in ordered:
                 pair = by_listing.get(listing_id)
                 if pair is None:
                     continue
                 listing, snapshot = pair
-                person_id = int(listing.person_id)
-                if person_id in seen_people:
-                    continue
-                seen_people.add(person_id)
                 items.append({
-                    "person_id": person_id,
+                    "person_id": int(listing.person_id),
                     "listing_id": int(listing.listing_id),
                     "advert_id": str(listing.external_listing_id),
                     "city": snapshot.city if snapshot else None,
