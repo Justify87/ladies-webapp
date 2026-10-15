@@ -53,7 +53,18 @@ export function createMessagingEffects({store,router,getEffects}) {
 
   async function disconnectWhatsapp(){try{store.dispatch({type:'MESSAGE_STATUS',value:await api.messagingDisconnect()});toast('WhatsApp getrennt');}catch(error){toast(error.message);} }
 
-  async function logoutWhatsapp(){try{store.dispatch({type:'MESSAGE_STATUS',value:await api.messagingLogout()});contactProbeAt.clear();toast('WhatsApp abgemeldet');}catch(error){toast(error.message);} }
+  async function logoutWhatsapp(){
+    if(!confirm('Gespeicherte WhatsApp-Verbindung löschen und neu einrichten?\n\nDie Chat-Historie bleibt erhalten. Die lokale WhatsApp-Anmeldung wird gelöscht und anschließend eine neue Kopplung gestartet.'))return;
+    try{
+      store.dispatch({type:'MESSAGE_STATUS',value:await api.messagingLogout()});
+      contactProbeAt.clear();
+      const next=await api.messagingConnect();
+      store.dispatch({type:'MESSAGE_STATUS',value:next});
+      if(['DEPENDENCY_MISSING','ERROR'].includes(String(next?.state||'').toUpperCase()))toast(next?.detail||'Neue WhatsApp-Verbindung konnte nicht gestartet werden');
+      else toast('Verbindung zurückgesetzt – QR-Code wird vorbereitet');
+      setTimeout(loadMessagingStatus,800);
+    }catch(error){toast(error.message);}
+  }
 
   async function showQr(){try{const d=await api.messagingQr();store.dispatch({type:'SHEET',value:{kind:'qr',payload:{qr:d?.qr}}});}catch(error){store.dispatch({type:'SHEET',value:{kind:'qr',payload:{qr:null}}});toast(error.message);} }
 
