@@ -1,40 +1,20 @@
 import { recordFilterUsage } from './data/filter_usage.js';
 
 const OPEN_KEY='ladies.explorer.filter-sections.v1';
-const PRICING_SERVICE_ALIASES=Object.freeze({
-  KISSING:'zungenkuss',
-  FRENCH:'franzoesisch',
-  ANAL:'anal',
-  MASSAGE:'erotische-massage',
-  GFE:'girlfriendsex',
-  SIXTY_NINE:'69-stellung'
-});
 function openSections(){try{return new Set(JSON.parse(sessionStorage.getItem(OPEN_KEY)||'[]'));}catch{return new Set();}}
 function saveSections(set){try{sessionStorage.setItem(OPEN_KEY,JSON.stringify([...set]));}catch{}}
 function focusSnapshot(){const input=document.activeElement?.closest?.('.search-screen input,.search-screen select,.search-screen textarea');if(!input)return null;return {filterSearch:input.matches('[data-filter-search]'),filterInput:input.dataset.filterInput||null,start:input.selectionStart??null,end:input.selectionEnd??null};}
 function priceNumber(value){const text=String(value??'').trim().replace(',','.');if(!text)return null;const number=Number(text);return Number.isFinite(number)?Math.round(number*100):null;}
-function durationNumber(value){const text=String(value??'').trim().toLocaleLowerCase('de-DE').replace(',','.');if(!text)return null;const match=text.match(/(\d+(?:\.\d+)?)/);if(!match)return null;const number=Number(match[1]);if(!Number.isFinite(number)||number<=0)return null;return /(?:\bstd\.?\b|\bstunde|\bh\b)/.test(text)?Math.round(number*60):Math.round(number);}
-function renumberPricingForm(form){const counts={offer:0,rule:0,condition:0};for(const row of form?.querySelectorAll('[data-pricing-row]')||[]){const kind=row.dataset.pricingKind;if(!(kind in counts))continue;const index=counts[kind]++;for(const field of row.querySelectorAll('[name]'))field.name=field.name.replace(/_\d+$/,`_${index}`);}}
-const fold=value=>String(value||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('de-DE').replace(/[^a-z0-9]+/g,' ').trim();
+const comparable=value=>String(value||'').normalize('NFKC').trim().toLocaleLowerCase('de-DE');
 
 export function canonicalPricingService(rule,config){
   const options=(config?.filter_groups||[]).find(group=>group.key==='service')?.options||[];
   const current=String(rule?.service_key||'').trim();
-  let match=options.find(option=>String(option.value||'')===current);
-  if(match)return {value:String(match.value),label:String(match.label||match.value)};
-  const raw=fold(rule?.raw_label);
-  if(raw)match=options.find(option=>fold(option.label)===raw);
-  if(match)return {value:String(match.value),label:String(match.label||match.value)};
-  let mapped=PRICING_SERVICE_ALIASES[current.toUpperCase()]||'';
-  if(/body to body/.test(raw))mapped='body-to-body-massage';
-  else if(/girlfriend|\bgfe\b/.test(raw))mapped='girlfriendsex';
-  else if(/franz|oral/.test(raw))mapped='franzoesisch';
-  else if(/kuss|kissing|\bzk\b/.test(raw))mapped='zungenkuss';
-  else if(/\b69\b/.test(raw))mapped='69-stellung';
-  else if(/\banal\b|\bav\b/.test(raw))mapped='anal';
-  else if(/massage/.test(raw))mapped='erotische-massage';
-  match=options.find(option=>String(option.value||'')===mapped);
-  return match?{value:String(match.value),label:String(match.label||match.value)}:null;
+  if(current){const match=options.find(option=>String(option.value??option.label??'')===current);return match?{value:String(match.value??match.label),label:String(match.label??match.value)}:null;}
+  const raw=comparable(rule?.raw_label);
+  if(!raw)return null;
+  const match=options.find(option=>comparable(option.label)===raw);
+  return match?{value:String(match.value??match.label),label:String(match.label??match.value)}:null;
 }
 
 export function currentSavedPricingExtractionId(timeline){
@@ -49,11 +29,10 @@ export function installUxPatch({store}){
   function syncPricingDraft(form){
     const state=store.getState(),current=state.pricing.proposal?.proposal;
     if(!form||!current)return;
-    renumberPricingForm(form);
     const proposal=structuredClone(current);
     const pick=(items,row,index)=>items.find(item=>String(item.proposal_key||'')===String(row.dataset.proposalKey||''))||items[index]||{};
     const rows=kind=>[...form.querySelectorAll(`[data-pricing-kind="${kind}"]`)];
-    proposal.offers=rows('offer').map((row,index)=>{const base=pick(current.offers||[],row,index),label=String(row.querySelector('[data-pricing-field="duration-label"]')?.value||'').trim();const duration=durationNumber(label);return {...base,label:label||null,duration_minutes:duration,amount_cents:priceNumber(row.querySelector('[data-pricing-field="amount"]')?.value??'')};});
+    proposal.offers=rows('offer').map((row,index)=>{const base=pick(current.offers||[],row,index),duration=Number(row.querySelector('[data-pricing-field="duration"]')?.value||0)||null;return {...base,label:duration?`${duration} Minuten`:null,duration_minutes:duration,duration_max_minutes:null,amount_cents:priceNumber(row.querySelector('[data-pricing-field="amount"]')?.value??'')};});
     proposal.service_rules=rows('rule').map((row,index)=>{const base=pick(current.service_rules||[],row,index),select=row.querySelector('[data-pricing-field="service"]'),canonical=canonicalPricingService(base,state.config),serviceKey=String(select?.value||canonical?.value||'').trim(),option=serviceKey?[...(select?.options||[])].find(item=>String(item.value)===serviceKey):null,label=String(option?.dataset.label||option?.textContent||canonical?.label||'').trim();return {...base,service_key:serviceKey||null,raw_label:serviceKey?label:'',status:String(row.querySelector('[data-pricing-field="status"]')?.value||base.status||'UNKNOWN'),amount_cents:priceNumber(row.querySelector('[data-pricing-field="amount"]')?.value??'')};});
     proposal.conditions=rows('condition').map((row,index)=>{const base=pick(current.conditions||[],row,index);return {...base,label:String(row.querySelector('[data-pricing-field="label"]')?.value||base.label||'').trim(),amount_cents:priceNumber(row.querySelector('[data-pricing-field="amount"]')?.value??'')};});
     store.dispatch({type:'PRICING_DRAFT',value:proposal},{silent:true});
