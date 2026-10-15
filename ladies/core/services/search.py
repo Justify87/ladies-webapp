@@ -45,6 +45,8 @@ def parse_search_request(
 
 
 class SearchService:
+    """Canonical search orchestration for persisted and transient result sets."""
+
     def __init__(self, repository, http_session, *, default_city: str, default_radius: int):
         self.repository = repository
         self.http = http_session
@@ -65,15 +67,56 @@ class SearchService:
             selected=params["selected"],
         )
 
-    def execute(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _prepare(self, payload: dict[str, Any]) -> tuple[dict[str, Any], str, str]:
+        params = parse_search_request(payload, default_city=self.default_city, default_radius=self.default_radius)
+        LOGGER.info(
+            "Search start city=%s radius=%s category=%s age=%s-%s filters=%s",
+            params["city_raw"], params["radius"], params["category"] or "ALL",
+            params["age_min"], params["age_max"], sorted(params["selected"]),
+        )
+        city_slug, city_display = resolve_location(self.http, params["city_raw"])
+        return params, city_slug, city_display
+
+    def _fetch_with_radius(
+        self,
+        params: dict[str, Any],
+        city_slug: str,
+        city_display: str,
+    ):
+        requested_radius = int(params["radius"])
+        effective_radius = requested_radius
+        auto_expanded = False
         try:
-            params = parse_search_request(payload, default_city=self.default_city, default_radius=self.default_radius)
+            profiles, meta = self._fetch(params, city_slug, city_display, requested_radius)
+        except RuntimeError as exc:
+            match = _RADIUS_RE.search(str(exc))
+            if not match:
+                raise
+            effective_radius = int(match.group(1))
+            if effective_radius < 1 or effective_radius > 200:
+                raise
+            auto_expanded = effective_radius != requested_radius
             LOGGER.info(
-                "Search start city=%s radius=%s category=%s age=%s-%s filters=%s",
-                params["city_raw"], params["radius"], params["category"] or "ALL",
-                params["age_min"], params["age_max"], sorted(params["selected"]),
+                "Search follows upstream radius expansion requested_radius=%s effective_radius=%s filter_path=%s",
+                requested_radius,
+                effective_radius,
+                build_filter_path(
+                    params["category"], params["age_min"], params["age_max"],
+                    params["height_min"], params["height_max"], params["selected"],
+                ) or "<none>",
             )
-            city_slug, city_display = resolve_location(self.http, params["city_raw"])
+            profiles, meta = self._fetch(params, city_slug, city_display, effective_radius)
+
+        metadata = dict(meta or {})
+        metadata["requested_radius_km"] = requested_radius
+        metadata["effective_radius_km"] = effective_radius
+        metadata["radius_auto_expanded"] = auto_expanded
+        return profiles, metadata
+
+    def _execute(self, payload: dict[str, Any], *, persist_history: bool) -> dict[str, Any]:
+        params, city_slug, city_display = self._prepare(payload)
+        run_id = None
+        if persist_history:
             run_id = self.repository.create_search_run(
                 city=city_display,
                 city_slug=city_slug,
@@ -87,45 +130,38 @@ class SearchService:
                     "selected": params["selected"],
                 },
             )
-            requested_radius = int(params["radius"])
-            effective_radius = requested_radius
-            auto_expanded = False
-            try:
-                profiles, meta = self._fetch(params, city_slug, city_display, requested_radius)
-            except RuntimeError as exc:
-                match = _RADIUS_RE.search(str(exc))
-                if not match:
-                    raise
-                effective_radius = int(match.group(1))
-                if effective_radius < 1 or effective_radius > 200:
-                    raise
-                auto_expanded = effective_radius != requested_radius
-                LOGGER.info(
-                    "Search follows upstream radius expansion requested_radius=%s effective_radius=%s filter_path=%s",
-                    requested_radius,
-                    effective_radius,
-                    build_filter_path(
-                        params["category"], params["age_min"], params["age_max"],
-                        params["height_min"], params["height_max"], params["selected"],
-                    ) or "<none>",
-                )
-                profiles, meta = self._fetch(params, city_slug, city_display, effective_radius)
 
-            meta = dict(meta or {})
-            meta["requested_radius_km"] = requested_radius
-            meta["effective_radius_km"] = effective_radius
-            meta["radius_auto_expanded"] = auto_expanded
-            results = self.repository.finish_search_run(run_id, profiles, meta)
-            LOGGER.info(
-                "Search complete run_id=%s results=%s city=%s requested_radius=%s effective_radius=%s",
-                run_id, len(results), city_display, requested_radius, effective_radius,
-            )
-            return {"search_run_id": run_id, "results": results, "meta": meta}
+        profiles, meta = self._fetch_with_radius(params, city_slug, city_display)
+        results = (
+            self.repository.finish_search_run(run_id, profiles, meta)
+            if run_id is not None
+            else self.repository.sync_search_profiles(profiles)
+        )
+        LOGGER.info(
+            "Search complete persisted=%s run_id=%s results=%s city=%s requested_radius=%s effective_radius=%s",
+            persist_history, run_id, len(results), city_display,
+            meta["requested_radius_km"], meta["effective_radius_km"],
+        )
+        response = {"results": results, "meta": meta}
+        if run_id is not None:
+            response["search_run_id"] = run_id
+        return response
+
+    def _guarded_execute(self, payload: dict[str, Any], *, persist_history: bool) -> dict[str, Any]:
+        try:
+            return self._execute(payload, persist_history=persist_history)
         except ValidationError:
             raise
         except (ValueError, RuntimeError) as exc:
             LOGGER.warning("Search rejected: %s", exc)
             raise ValidationError(str(exc)) from exc
         except Exception as exc:
-            LOGGER.exception("Search failed")
+            LOGGER.exception("Search failed persisted=%s", persist_history)
             raise ExternalServiceError("Suche konnte nicht geladen werden.") from exc
+
+    def execute(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._guarded_execute(payload, persist_history=True)
+
+    def execute_transient(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Return canonical local result rows without creating SearchRun history."""
+        return self._guarded_execute(payload, persist_history=False)
