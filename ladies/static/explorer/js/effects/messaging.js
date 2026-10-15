@@ -8,8 +8,6 @@ export function createMessagingEffects({store,router,getEffects}) {
   const contactProbeAt=new Map();
   const toast=message=>store.dispatch({type:'TOAST',value:message});
   const state=()=>store.getState();
-  const threadTime=item=>Date.parse(item?.last_message_at||item?.last_message?.timestamp||item?.updated_at||0)||0;
-  const newestThreads=items=>[...(items||[])].sort((left,right)=>threadTime(right)-threadTime(left)||Number(right?.thread_id||0)-Number(left?.thread_id||0));
 
   function applyPresence(payload){
     const threadId=Number(payload?.thread_id||0);if(!threadId)return;
@@ -59,7 +57,7 @@ export function createMessagingEffects({store,router,getEffects}) {
 
   async function showQr(){try{const d=await api.messagingQr();store.dispatch({type:'SHEET',value:{kind:'qr',payload:{qr:d?.qr}}});}catch(error){store.dispatch({type:'SHEET',value:{kind:'qr',payload:{qr:null}}});toast(error.message);} }
 
-  async function loadThreads(filter=state().messaging.filter){store.dispatch({type:'THREADS_LOADING',value:true});try{const d=await api.threads(filter);store.dispatch({type:'THREADS',items:newestThreads(d?.items)});}catch(error){store.dispatch({type:'THREADS_LOADING',value:false});toast(error.message);} }
+  async function loadThreads(filter=state().messaging.filter){store.dispatch({type:'THREADS_LOADING',value:true});try{const d=await api.threads(filter);store.dispatch({type:'THREADS',items:d?.items||[]});}catch(error){store.dispatch({type:'THREADS_LOADING',value:false});toast(error.message);} }
 
   async function loadThread(threadId,{before=null,appendOlder=false}={}){store.dispatch({type:'THREAD_LOADING',value:true});try{let d=await api.thread(threadId,{limit:100,before});const current=state().messaging.currentThread;if(appendOlder&&current&&Number(current.thread_id)===Number(threadId)){d.messages=[...(d.messages||d.items||[]),...(current.messages||current.items||[])];d=retainSelectedEndpoint(d,current);}else if(before==null){d=retainLoadedHistory(d,current);}store.dispatch({type:'CURRENT_THREAD',value:d});const endpoint=d.selected_endpoint||d.endpoint||d.endpoints?.[0];if(endpoint?.endpoint_id)void probeContact(endpoint.endpoint_id);if(Number(d.unread_count||0)>0){const messages=(d.messages||d.items||[]).filter(m=>String(m.direction).toUpperCase()==='IN').map(m=>m.message_id).filter(Boolean);api.markRead(threadId,messages.length?messages:null).catch(()=>{});}await getEffects().loadPricingForThread(threadId);}catch(error){store.dispatch({type:'THREAD_LOADING',value:false});toast(error.message);} }
 
