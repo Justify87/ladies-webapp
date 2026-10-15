@@ -356,8 +356,9 @@ def check_frontend() -> None:
 
     messaging_effects = source("ladies/static/explorer/js/effects/messaging.js")
     require("async function loadThreads()" in messaging_effects, "canonical loadThreads signature")
-    require("api.threads('ALL')" in messaging_effects, "canonical ALL fetch")
-    require("api.threads(filter)" not in messaging_effects, "server subset fetch removed")
+    require("api.messagingInbox('ALL')" in messaging_effects, "classified Ladies inbox fetch")
+    require("api.messagingReview()" in messaging_effects, "unknown WhatsApp review fetch")
+    require("api.threads(" not in messaging_effects, "raw provider thread fetch is not a product data source")
     require("async function resetWhatsapp()" in messaging_effects, "WhatsApp reset effect")
     require("api.messagingReset()" in messaging_effects, "reset uses canonical API")
     reset_effect = messaging_effects.split("async function resetWhatsapp()", 1)[1].split("async function loadThreads()", 1)[0]
