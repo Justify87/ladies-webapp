@@ -22,7 +22,41 @@ class FixedRateLimiter:
 
 source.FixedRateLimiter = FixedRateLimiter
 package = types.ModuleType("ladies_v9")
-sys.modules.update({"ladies_v9": package, "ladies_v9.source": source})
+
+orjson = types.ModuleType("orjson")
+orjson.OPT_SORT_KEYS = 1
+orjson.JSONDecodeError = json.JSONDecodeError
+orjson.loads = lambda value: json.loads(value.decode("utf-8") if isinstance(value, bytes) else value)
+orjson.dumps = lambda value, option=0: json.dumps(
+    value,
+    ensure_ascii=False,
+    sort_keys=bool(option & orjson.OPT_SORT_KEYS),
+    separators=(",", ":"),
+).encode("utf-8")
+
+requests = types.ModuleType("requests")
+
+
+class RequestException(Exception):
+    pass
+
+
+class Session:
+    def __init__(self):
+        self.headers = {}
+
+    def get(self, *args, **kwargs):
+        raise AssertionError("Map behavior checks must not perform network I/O")
+
+
+requests.RequestException = RequestException
+requests.Session = Session
+sys.modules.update({
+    "ladies_v9": package,
+    "ladies_v9.source": source,
+    "orjson": orjson,
+    "requests": requests,
+})
 
 module = runpy.run_path("ladies/core/services/map.py")
 MapService = module["MapService"]
