@@ -128,7 +128,7 @@ export function installSavedSearches({store,effects,router}){
     const item=savedSearches(store.getState()).find(entry=>String(entry.id)===String(id));
     if(!item)return effects.toast('Gespeicherte Suche nicht gefunden');
     router.push('saved-search-results',{id:String(id)});
-    if(!item.last_run_at)await runSaved(id,{silent:true});
+    if(!item.last_run_at){await runSaved(id,{silent:true});return;}
     await loadResults(id);
   }
 
