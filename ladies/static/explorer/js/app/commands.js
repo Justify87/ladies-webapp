@@ -4,7 +4,7 @@ import { profileBundleVm } from '../data/adapters.js';
 export function createCommands({store,router,effects}) {
   const state=()=>store.getState();
   const handlers={
-    'root-route': async el => { const name=el.dataset.route; if(name==='discover'&&state().discover.mode==='swipe')await effects.prefetchCurrent(); router.replaceRoot(name); if(name==='favorites')await effects.loadList(); if(name==='messages')await Promise.all([effects.loadMessagingStatus(),effects.loadThreads('ALL')]); if(name==='discover'&&state().discover.mode==='map')void effects.loadMapPoints(); if(name==='settings')await Promise.all([effects.loadSettings(),effects.loadDashboard(),effects.loadPricingSettings()]); },
+    'root-route': async el => { const name=el.dataset.route; if(name==='discover'&&state().discover.mode==='swipe')await effects.prefetchCurrent(); router.replaceRoot(name); if(name==='favorites')await effects.loadList(); if(name==='messages')await Promise.all([effects.loadMessagingStatus(),effects.loadThreads('ALL')]); if(name==='discover'&&state().discover.mode==='map')void effects.loadMapPoints(); if(name==='settings')await Promise.all([effects.loadSettings(),effects.loadDashboard(),effects.loadPricingSettings(),effects.loadMessagingStatus()]); },
     'back':()=>router.back(),
     'sheet-close':()=>store.dispatch({type:'SHEET',value:null}),
     'search-submit':()=>effects.performSearch(),
@@ -63,8 +63,7 @@ export function createCommands({store,router,effects}) {
     'chat-profile':()=>{const t=S.currentThread(state());if(t?.personId)return effects.openProfile({personId:t.personId});const endpointId=Number(t?.selectedEndpoint?.endpoint_id||t?.selected_endpoint?.endpoint_id||t?.endpoint?.endpoint_id||t?.endpoints?.[0]?.endpoint_id||0);if(endpointId)return effects.openAssignment(endpointId);effects.toast('Chat ist keiner Person zugeordnet');},
     'wa-connect':()=>effects.connectWhatsapp(),
     'wa-disconnect':()=>effects.disconnectWhatsapp(),
-    'wa-logout':()=>effects.logoutWhatsapp(),
-    'wa-qr':()=>effects.showQr(),
+    'wa-reset':()=>effects.resetWhatsapp(),
     'open-history':()=>{router.push('history');effects.loadDashboard();},
     'refresh-dashboard':()=>effects.loadDashboard(true),
     'history-drill':el=>effects.openHistoryDrill(el.dataset.kind),

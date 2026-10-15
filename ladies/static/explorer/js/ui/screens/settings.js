@@ -3,56 +3,17 @@ import { icon } from '../../shared/icons.js';
 import { statusLabel } from '../../data/adapters.js';
 
 function settingRow(key,label,description,on){return `<label class="setting-row">${icon('settings')}<div class="setting-row-copy"><b>${e(label)}</b><small>${e(description)}</small></div><span class="switch"><input type="checkbox" data-setting-key="${a(key)}" ${on?'checked':''}><span></span></span></label>`;}
-
-function whatsappStatusLabel(wa){
-  const state=String(wa?.state||'').toUpperCase();
-  if(state==='QR_REQUIRED')return 'QR-Code scannen';
-  if(state==='AUTH_REQUIRED')return 'Neu verbinden erforderlich';
-  if(state==='CONNECTING'||state==='PAIRING')return 'Verbindung wird hergestellt';
-  if(state==='DISCONNECTED')return 'Getrennt';
-  return statusLabel(state);
-}
-
+function whatsappStatusLabel(wa){const state=String(wa?.state||'').toUpperCase();if(state==='QR_REQUIRED')return 'QR-Code scannen';if(state==='AUTH_REQUIRED')return 'Neu verbinden erforderlich';if(state==='CONNECTING'||state==='PAIRING')return 'Verbindung wird hergestellt';if(state==='DISCONNECTED')return 'Getrennt';return statusLabel(state);}
 function whatsappConnectionPanel(wa){
-  const state=String(wa?.state||'NOT_CONFIGURED').toUpperCase();
-  const connected=state==='CONNECTED';
-  const pairing=Boolean(wa?.pairing_requested);
-  const qrVisible=pairing&&state==='QR_REQUIRED'&&Boolean(wa?.qr);
-  const qrPending=pairing&&!qrVisible&&['CONNECTING','PAIRING','QR_REQUIRED'].includes(state);
-  const authRequired=state==='AUTH_REQUIRED'||state==='LOGGED_OUT';
-  const reconnecting=state==='RECONNECTING';
-  const hasSaved=Boolean(wa?.has_saved_session);
-  const accountName=typeof wa?.account==='object'&&wa.account?.name?wa.account.name:'';
-  const detail=accountName||wa?.detail||(
-    connected?'WhatsApp ist bereit.':
-    authRequired?'Die gespeicherte Anmeldung kann nicht mehr verwendet werden.':
-    pairing?'Öffne WhatsApp auf deinem Smartphone und scanne den Code.':
-    hasSaved?'Die gespeicherte Anmeldung bleibt erhalten.':'Noch keine WhatsApp-Verbindung eingerichtet.'
-  );
-
+  const state=String(wa?.state||'NOT_CONFIGURED').toUpperCase(),connected=state==='CONNECTED',pairing=Boolean(wa?.pairing_requested),hasSaved=Boolean(wa?.has_saved_session),authRequired=state==='AUTH_REQUIRED'||state==='LOGGED_OUT',reconnecting=state==='RECONNECTING',dependencyMissing=state==='DEPENDENCY_MISSING';
+  const qrVisible=pairing&&state==='QR_REQUIRED'&&Boolean(wa?.qr),qrPending=pairing&&!qrVisible&&['CONNECTING','PAIRING','QR_REQUIRED'].includes(state),accountName=typeof wa?.account==='object'&&wa.account?.name?wa.account.name:'';
+  const detail=accountName||wa?.detail||(connected?'WhatsApp ist bereit.':authRequired?'Die gespeicherte Anmeldung kann nicht mehr verwendet werden.':pairing?'Öffne WhatsApp auf deinem Smartphone und scanne den Code.':hasSaved?'Die gespeicherte Anmeldung bleibt erhalten.':'Noch keine WhatsApp-Verbindung eingerichtet.');
   let pairingBox='';
-  if(qrVisible){
-    pairingBox=`<div class="wa-preview" data-whatsapp-pairing><img class="wa-qr" src="${a(wa.qr)}" alt="WhatsApp QR-Code"><div class="wa-copy"><b>Mit WhatsApp scannen</b><ol><li>WhatsApp auf dem Smartphone öffnen</li><li>Verknüpfte Geräte auswählen</li><li>Gerät verknüpfen und diesen QR-Code scannen</li></ol><small>Der QR-Code ist nur während dieses ausdrücklich gestarteten Verbindungsaufbaus sichtbar.</small></div></div>`;
-  }else if(qrPending){
-    pairingBox=`<div class="wa-preview" data-whatsapp-pairing><div class="wa-qr" aria-hidden="true"></div><div class="wa-copy"><b>QR-Code wird vorbereitet …</b><small>Die Verbindung wird initialisiert. Der Code erscheint hier automatisch.</small></div></div>`;
-  }else if(authRequired){
-    pairingBox=`<div class="wa-preview"><div class="wa-copy"><b>Neue Kopplung erforderlich</b><small>Setze die gespeicherte Verbindung zurück. Danach wird automatisch eine neue Kopplung gestartet und der QR-Code erscheint hier.</small></div></div>`;
-  }
-
+  if(qrVisible)pairingBox=`<div class="wa-preview" data-whatsapp-pairing><img class="wa-qr" src="${a(wa.qr)}" alt="WhatsApp QR-Code"><div class="wa-copy"><b>Mit WhatsApp scannen</b><ol><li>WhatsApp auf dem Smartphone öffnen</li><li>Verknüpfte Geräte auswählen</li><li>Gerät verknüpfen und diesen QR-Code scannen</li></ol><small>Der QR-Code ist nur während dieses ausdrücklich gestarteten Verbindungsaufbaus sichtbar.</small></div></div>`;
+  else if(qrPending)pairingBox=`<div class="wa-preview" data-whatsapp-pairing><div class="wa-qr" aria-hidden="true"></div><div class="wa-copy"><b>QR-Code wird vorbereitet …</b><small>Die Verbindung wird initialisiert. Der Code erscheint hier automatisch.</small></div></div>`;
   const actions=[];
-  if(connected){
-    actions.push(`<button data-action="wa-disconnect">Trennen</button>`);
-  }else if(pairing){
-    actions.push(`<button data-action="wa-disconnect">Abbrechen</button>`);
-  }else if(!authRequired&&!reconnecting){
-    actions.push(`<button class="settings-primary" data-action="wa-connect">${hasSaved?'Wieder verbinden':'WhatsApp verbinden'}</button>`);
-  }else if(reconnecting){
-    actions.push(`<button class="settings-primary" disabled>Wird wieder verbunden …</button>`);
-  }
-  if(hasSaved||connected||authRequired){
-    actions.push(`<button class="danger" data-action="wa-logout">Verbindung neu einrichten</button>`);
-  }
-
+  if(connected)actions.push(`<button data-action="wa-disconnect">Trennen</button>`);else if(pairing)actions.push(`<button data-action="wa-disconnect">Abbrechen</button>`);else if(dependencyMissing)actions.push(`<button class="settings-primary" disabled>WhatsApp nicht verfügbar</button>`);else if(!authRequired&&!reconnecting)actions.push(`<button class="settings-primary" data-action="wa-connect">${hasSaved?'Wieder verbinden':'WhatsApp verbinden'}</button>`);else if(reconnecting)actions.push(`<button class="settings-primary" disabled>Wird wieder verbunden …</button>`);
+  if(hasSaved||connected||authRequired)actions.push(`<button class="danger" data-action="wa-reset">Verbindung neu einrichten</button>`);
   return `<div class="wa-status"><span class="wa-status-dot ${connected?'connected':''}"></span><div class="wa-status-copy"><b>${e(whatsappStatusLabel(wa))}</b><small>${e(detail)}</small></div></div>${pairingBox}<div class="settings-action-row">${actions.join('')}</div>`;
 }
 

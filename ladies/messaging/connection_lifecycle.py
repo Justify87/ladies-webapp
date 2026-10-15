@@ -10,24 +10,19 @@ from pathlib import Path
 from typing import Any
 
 import qrcode
-from flask import jsonify
 
 LOGGER = logging.getLogger("ladies_explorer.messaging.connection")
 
 
 class WhatsAppConnectionLifecycle:
-    """Own the WhatsApp connection/session lifecycle independently from chats.
-
-    The messaging service remains responsible for conversations and worker
-    events. This coordinator owns user pairing intent, visibility of QR data,
-    and destructive auth-state reset so disconnecting can never accidentally
-    delete a reusable Baileys session.
-    """
+    """Own pairing intent and persisted Baileys auth independently from chats."""
 
     def __init__(self, service) -> None:
         self.service = service
         self._lock = threading.RLock()
         self._pairing_requested = False
+        self._qr_source: str | None = None
+        self._qr_rendered: str | None = None
 
     @property
     def auth_dir(self) -> Path:
@@ -43,15 +38,23 @@ class WhatsAppConnectionLifecycle:
             return False
         return payload.get("registered") is True
 
-    @staticmethod
-    def _qr_data_uri(value: str | None) -> str | None:
+    def _clear_qr(self) -> None:
+        self._qr_source = None
+        self._qr_rendered = None
+        self.service.gateway.qr = None
+
+    def _qr_data_uri(self, value: str | None) -> str | None:
         if not value:
             return None
+        if value == self._qr_source and self._qr_rendered:
+            return self._qr_rendered
         image = qrcode.make(value)
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
         encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-        return f"data:image/png;base64,{encoded}"
+        self._qr_source = value
+        self._qr_rendered = f"data:image/png;base64,{encoded}"
+        return self._qr_rendered
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -59,13 +62,15 @@ class WhatsAppConnectionLifecycle:
             raw_state = str(payload.get("state") or "NOT_CONFIGURED").upper()
             if raw_state == "CONNECTED":
                 self._pairing_requested = False
+                self._qr_source = None
+                self._qr_rendered = None
 
             has_saved_session = self.has_saved_session()
             state = raw_state
             detail = payload.get("detail")
 
-            # A QR emitted without an explicit user pairing request must never
-            # become visible. This commonly means persisted auth is unusable.
+            # QR material is never surfaced unless this process recorded an
+            # explicit user request to establish a new pairing.
             if raw_state == "QR_REQUIRED" and not self._pairing_requested:
                 state = "AUTH_REQUIRED"
                 detail = "Die gespeicherte WhatsApp-Anmeldung muss neu eingerichtet werden."
@@ -93,18 +98,17 @@ class WhatsAppConnectionLifecycle:
             if self.service.gateway.state == "CONNECTED":
                 self._pairing_requested = False
                 return self.status()
-            # Pairing is an explicit user action only when no reusable session
-            # exists. Reconnects with saved credentials never expose a QR.
+            # Existing registered credentials mean reconnect, not pairing.
             self._pairing_requested = not self.has_saved_session()
             if self._pairing_requested:
-                self.service.gateway.qr = None
+                self._clear_qr()
             self.service.connect()
             return self.status()
 
     def disconnect(self) -> dict[str, Any]:
         with self._lock:
             self._pairing_requested = False
-            self.service.gateway.qr = None
+            self._clear_qr()
             self.service.disconnect()
             if not self.has_saved_session() and self.service.gateway.state == "DISCONNECTED":
                 self.service.gateway.state = "NOT_CONFIGURED"
@@ -112,10 +116,11 @@ class WhatsAppConnectionLifecycle:
             return self.status()
 
     def reset(self) -> dict[str, Any]:
-        """Revoke the live link when possible, then remove all local auth state.
+        """Revoke the live link when possible and delete the complete auth state.
 
-        Baileys credentials and Signal keys form one session. Reset therefore
-        deletes the complete auth directory, never only creds.json.
+        Baileys credentials and Signal keys are one session. Reset therefore
+        removes the whole auth directory while leaving messages/media/history
+        untouched in their separate stores.
         """
         with self._lock:
             self._pairing_requested = False
@@ -136,8 +141,7 @@ class WhatsAppConnectionLifecycle:
 
             shutil.rmtree(self.auth_dir, ignore_errors=True)
             self.auth_dir.mkdir(parents=True, exist_ok=True)
-
-            gateway.qr = None
+            self._clear_qr()
             gateway.account = None
             gateway.last_connected_at = None
             gateway.detail = None
@@ -147,44 +151,3 @@ class WhatsAppConnectionLifecycle:
             except Exception:
                 LOGGER.debug("Could not publish WhatsApp reset event", exc_info=True)
             return self.status()
-
-
-def install_connection_lifecycle(app, service) -> WhatsAppConnectionLifecycle:
-    """Replace legacy connection endpoints at the messaging composition edge."""
-    lifecycle = WhatsAppConnectionLifecycle(service)
-    app.extensions["ladies_whatsapp_connection"] = lifecycle
-
-    def messaging_status():
-        return jsonify(lifecycle.status())
-
-    def messaging_connect():
-        return jsonify(lifecycle.connect())
-
-    def messaging_disconnect():
-        return jsonify(lifecycle.disconnect())
-
-    def messaging_logout():
-        # Kept as a narrow compatibility alias while the UI migrates from the
-        # old "logout" wording. Semantics are now a full auth-state reset.
-        return jsonify(lifecycle.reset())
-
-    def messaging_qr():
-        return jsonify(error="Der QR-Code wird direkt in den Einstellungen angezeigt."), 410
-
-    replacements = {
-        "messaging_status": messaging_status,
-        "messaging_connect": messaging_connect,
-        "messaging_disconnect": messaging_disconnect,
-        "messaging_logout": messaging_logout,
-        "messaging_qr": messaging_qr,
-    }
-    missing = [name for name in replacements if name not in app.view_functions]
-    if missing:
-        raise RuntimeError(f"Messaging connection routes missing: {', '.join(missing)}")
-    app.view_functions.update(replacements)
-
-    @app.delete("/api/messaging/connection")
-    def messaging_reset_connection():
-        return jsonify(lifecycle.reset())
-
-    return lifecycle
