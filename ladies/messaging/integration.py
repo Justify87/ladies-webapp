@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import delete, event as sa_event, select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from ladies_v9.models import IdentityEvent, Person
@@ -10,10 +10,15 @@ from .models import ChatMessage, ChatThread, ContactEndpoint
 
 LOGGER = logging.getLogger("ladies_explorer.messaging.identity")
 MERGE_ACTIONS = {"MANUAL_MERGE", "AUTO_MATCH"}
-_listener_installed = False
 
 
-def _merge_messaging_in_session(db: Session, source_id: int, target_id: int) -> bool:
+def merge_messaging_person(db: Session, source_id: int, target_id: int) -> bool:
+    """Move messaging data during a canonical person merge.
+
+    The caller owns the transaction and must invoke this before the source person
+    is deleted. Pricing is intentionally orchestrated before this handler because
+    this function may delete a duplicate source chat thread.
+    """
     if not source_id or not target_id or source_id == target_id:
         return False
     endpoints = db.scalars(select(ContactEndpoint).where(ContactEndpoint.person_id == source_id)).all()
@@ -54,33 +59,12 @@ def _merge_messaging_in_session(db: Session, source_id: int, target_id: int) -> 
     return True
 
 
-def _before_flush_identity_merge(session: Session, _flush_context, _instances) -> None:
-    """Follow repository-owned identity merges before source Person is deleted.
-
-    IdentityEvent.previous_person_id uses ON DELETE SET NULL in the existing V9
-    schema. This hook therefore consumes merge events while their source id still
-    exists and keeps messaging in the same transaction as the canonical merge.
-    MANUAL_SPLIT is intentionally ignored: a listing split must not move a whole
-    person chat.
-    """
-    for item in list(session.new):
-        if not isinstance(item, IdentityEvent):
-            continue
-        if item.action not in MERGE_ACTIONS or getattr(item, "_messaging_reconciled", False):
-            continue
-        source_id = item.previous_person_id
-        target_id = item.new_person_id
-        if source_id and target_id:
-            _merge_messaging_in_session(session, int(source_id), int(target_id))
-        item._messaging_reconciled = True
-
-
 def install_identity_merge_listener() -> None:
-    global _listener_installed
-    if _listener_installed:
-        return
-    sa_event.listen(Session, "before_flush", _before_flush_identity_merge)
-    _listener_installed = True
+    """Retained for the current MessagingService constructor; no global hook is installed.
+
+    Merge integrations are configured explicitly on PersonRepository by app.py.
+    """
+    return None
 
 
 def reconcile_identity_events(database) -> int:
@@ -102,6 +86,9 @@ def reconcile_identity_events(database) -> int:
                 continue
             if db.get(Person, target_id) is None:
                 continue
-            if _merge_messaging_in_session(db, int(source_id), int(target_id)):
+            if merge_messaging_person(db, int(source_id), int(target_id)):
                 merged += 1
     return merged
+
+
+__all__ = ["install_identity_merge_listener", "merge_messaging_person", "reconcile_identity_events"]
