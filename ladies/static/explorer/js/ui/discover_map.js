@@ -1,4 +1,5 @@
 import * as S from '../app/selectors.js';
+import { logClient } from '../api/client.js';
 import { escapeAttr as a, escapeHtml as e } from '../shared/html.js';
 import { icon } from '../shared/icons.js';
 
@@ -11,12 +12,15 @@ const EMPTY=Object.freeze({type:'FeatureCollection',features:[]});
 let maplibrePromise=null;
 let maplibre=null;
 let map=null;
+let mapInit=null;
 let container=null;
+let lifecycleGeneration=0;
 let latestData=EMPTY;
 let fittedSignature='';
 let selectedLocationKey=null;
 let closeListenerInstalled=false;
 let wasActive=false;
+const reportedMapErrors=new Set();
 
 function profileRefs(feature){
   const raw=feature?.properties?.profiles_json;
@@ -25,14 +29,12 @@ function profileRefs(feature){
 }
 
 function rowMatchesRef(row,ref){
-  const personId=Number(ref?.person_id||0);
   const listingId=Number(ref?.listing_id||0);
+  if(listingId)return Number(row?.listing_id||row?.listingId||0)===listingId;
   const advertId=String(ref?.advert_id||'');
-  return Boolean(
-    (personId&&Number(row?.personId||0)===personId)||
-    (listingId&&Number(row?.listing_id||row?.listingId||0)===listingId)||
-    (advertId&&String(row?.advertId||'')===advertId)
-  );
+  if(advertId)return String(row?.advertId||row?.advert_id||'')===advertId;
+  const personId=Number(ref?.person_id||0);
+  return Boolean(personId&&Number(row?.personId||row?.person_id||0)===personId);
 }
 
 export function filterMapFeatures(points,rows){
@@ -68,27 +70,31 @@ function ensureMapLibre(){
 }
 
 function cleanup(){
-  if(map){try{map.remove();}catch{}}
+  lifecycleGeneration+=1;
+  const active=map;
   map=null;
+  mapInit=null;
   container=null;
   latestData=EMPTY;
   fittedSignature='';
   selectedLocationKey=null;
+  reportedMapErrors.clear();
+  if(active){try{active.remove();}catch{}}
 }
 
-function fitData(state,data){
-  if(!map||!maplibre?.LngLatBounds||!data.features.length)return;
+function fitData(instance,state,data){
+  if(!instance||!maplibre?.LngLatBounds||!data.features.length)return;
   const key=String(state.discover.map?.key||'');
   const signature=`${key}|${data.features.map(item=>item.properties?.location_key||'').sort().join(',')}`;
   if(signature===fittedSignature)return;
   fittedSignature=signature;
   if(data.features.length===1){
-    map.easeTo({center:data.features[0].geometry.coordinates,zoom:12.5,duration:300});
+    instance.easeTo({center:data.features[0].geometry.coordinates,zoom:12.5,duration:300});
     return;
   }
   const bounds=new maplibre.LngLatBounds();
   data.features.forEach(feature=>bounds.extend(feature.geometry.coordinates));
-  map.fitBounds(bounds,{padding:42,maxZoom:13,duration:300});
+  instance.fitBounds(bounds,{padding:42,maxZoom:13,duration:300});
 }
 
 function renderStatus(host,state,data){
@@ -129,9 +135,30 @@ function renderPreview(host,state){
   host.innerHTML=`<section class="discover-map-location-sheet">${close}<header><b>${e(props.location_label||'Standort')}</b><small>${matched.length} Profile · ${e(precision)}</small></header><div class="discover-map-location-list">${matched.map(({row,ref})=>{const pid=Number(row.personId||ref.person_id||0)||'';const advert=String(row.advertId||ref.advert_id||'');return `<button type="button" class="discover-map-location-row" data-action="open-profile" data-person-id="${a(pid)}" data-advert-id="${a(advert)}">${row.thumbnail?`<img src="${a(row.thumbnail)}" alt="${a(row.name)}">`:`<span>${icon('user')}</span>`}<b>${e(row.name)}${row.age?` <small>${e(row.age)}</small>`:''}</b>${icon('chevron-right')}</button>`;}).join('')}</div></section>`;
 }
 
-function installLayers(getState){
-  if(!map||map.getSource(SOURCE_ID))return;
-  map.addSource(SOURCE_ID,{
+function styleTextFont(instance){
+  for(const layer of instance.getStyle()?.layers||[]){
+    const value=layer?.layout?.['text-font'];
+    if(Array.isArray(value)&&value.length&&value.every(item=>typeof item==='string'))return value;
+  }
+  return null;
+}
+
+function reportMapError(event){
+  const error=event?.error;
+  const message=String(error?.message||event?.message||'MapLibre-Laufzeitfehler');
+  const sourceId=String(event?.sourceId||event?.source?.id||'');
+  const key=`${sourceId}|${message}`;
+  if(reportedMapErrors.has(key))return;
+  if(reportedMapErrors.size>=20)reportedMapErrors.clear();
+  reportedMapErrors.add(key);
+  void logClient('error','map-runtime',message,{source_id:sourceId||null});
+}
+
+function installLayers(instance,target,getState){
+  if(!instance||instance.getSource(SOURCE_ID))return;
+  const current=getState();
+  latestData=filterMapFeatures(current.discover.map?.points,S.visibleSearchRows(current));
+  instance.addSource(SOURCE_ID,{
     type:'geojson',
     data:latestData,
     cluster:true,
@@ -139,45 +166,63 @@ function installLayers(getState){
     clusterRadius:48,
     clusterProperties:{profile_total:['+',['get','profile_count']]}
   });
-  map.addLayer({id:'discover-clusters',type:'circle',source:SOURCE_ID,filter:['has','point_count'],paint:{'circle-color':'#cc2d7c','circle-radius':['step',['get','profile_total'],18,10,22,30,27,75,32],'circle-stroke-color':'#ffffff','circle-stroke-width':2,'circle-opacity':.92}});
-  map.addLayer({id:'discover-cluster-count',type:'symbol',source:SOURCE_ID,filter:['has','point_count'],layout:{'text-field':['to-string',['get','profile_total']],'text-size':12},paint:{'text-color':'#ffffff'}});
-  map.addLayer({id:'discover-locations',type:'circle',source:SOURCE_ID,filter:['!', ['has','point_count']],paint:{'circle-color':'#cc2d7c','circle-radius':['case',['>', ['get','profile_count'],1],13,8],'circle-stroke-color':'#ffffff','circle-stroke-width':3}});
-  map.addLayer({id:'discover-location-count',type:'symbol',source:SOURCE_ID,filter:['all',['!', ['has','point_count']],['>', ['get','profile_count'],1]],layout:{'text-field':['to-string',['get','profile_count']],'text-size':10},paint:{'text-color':'#ffffff'}});
+  instance.addLayer({id:'discover-clusters',type:'circle',source:SOURCE_ID,filter:['has','point_count'],paint:{'circle-color':'#cc2d7c','circle-radius':['step',['get','profile_total'],18,10,22,30,27,75,32],'circle-stroke-color':'#ffffff','circle-stroke-width':2,'circle-opacity':.92}});
+  instance.addLayer({id:'discover-locations',type:'circle',source:SOURCE_ID,filter:['!', ['has','point_count']],paint:{'circle-color':'#cc2d7c','circle-radius':['case',['>', ['get','profile_count'],1],13,8],'circle-stroke-color':'#ffffff','circle-stroke-width':3}});
+  const textFont=styleTextFont(instance);
+  if(textFont){
+    instance.addLayer({id:'discover-cluster-count',type:'symbol',source:SOURCE_ID,filter:['has','point_count'],layout:{'text-field':['to-string',['get','profile_total']],'text-size':12,'text-font':textFont},paint:{'text-color':'#ffffff'}});
+    instance.addLayer({id:'discover-location-count',type:'symbol',source:SOURCE_ID,filter:['all',['!', ['has','point_count']],['>', ['get','profile_count'],1]],layout:{'text-field':['to-string',['get','profile_count']],'text-size':10,'text-font':textFont},paint:{'text-color':'#ffffff'}});
+  }
 
-  map.on('click','discover-clusters',async event=>{
-    const feature=map.queryRenderedFeatures(event.point,{layers:['discover-clusters']})[0];
+  instance.on('click','discover-clusters',async event=>{
+    const feature=instance.queryRenderedFeatures(event.point,{layers:['discover-clusters']})[0];
     const clusterId=feature?.properties?.cluster_id;
     if(clusterId==null)return;
     try{
-      const zoom=await map.getSource(SOURCE_ID).getClusterExpansionZoom(clusterId);
-      map.easeTo({center:feature.geometry.coordinates,zoom,duration:280});
+      const zoom=await instance.getSource(SOURCE_ID).getClusterExpansionZoom(clusterId);
+      instance.easeTo({center:feature.geometry.coordinates,zoom,duration:280});
     }catch{}
   });
-  map.on('click','discover-locations',event=>{
-    const feature=map.queryRenderedFeatures(event.point,{layers:['discover-locations']})[0];
+  instance.on('click','discover-locations',event=>{
+    const feature=instance.queryRenderedFeatures(event.point,{layers:['discover-locations']})[0];
     if(!feature)return;
     selectedLocationKey=String(feature.properties?.location_key||'');
-    const host=container?.closest('.discover-map-shell')?.querySelector('.discover-map-preview-host');
+    const host=target.closest('.discover-map-shell')?.querySelector('.discover-map-preview-host');
     renderPreview(host,getState());
   });
   for(const layer of ['discover-clusters','discover-locations']){
-    map.on('mouseenter',layer,()=>{map.getCanvas().style.cursor='pointer';});
-    map.on('mouseleave',layer,()=>{map.getCanvas().style.cursor='';});
+    instance.on('mouseenter',layer,()=>{instance.getCanvas().style.cursor='pointer';});
+    instance.on('mouseleave',layer,()=>{instance.getCanvas().style.cursor='';});
   }
-  fitData(getState(),latestData);
+  fitData(instance,current,latestData);
 }
 
-async function ensureMap(target,state,getState){
-  if(map&&container===target)return map;
+function ensureMap(target,state,getState){
+  if(map&&container===target)return Promise.resolve(map);
+  if(mapInit?.target===target)return mapInit.promise;
   cleanup();
-  const lib=await ensureMapLibre();
-  if(!target.isConnected)return null;
-  container=target;
-  latestData=filterMapFeatures(state.discover.map?.points,S.visibleSearchRows(state));
-  map=new lib.Map({container:target,style:MAP_STYLE,center:[12.3731,51.3397],zoom:10.5,attributionControl:true});
-  map.addControl(new lib.NavigationControl({showCompass:false}),'bottom-right');
-  map.once('load',()=>installLayers(getState));
-  return map;
+  const generation=lifecycleGeneration;
+  const promise=(async()=>{
+    const lib=await ensureMapLibre();
+    if(generation!==lifecycleGeneration||!target.isConnected)return null;
+    latestData=filterMapFeatures(state.discover.map?.points,S.visibleSearchRows(state));
+    const instance=new lib.Map({container:target,style:MAP_STYLE,center:[12.3731,51.3397],zoom:10.5,attributionControl:true});
+    instance.on('error',reportMapError);
+    instance.addControl(new lib.NavigationControl({showCompass:false}),'bottom-right');
+    if(generation!==lifecycleGeneration||!target.isConnected){try{instance.remove();}catch{}return null;}
+    container=target;
+    map=instance;
+    instance.once('load',()=>{
+      if(map!==instance||container!==target||!target.isConnected)return;
+      installLayers(instance,target,getState);
+    });
+    return instance;
+  })();
+  mapInit={target,generation,promise};
+  void promise.finally(()=>{
+    if(mapInit?.generation===generation)mapInit=null;
+  });
+  return promise;
 }
 
 function installCloseListener(){
@@ -200,7 +245,7 @@ export function syncDiscoverMap({host,state,store,effects}){
   if(!active){
     if(wasActive)effects.cancelMapRequest();
     wasActive=false;
-    if(map)cleanup();
+    if(map||mapInit)cleanup();
     return;
   }
   wasActive=true;
@@ -215,11 +260,11 @@ export function syncDiscoverMap({host,state,store,effects}){
   if(!state.discover.map?.points&&!state.discover.map?.loading)queueMicrotask(()=>effects.loadMapPoints({quiet:true}));
 
   void ensureMap(target,state,()=>store.getState()).then(instance=>{
-    if(!instance||container!==target)return;
+    if(!instance||map!==instance||container!==target)return;
     const current=store.getState();
     latestData=filterMapFeatures(current.discover.map?.points,S.visibleSearchRows(current));
     const source=instance.getSource(SOURCE_ID);
-    if(source){source.setData(latestData);fitData(current,latestData);}
+    if(source){source.setData(latestData);fitData(instance,current,latestData);}
   }).catch(error=>{
     const status=shell?.querySelector('.discover-map-state-host');
     if(status)status.innerHTML=`<div class="discover-map-state">${icon('info')}<span>${e(error?.message||'Karte konnte nicht geladen werden.')}</span></div>`;
