@@ -54,9 +54,9 @@ def _valid_coordinates(lat: Any, lng: Any) -> bool:
 
 
 class MapService:
-    """Build cached, privacy-conscious map data for the current active results.
+    """Build cached, privacy-conscious map data for the current active listings.
 
-    The request path reads canonical local profile data plus the current search-row
+    The request path reads canonical local listing data plus the current search-row
     city fallback. Missing centroids are resolved only by the dedicated map
     background executor. Hidden addresses never leave the process; only a five-digit
     postcode or, when no usable postcode exists, a city name may reach a provider.
@@ -410,9 +410,9 @@ class MapService:
                 "postal_code": item["postal"] or "",
                 "city": item["city"],
                 "label": label,
-                "profiles": [],
+                "listings": [],
             })
-            group["profiles"].append({
+            group["listings"].append({
                 "person_id": int(item["person_id"]),
                 "listing_id": int(item["listing_id"]),
                 "advert_id": str(item["advert_id"]),
@@ -427,9 +427,9 @@ class MapService:
                     group["lat"],
                     group["lng"],
                 )
-                unresolved += len(group["profiles"])
+                unresolved += len(group["listings"])
                 continue
-            profiles = group["profiles"]
+            listings = group["listings"]
             features.append({
                 "type": "Feature",
                 "geometry": {
@@ -442,8 +442,8 @@ class MapService:
                     "city": group["city"],
                     "postal_code": group["postal_code"],
                     "precision": group["precision"],
-                    "profile_count": len(profiles),
-                    "profiles_json": orjson.dumps(profiles).decode("utf-8"),
+                    "listing_count": len(listings),
+                    "listing_refs_json": orjson.dumps(listings).decode("utf-8"),
                 },
             })
 
@@ -459,9 +459,9 @@ class MapService:
             "features": features,
             "meta": {
                 "center": center,
-                "profile_count": len(items),
-                "mapped_profile_count": sum(feature["properties"]["profile_count"] for feature in features),
-                "unresolved_profile_count": unresolved,
+                "listing_count": len(items),
+                "mapped_listing_count": sum(feature["properties"]["listing_count"] for feature in features),
+                "unresolved_listing_count": unresolved,
                 "location_count": len(features),
                 "pending_count": pending_count,
             },
