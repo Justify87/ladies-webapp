@@ -197,6 +197,39 @@ with tempfile.TemporaryDirectory() as tmp:
     assert pending[0]["value"] == "Leipzig"
 
 
+# Corrupt resolved coordinates must never reach GeoJSON/MapLibre. Old invalid cache
+# entries are discarded at startup and immediately scheduled for a fresh lookup.
+with tempfile.TemporaryDirectory() as tmp:
+    cache_path = Path(tmp) / "map-location-cache.json"
+    cache_path.write_text(json.dumps({
+        postal_key("04109"): {
+            "status": "RESOLVED",
+            "lat": 14713.0,
+            "lng": 51.342,
+            "precision": "POSTAL",
+            "source": "TEST",
+        }
+    }), encoding="utf-8")
+    background = Background()
+    service = MapService(
+        Repository([row(5, 505, "e", city="Leipzig", postal_code="04109")]),
+        data_dir=tmp,
+        background=background,
+    )
+    assert service._cached_record(postal_key("04109")) is None
+    points = service.feature_collection([{"listing_id": 5, "city": "Leipzig"}])
+    assert points["features"] == []
+    assert points["meta"]["pending_count"] == 1
+    pending = background.submissions[0][2][0]
+    assert [spec["kind"] for spec in pending] == ["postal"]
+    assert pending[0]["value"] == "04109"
+    try:
+        service._remember(postal_key("04109"), lat=14713.0, lng=51.342, precision="POSTAL", source="TEST")
+        raise AssertionError("invalid coordinates must not be cached")
+    except ValueError:
+        pass
+
+
 # Cache persistence must remain atomic under concurrent writers. The service uses a
 # shared temp path, so serialization and replace belong to the same critical section.
 with tempfile.TemporaryDirectory() as tmp:
