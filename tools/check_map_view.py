@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import runpy
+import subprocess
 import sys
 import tempfile
 import threading
@@ -218,5 +219,12 @@ with tempfile.TemporaryDirectory() as tmp:
     saved = json.loads((Path(tmp) / "map-location-cache.json").read_text(encoding="utf-8"))
     assert city_key("Leipzig") in saved
     assert city_key("Grimma") in saved
+
+# Keep the already-executed smoke-suite entry point stable while extending it with
+# the profile-request browser regression checks. CI configuration stays untouched.
+subprocess.run(
+    ["node", "--experimental-default-type=module", "tools/check_profile_request_ui.mjs"],
+    check=True,
+)
 
 print("map view backend regression checks passed")
