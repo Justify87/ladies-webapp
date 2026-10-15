@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { filterMapFeatures } from '../ladies/static/explorer/js/ui/discover_map.js';
+import { createMapLifecycle, filterMapFeatures, waitForMapReady } from '../ladies/static/explorer/js/ui/discover_map.js';
 import { pricingExtractionAvailable, pricingManualAvailable } from '../ladies/static/explorer/js/app/selectors.js';
 
 const mapSource=readFileSync(new URL('../ladies/static/explorer/js/ui/discover_map.js',import.meta.url),'utf8');
@@ -16,18 +16,141 @@ const indexSource=readFileSync(new URL('../ladies/templates/index.html',import.m
 
 // MapLibre is loaded from its reviewed ESM distribution, not a CDN transform. Its
 // required stylesheet is part of initial document loading, and the mounted map owns
-// one simple lifecycle with explicit resize and cleanup behavior.
+// one lifecycle with explicit resize and cleanup behavior.
 assert.match(mapSource,/maplibre-gl@6\.14\.0\/dist\/maplibre-gl\.mjs/,'MapLibre must use the native v6 ESM distribution');
 assert.doesNotMatch(mapSource,/\+esm/,'MapLibre must not use a CDN ESM transform');
 assert.match(indexSource,/maplibre-gl@6\.14\.0\/dist\/maplibre-gl\.css/,'MapLibre CSS must load with the app shell');
 assert.match(mapSource,/new ResizeObserver/,'map must react when its mounted container changes size');
 assert.match(mapSource,/instance\.resize\(\)/,'map must resize after mount/layout changes');
-assert.match(mapSource,/active\?\.resizeObserver\?\.disconnect\(\)/,'map cleanup must disconnect its observer');
-assert.match(mapSource,/active\.map\.remove\(\)/,'map cleanup must remove the MapLibre instance');
+assert.match(mapSource,/current\.resizeObserver\?\.disconnect\(\)/,'map cleanup must disconnect its observer');
+assert.match(mapSource,/current\.map\.remove\(\)/,'map cleanup must remove the MapLibre instance');
 assert.match(mapSource,/source\.setData\(latestData\)/,'map data changes must update the existing GeoJSON source');
 assert.match(mapSource,/getClusterExpansionZoom\(clusterId\)/,'cluster taps must expand through the source API');
 assert.match(mapSource,/instance\.on\('error',reportMapError\)/,'MapLibre runtime errors must remain observable');
-assert.match(mapSource,/maplibrePromise=null/,'failed MapLibre imports must remain retryable');
+assert.match(mapSource,/maplibrePromise=null/,'failed MapLibre imports must reset the shared import promise');
+
+// Lifecycle behavior is tested directly: same-container initialization is single-flight,
+// failures at every initialization stage release ownership, and stale work cannot become
+// active again after destruction.
+const target={isConnected:true};
+const lifecycle=createMapLifecycle();
+let starts=0;
+let releaseFirst;
+const firstGate=new Promise(resolve=>{releaseFirst=resolve;});
+const first=lifecycle.run(target,async({active})=>{starts+=1;await firstGate;return active()?'map':null;});
+const duplicate=lifecycle.run(target,async()=>{starts+=1;return 'duplicate';});
+assert.equal(first,duplicate,'same container must share one in-flight initialization');
+assert.equal(starts,1,'shared initialization must only start once');
+releaseFirst();
+assert.equal(await first,'map');
+lifecycle.destroy();
+
+const importLifecycle=createMapLifecycle();
+let importAttempts=0;
+const importTarget={isConnected:true};
+const loadLibrary=async()=>{
+  importAttempts+=1;
+  if(importAttempts===1)throw new Error('import failed');
+  return 'library';
+};
+await assert.rejects(importLifecycle.run(importTarget,async()=>loadLibrary()),/import failed/);
+assert.equal(importLifecycle.hasActive(),false,'failed imports must release runtime ownership');
+assert.equal(await importLifecycle.run(importTarget,async()=>loadLibrary()),'library','a failed import must be retryable on the same container');
+assert.equal(importAttempts,2);
+importLifecycle.destroy();
+
+const constructorLifecycle=createMapLifecycle();
+let constructionAttempts=0;
+const constructorTarget={isConnected:true};
+const construct=()=>{
+  constructionAttempts+=1;
+  if(constructionAttempts===1)throw new Error('constructor failed');
+  return 'instance';
+};
+await assert.rejects(constructorLifecycle.run(constructorTarget,async()=>construct()),/constructor failed/);
+assert.equal(constructorLifecycle.hasActive(),false,'constructor failures must release runtime ownership');
+assert.equal(await constructorLifecycle.run(constructorTarget,async()=>construct()),'instance','constructor failures must be retryable on the same container');
+assert.equal(constructionAttempts,2);
+constructorLifecycle.destroy();
+
+const staleLifecycle=createMapLifecycle();
+const staleTarget={isConnected:true};
+let staleCleanups=0;
+let releaseStale;
+const staleGate=new Promise(resolve=>{releaseStale=resolve;});
+const stale=staleLifecycle.run(staleTarget,async({active,cleanup})=>{
+  cleanup(()=>{staleCleanups+=1;});
+  await staleGate;
+  return active()?'map':'stale';
+});
+staleTarget.isConnected=false;
+staleLifecycle.destroy();
+releaseStale();
+assert.equal(await stale,null,'destroyed or disconnected initialization must never become active later');
+assert.equal(staleCleanups,1,'destroy must execute registered resource cleanup exactly once');
+assert.equal(staleLifecycle.hasActive(),false);
+
+function fakeLoadInstance(){
+  let handler=null;
+  return {
+    once(event,next){assert.equal(event,'load');handler=next;},
+    off(event,next){assert.equal(event,'load');if(handler===next)handler=null;},
+    fireLoad(){handler?.();},
+    hasLoadListener(){return Boolean(handler);},
+  };
+}
+
+// Pending load waits are cancellable. Cancellation removes the listener and clears the
+// timeout instead of retaining the map/container until the full timeout elapses.
+const cancelInstance=fakeLoadInstance();
+let pendingCleanup=null;
+const cancelled=waitForMapReady({
+  instance:cancelInstance,
+  isActive:()=>true,
+  onReady:()=>cancelInstance,
+  registerCleanup:cleanup=>{
+    pendingCleanup=cleanup;
+    return ()=>{if(pendingCleanup===cleanup)pendingCleanup=null;};
+  },
+  timeoutMs:1000,
+});
+assert.equal(cancelInstance.hasLoadListener(),true);
+pendingCleanup();
+assert.equal(await cancelled,null);
+assert.equal(cancelInstance.hasLoadListener(),false,'cancelled load wait must remove its load listener');
+assert.equal(pendingCleanup,null,'cancelled load wait must unregister its lifecycle cleanup');
+
+const timeoutInstance=fakeLoadInstance();
+let timeoutCleanup=null;
+await assert.rejects(waitForMapReady({
+  instance:timeoutInstance,
+  isActive:()=>true,
+  onReady:()=>timeoutInstance,
+  registerCleanup:cleanup=>{
+    timeoutCleanup=cleanup;
+    return ()=>{if(timeoutCleanup===cleanup)timeoutCleanup=null;};
+  },
+  timeoutMs:5,
+}),/nicht rechtzeitig geladen/);
+assert.equal(timeoutInstance.hasLoadListener(),false,'timed-out load wait must remove its load listener');
+assert.equal(timeoutCleanup,null,'timed-out load wait must unregister its lifecycle cleanup');
+
+const readyInstance=fakeLoadInstance();
+let readyCleanup=null;
+const ready=waitForMapReady({
+  instance:readyInstance,
+  isActive:()=>true,
+  onReady:()=>readyInstance,
+  registerCleanup:cleanup=>{
+    readyCleanup=cleanup;
+    return ()=>{if(readyCleanup===cleanup)readyCleanup=null;};
+  },
+  timeoutMs:1000,
+});
+readyInstance.fireLoad();
+assert.equal(await ready,readyInstance);
+assert.equal(readyInstance.hasLoadListener(),false,'successful load must remove its one-shot listener');
+assert.equal(readyCleanup,null,'successful load must unregister its pending cleanup');
 
 // Map identity is listing-based end-to-end. Two listings belonging to one person
 // must never bind through person_id alone.
