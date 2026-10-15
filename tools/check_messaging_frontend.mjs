@@ -1,9 +1,24 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 
 globalThis.window={__LADIES_CONFIG__:{}}
 const { initialState }=await import('../ladies/static/explorer/js/app/state.js')
 const { reducer }=await import('../ladies/static/explorer/js/app/reducer.js')
 const { threadRows, unreadTotal }=await import('../ladies/static/explorer/js/app/selectors.js')
+
+const classificationSource=fs.readFileSync(new URL('../ladies/messaging/classification.py',import.meta.url),'utf8')
+const classifiedServiceSource=fs.readFileSync(new URL('../ladies/messaging/service_classified.py',import.meta.url),'utf8')
+const classifiedRoutesSource=fs.readFileSync(new URL('../ladies/messaging/routes_classified.py',import.meta.url),'utf8')
+assert.ok(classificationSource.includes('LADIES_CONFIRMED = "LADIES_CONFIRMED"'))
+assert.ok(classificationSource.includes('NON_LADIES = "NON_LADIES"'))
+assert.ok(classificationSource.includes('if row.status in {LADIES_CONFIRMED, NON_LADIES}:'))
+assert.ok(classificationSource.includes('if any(item.status == NON_LADIES'))
+for(const forbidden of ['PersonUserState','favorite','preference','DISLIKE'])assert.ok(!classificationSource.includes(forbidden),`classification must not depend on ${forbidden}`)
+assert.ok(classifiedServiceSource.includes('if not add_system_message and not self._auto_identity_allowed'))
+assert.ok(classifiedServiceSource.includes('row.status != NON_LADIES'))
+assert.ok(classifiedRoutesSource.includes('/api/messaging/inbox'))
+assert.ok(classifiedRoutesSource.includes('/api/messaging/review'))
+assert.ok(classifiedRoutesSource.includes('/classification'))
 
 let state=structuredClone(initialState)
 const threads=[
@@ -67,4 +82,4 @@ state=reducer(state,{type:'MESSAGE_VIEW_FILTER',value:'ALL'})
 assert.strictEqual(state.messaging.threads,canonical)
 assert.deepEqual(threadRows(state).map(row=>row.threadId),[1,4],'NON_LADIES never appears in the normal inbox')
 
-console.log('messaging frontend behavior checks passed')
+console.log('messaging frontend/classification behavior checks passed')
