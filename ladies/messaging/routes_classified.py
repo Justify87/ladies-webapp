@@ -22,15 +22,14 @@ def install_messaging(app, *, data_dir, database=None):
 
     @app.after_request
     def reconcile_new_ladies_identity(response):
-        # Search ingestion may teach the repository an exact phone/identity after
-        # WhatsApp already created the conversation. Promote UNKNOWN once; never
-        # derive visibility from the current result set and never auto-demote.
+        # Search ingestion may make a previously unknown exact identity provable.
+        # Reconcile only after this identity-changing write; inbox/review reads are
+        # deliberately side-effect free and therefore safe to load concurrently.
         if request.method == "POST" and request.path == "/api/search" and 200 <= response.status_code < 300:
             try:
                 repaired = reconcile_ladies_endpoints(service)
-                if repaired:
-                    classifier.reconcile()
-                    service.events.publish({"type": "classification_update", "count": repaired})
+                classifier.reconcile()
+                service.events.publish({"type": "classification_update", "count": repaired})
             except Exception:
                 LOGGER.exception("Post-search WhatsApp identity reconciliation failed")
         if request.path in {
