@@ -65,10 +65,19 @@ assert.match(core,/listSeq=0/,'list requests need an explicit sequence guard');
 assert.match(core,/sequence!==listSeq\|\|target!==state\(\)\.lists\.tab/,'late responses from an older tab must be ignored');
 
 for(const path of [
-  '../ladies/static/explorer/css/prototype.css',
-  '../ladies/static/explorer/css/components/02.css',
-  '../ladies/static/explorer/css/screens/01b.css',
-  '../ladies/static/explorer/css/requested-fixes.css',
+  '../ladies/static/explorer/css/foundation/base.css',
+  '../ladies/static/explorer/css/layout/navigation.css',
+  '../ladies/static/explorer/css/components/forms.css',
+  '../ladies/static/explorer/css/components/overlays.css',
+  '../ladies/static/explorer/css/features/discover.css',
+  '../ladies/static/explorer/css/features/search.css',
+  '../ladies/static/explorer/css/features/saved-searches.css',
+  '../ladies/static/explorer/css/features/profile.css',
+  '../ladies/static/explorer/css/features/pricing.css',
+  '../ladies/static/explorer/css/features/messaging.css',
+  '../ladies/static/explorer/css/features/settings.css',
+  '../ladies/static/explorer/css/features/history.css',
+  '../ladies/static/explorer/css/discover-map.css',
 ]){
   const css=readFileSync(new URL(path,import.meta.url),'utf8');
   assert.doesNotMatch(css,/\.favorite-card|\.favorites-tabs|\.favorites-toolbar|\.status-check-card/,'legacy favorites CSS must not survive outside the canonical redesign stylesheet');

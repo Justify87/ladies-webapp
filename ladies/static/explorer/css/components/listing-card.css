@@ -1,0 +1,28 @@
+.cards-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; }
+.grid-card {
+  position: relative;
+  aspect-ratio: .77;
+  overflow: hidden;
+  border-radius: 23px;
+  background: #d8c8c0;
+  box-shadow: 0 6px 20px rgba(29,34,47,.08);
+}
+.grid-card > img { width: 100%; height: 100%; object-fit: cover; }
+.grid-card::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to bottom,rgba(8,10,15,.02) 44%,rgba(8,10,15,.82) 100%); pointer-events: none; }
+.grid-card-copy { position: absolute; z-index: 3; left: 12px; right: 12px; bottom: 13px; color: #fff; }
+.grid-card-copy h3 { margin: 0 0 9px; font-size: 18px; letter-spacing: -.35px; }
+.grid-card-copy h3 small { font-size: 15px; font-weight: 500; }
+.grid-card-chips { display: none; gap: 5px; overflow: hidden; }
+.grid-card-chips span { min-height: 27px; padding: 0 9px; border-radius: 14px; background: rgba(255,255,255,.9); color: #555f70; display: flex; align-items: center; font-size: 9px; white-space: nowrap; }
+.grid-card-heart { position: absolute; z-index: 5; top: 9px; right: 9px; width: 31px; height: 31px; border: 0; border-radius: 50%; background: rgba(255,255,255,.9); color: #737c8d; display: grid; place-items: center; }
+.grid-card-heart svg { font-size: 17px; }
+.grid-card-heart.selected { color: var(--color-accent); background: #fae2ee; }
+.grid-card-heart.selected svg { fill: currentColor; }
+.grid-card-actions { position: absolute; right: 12px; top: 12px; display: flex; gap: 5px; }
+.grid-card-actions button { position: static; width: 30px; height: 30px; border: 0; border-radius: 50%; background: rgba(255,255,255,.94); color: #6b7280; box-shadow: 0 3px 12px rgba(0,0,0,.10); display: grid; place-items: center; }
+.grid-card-actions svg { width: 16px; height: 16px; }
+.grid-card-actions .selected { color: var(--color-accent); background: #fae2ee; }
+.grid-card-actions .selected svg { fill: currentColor; }
+.grid-card-actions .grid-card-like { display: none; }
+.grid-card-actions .grid-card-heart { width: 42px; height: 42px; background: rgba(255,242,248,.96); color: var(--color-accent); box-shadow: 0 4px 14px rgba(25,28,40,.08); }
+.grid-card-actions .grid-card-heart svg { width: 20px; height: 20px; fill: currentColor; }
