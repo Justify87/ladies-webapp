@@ -43,7 +43,6 @@ export function createCommands({store,router,effects}) {
     'list-tab':async el=>{store.dispatch({type:'LIST_TAB',tab:el.dataset.tab});await effects.loadList(el.dataset.tab);},
     'status-check-all':()=>effects.runStatusCheck(),
     'status-single':el=>effects.statusSingle(el.dataset.advertId),
-    'message-filter':async el=>{store.dispatch({type:'MESSAGE_FILTER',value:el.dataset.filter});await effects.loadThreads(el.dataset.filter);},
     'message-view-filter':async el=>{store.dispatch({type:'MESSAGE_VIEW_FILTER',value:el.dataset.filter});await effects.loadThreads('ALL');},
     'open-chat':el=>effects.openChat(Number(el.dataset.threadId)),
     'chat-load-older':el=>effects.loadThread(Number(el.dataset.threadId),{before:Number(el.dataset.before||0)||null,appendOlder:true}),
