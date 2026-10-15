@@ -38,7 +38,8 @@ assert.match(mapSource,/maplibrePromise=null/,'failed MapLibre imports must rese
 assert.match(mapRepository,/PriceItem\.duration_minutes == 60/,'map pricing must use the explicit 60-minute offer');
 assert.match(mapRepository,/PriceItem\.item_type == "BASE"/,'map pricing must use base offers only');
 assert.match(mapRepository,/PriceList\.currency == "EUR"/,'map pricing must match the displayed euro currency');
-assert.match(mapRepository,/desc\(PriceList\.observed_at\)/,'latest applicable 60-minute price data must win');
+assert.match(mapRepository,/price_rows\.sort\(/,'latest applicable 60-minute price data must be prioritized without an ordered history query');
+assert.match(mapRepository,/row\[0\]\.observed_at/,'price recency must drive the local price-row priority');
 assert.match(mapService,/"price_60_cents": item\.get\("price_60_cents"\)/,'map refs must carry 60-minute prices into the browser');
 
 // Lifecycle behavior is tested directly: same-container initialization is single-flight,
