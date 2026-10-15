@@ -222,7 +222,7 @@ class WhatsAppConnectionLifecycle:
                 time.sleep(0.1 * (attempt + 1))
 
         if self.has_local_auth_data():
-            LOGGER.error("WhatsApp auth reset left local files behind", exc_info=last_error)
+            LOGGER.error("WhatsApp auth reset left local files behind: %s", last_error)
             raise RuntimeError("WhatsApp-Verbindungsdaten konnten nicht vollständig gelöscht werden") from last_error
 
     def reset(self) -> dict[str, Any]:
