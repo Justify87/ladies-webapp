@@ -1,4 +1,5 @@
 import { createCoreEffects } from '../effects/core.js';
+import { createMapEffects } from '../effects/map.js';
 import { createVisualEffects } from '../effects/visual.js';
 import { createMessagingEffects } from '../effects/messaging.js';
 import { createPricingEffects } from '../effects/pricing.js';
@@ -10,6 +11,7 @@ export function createEffects({store,router}) {
   let effects=null;
   const getEffects=()=>effects;
   const core=createCoreEffects({store,router});
+  const map=createMapEffects({store});
   const regressions=createRegressionEffects({store,router,core});
   const requested=createRequestedEffects({store,core});
   const visual=createVisualEffects({store,router,getEffects});
@@ -24,6 +26,6 @@ export function createEffects({store,router}) {
     messaging.connectEvents();
     core.schedulePreview({immediate:true});
   };
-  effects=Object.freeze({...core,...regressions,...requested,...visual,...messaging,...pricing,...encounters,schedulePreview:core.schedulePreview,boot});
+  effects=Object.freeze({...core,...map,...regressions,...requested,...visual,...messaging,...pricing,...encounters,schedulePreview:core.schedulePreview,boot});
   return effects;
 }
