@@ -87,13 +87,25 @@ class MessagingClassifier:
             db.flush()
         return row
 
+    @staticmethod
+    def _promote_unknown_endpoints(endpoint_rows: list[EndpointClassification], status: str, method: str) -> None:
+        now = utcnow()
+        for item in endpoint_rows:
+            if item.status != UNKNOWN:
+                continue
+            item.status = status
+            item.method = method
+            item.decided_at = now
+            item.updated_at = now
+
     def reconcile(self) -> None:
         """Backfill and promote only durable Ladies identity evidence.
 
         A Person link alone is not enough: automatic confirmation additionally
         requires persistent LADIES listing provenance. A persisted NON_LADIES
         endpoint wins over newly inferred identity until the user explicitly
-        confirms the chat again.
+        confirms the chat again. Sticky thread decisions are copied to endpoints
+        that appear later, so classification survives subsequent thread merges.
         """
 
         with self.database.session() as db:
@@ -104,30 +116,32 @@ class MessagingClassifier:
                 endpoint_rows = [self._ensure_endpoint_row(db, endpoint_id) for endpoint_id in endpoint_ids]
 
                 if row.status in {LADIES_CONFIRMED, NON_LADIES}:
+                    self._promote_unknown_endpoints(
+                        endpoint_rows,
+                        row.status,
+                        "sticky_thread_confirmation" if row.status == LADIES_CONFIRMED else "sticky_thread_exclusion",
+                    )
                     continue
                 if any(item.status == NON_LADIES for item in endpoint_rows):
                     row.status = NON_LADIES
                     row.method = "sticky_endpoint_exclusion"
                     row.decided_at = utcnow()
                     row.updated_at = utcnow()
+                    self._promote_unknown_endpoints(endpoint_rows, NON_LADIES, "sticky_endpoint_exclusion")
                     continue
                 if any(item.status == LADIES_CONFIRMED for item in endpoint_rows):
                     row.status = LADIES_CONFIRMED
                     row.method = "sticky_endpoint_confirmation"
                     row.decided_at = utcnow()
                     row.updated_at = utcnow()
+                    self._promote_unknown_endpoints(endpoint_rows, LADIES_CONFIRMED, "sticky_endpoint_confirmation")
                     continue
                 if self._person_is_ladies(db, thread.person_id):
                     row.status = LADIES_CONFIRMED
                     row.method = "persisted_ladies_identity"
                     row.decided_at = utcnow()
                     row.updated_at = utcnow()
-                    for item in endpoint_rows:
-                        if item.status == UNKNOWN:
-                            item.status = LADIES_CONFIRMED
-                            item.method = "persisted_ladies_identity"
-                            item.decided_at = utcnow()
-                            item.updated_at = utcnow()
+                    self._promote_unknown_endpoints(endpoint_rows, LADIES_CONFIRMED, "persisted_ladies_identity")
 
     def set_thread(self, thread_id: int, status: str, *, method: str) -> dict[str, Any]:
         status = str(status or "").upper()
