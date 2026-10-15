@@ -44,6 +44,7 @@ export const api = Object.freeze({
   setSetting: (key,value) => request('/api/settings',{method:'POST',body:{key,value}}),
   searchPreview: (payload, signal) => request('/api/search-preview',{method:'POST',body:payload,signal}),
   search: payload => request('/api/search',{method:'POST',body:payload}),
+  mapPoints: searchRunId => request(`/api/map-points/${encodeURIComponent(searchRunId)}`),
   profile: advertId => request(`/api/profile/${encodeURIComponent(advertId)}`),
   profileClassification: advertId => request(`/api/profile-classification/${encodeURIComponent(advertId)}`),
   listing: advertId => request(`/api/listing/${encodeURIComponent(advertId)}`),
