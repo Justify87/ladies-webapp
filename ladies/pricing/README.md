@@ -29,4 +29,4 @@ Accepted revisions use `PriceList.listing_id` as their pricing scope. Baselines,
 
 The chat endpoint's source listing is used only as a suggestion. The user can select another known listing or explicitly choose no location. There is no fallback that silently assigns the person's most recent listing when the chat has no listing evidence.
 
-`PriceExtractionLocation` records the suggested/selected scope for the review flow. `PriceListLocationSnapshot` stores an immutable copy of the accepted listing location so historical price revisions keep the address/location that applied when they were saved, even if the listing later changes.
+Two additive pricing tables keep this behavior explicit without changing the existing `price_lists` contract: `PriceExtractionLocation` records the suggested/selected scope for the review flow, and `PriceListLocationSnapshot` stores an immutable copy of the accepted listing location. Historical price revisions therefore keep the address/location that applied when they were saved, even if the listing later changes.
