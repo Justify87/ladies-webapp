@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from .archive import ArchiveRepository
 from .history import HistoryRepository
+from .map import MapRepository
 from .person_read import PersonReadRepository
 from .persons import PersonRepository
 from .saved_searches import SavedSearchRepository
@@ -15,6 +16,7 @@ from .settings import SettingsRepository
 class RepositoryBundle:
     search: SearchRepository
     saved_searches: SavedSearchRepository
+    map: MapRepository
     persons: PersonRepository
     history: HistoryRepository
     settings: SettingsRepository
@@ -29,6 +31,7 @@ class RepositoryBundle:
         return cls(
             search=SearchRepository(database),
             saved_searches=SavedSearchRepository(database),
+            map=MapRepository(database),
             persons=PersonRepository(database, archive, settings, person_read),
             history=HistoryRepository(database),
             settings=settings,
@@ -39,6 +42,7 @@ class RepositoryBundle:
 __all__ = [
     "ArchiveRepository",
     "HistoryRepository",
+    "MapRepository",
     "PersonReadRepository",
     "PersonRepository",
     "RepositoryBundle",
