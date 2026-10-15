@@ -9,6 +9,7 @@ const SOURCE_ID='discover-locations';
 const EMPTY=Object.freeze({type:'FeatureCollection',features:[]});
 
 let maplibrePromise=null;
+let maplibre=null;
 let map=null;
 let container=null;
 let latestData=EMPTY;
@@ -61,7 +62,7 @@ function ensureMapLibre(){
     link.dataset.maplibreCss='1';
     document.head.appendChild(link);
   }
-  maplibrePromise ||= import(MAPLIBRE_JS);
+  maplibrePromise ||= import(MAPLIBRE_JS).then(module=>{maplibre=module;return module;});
   return maplibrePromise;
 }
 
@@ -74,8 +75,8 @@ function cleanup(){
   selectedLocationKey=null;
 }
 
-function fitData(lib,state,data){
-  if(!map||!data.features.length)return;
+function fitData(state,data){
+  if(!map||!maplibre?.LngLatBounds||!data.features.length)return;
   const key=String(state.discover.map?.key||'');
   const signature=`${key}|${data.features.map(item=>item.properties?.location_key||'').sort().join(',')}`;
   if(signature===fittedSignature)return;
@@ -84,7 +85,7 @@ function fitData(lib,state,data){
     map.easeTo({center:data.features[0].geometry.coordinates,zoom:12.5,duration:300});
     return;
   }
-  const bounds=new lib.LngLatBounds();
+  const bounds=new maplibre.LngLatBounds();
   data.features.forEach(feature=>bounds.extend(feature.geometry.coordinates));
   map.fitBounds(bounds,{padding:42,maxZoom:13,duration:300});
 }
@@ -127,7 +128,7 @@ function renderPreview(host,state){
   host.innerHTML=`<section class="discover-map-location-sheet">${close}<header><b>${e(props.location_label||'Standort')}</b><small>${matched.length} Profile · ${e(precision)}</small></header><div class="discover-map-location-list">${matched.map(({row,ref})=>{const pid=Number(row.personId||ref.person_id||0)||'';const advert=String(row.advertId||ref.advert_id||'');return `<button type="button" class="discover-map-location-row" data-action="open-profile" data-person-id="${a(pid)}" data-advert-id="${a(advert)}">${row.thumbnail?`<img src="${a(row.thumbnail)}" alt="${a(row.name)}">`:`<span>${icon('user')}</span>`}<b>${e(row.name)}${row.age?` <small>${e(row.age)}</small>`:''}</b>${icon('chevron-right')}</button>`;}).join('')}</div></section>`;
 }
 
-function installLayers(lib,getState){
+function installLayers(getState){
   if(!map||map.getSource(SOURCE_ID))return;
   map.addSource(SOURCE_ID,{
     type:'geojson',
@@ -162,7 +163,7 @@ function installLayers(lib,getState){
     map.on('mouseenter',layer,()=>{map.getCanvas().style.cursor='pointer';});
     map.on('mouseleave',layer,()=>{map.getCanvas().style.cursor='';});
   }
-  fitData(lib,getState(),latestData);
+  fitData(getState(),latestData);
 }
 
 async function ensureMap(target,state,getState){
@@ -174,7 +175,7 @@ async function ensureMap(target,state,getState){
   latestData=filterMapFeatures(state.discover.map?.points,S.visibleSearchRows(state));
   map=new lib.Map({container:target,style:MAP_STYLE,center:[12.3731,51.3397],zoom:10.5,attributionControl:true});
   map.addControl(new lib.NavigationControl({showCompass:false}),'bottom-right');
-  map.once('load',()=>installLayers(lib,getState));
+  map.once('load',()=>installLayers(getState));
   return map;
 }
 
@@ -211,7 +212,7 @@ export function syncDiscoverMap({host,state,store,effects}){
     const current=store.getState();
     latestData=filterMapFeatures(current.discover.map?.points,S.visibleSearchRows(current));
     const source=instance.getSource(SOURCE_ID);
-    if(source){source.setData(latestData);fitData(instance.constructor?instance._lib||{}:{},current,latestData);}
+    if(source){source.setData(latestData);fitData(current,latestData);}
   }).catch(error=>{
     const status=shell?.querySelector('.discover-map-state-host');
     if(status)status.innerHTML=`<div class="discover-map-state">${icon('info')}<span>${e(error?.message||'Karte konnte nicht geladen werden.')}</span></div>`;
