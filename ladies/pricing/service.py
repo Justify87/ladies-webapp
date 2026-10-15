@@ -521,10 +521,18 @@ class PriceIntelligenceService(PriceExtractionCore):
         ))
 
     def _price_list_location_payload(self, db, row: PriceList | None) -> dict[str, Any] | None:
-        if row is None or row.listing_id is None:
+        if row is None:
             return None
         stored = db.get(PriceListLocationSnapshot, row.price_list_id)
-        if stored is not None:
+        if stored is not None and any((
+            stored.label,
+            stored.address,
+            stored.city,
+            stored.postal_code,
+            stored.external_listing_id,
+            stored.listing_id,
+            stored.listing_snapshot_id,
+        )):
             return {
                 "listing_id": stored.listing_id,
                 "listing_snapshot_id": stored.listing_snapshot_id,
@@ -534,6 +542,8 @@ class PriceIntelligenceService(PriceExtractionCore):
                 "address": stored.address,
                 "external_listing_id": stored.external_listing_id,
             }
+        if row.listing_id is None:
+            return None
         listing = db.get(Listing, int(row.listing_id))
         if listing is None:
             return None
