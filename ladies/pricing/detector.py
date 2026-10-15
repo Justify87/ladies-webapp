@@ -128,15 +128,17 @@ def _has_duration_phrase(text: str) -> bool:
     return any(phrase in text for phrase in DURATION_PHRASES)
 
 
+def _plausible_price_values(numbers: list[float]) -> list[float]:
+    durations = set(PRICE_DURATION_OPTIONS)
+    return [value for value in numbers if 40 <= value <= 5000 and value not in durations]
+
+
 def _looks_like_numeric_price_table(tokens: tuple[str, ...], numbers: list[float]) -> bool:
     if len(tokens) > 12 or len(numbers) < 2:
         return False
     durations = set(PRICE_DURATION_OPTIONS)
     has_duration_value = any(value in durations for value in numbers)
-    has_price_value = any(20 <= value <= 5000 and value not in durations for value in numbers)
-    if len(numbers) >= 4 and has_duration_value:
-        return True
-    return has_duration_value and has_price_value
+    return has_duration_value and bool(_plausible_price_values(numbers))
 
 
 def _has_service(text: str, service_terms: Iterable[str]) -> bool:
@@ -166,7 +168,7 @@ class PriceMessageDetector:
     """
 
     name = "token-price-detector"
-    version = "3"
+    version = "4"
 
     def __init__(self, service_terms: Iterable[str] = ()) -> None:
         self.service_terms = tuple(dict.fromkeys(str(term) for term in service_terms if str(term).strip()))
@@ -191,6 +193,7 @@ class PriceMessageDetector:
         numeric_price_table = _looks_like_numeric_price_table(tokens, numbers)
         question_context = _is_price_question(previous_outgoing)
         malformed_duration = any(value > 240 for value in durations)
+        plausible_prices = _plausible_price_values(numbers)
 
         reasons: list[str] = []
         if has_currency:
@@ -219,11 +222,9 @@ class PriceMessageDetector:
             relevant = True
         elif has_price_word and numbers:
             relevant = True
-        elif durations and len(numbers) >= 2:
-            relevant = True
-        elif has_duration_phrase and len(numbers) >= 1:
-            relevant = True
         elif numeric_price_table:
+            relevant = True
+        elif has_duration_phrase and plausible_prices:
             relevant = True
         elif malformed_duration:
             relevant = True
@@ -231,7 +232,7 @@ class PriceMessageDetector:
             relevant = True
         elif has_service and (has_status_word or has_plus_amount):
             relevant = True
-        elif has_image and (has_currency or has_price_word or (durations and numbers)):
+        elif has_image and (has_currency or has_price_word or numeric_price_table):
             relevant = True
 
         return DetectionResult(is_price_message=relevant, reasons=tuple(dict.fromkeys(reasons)))
