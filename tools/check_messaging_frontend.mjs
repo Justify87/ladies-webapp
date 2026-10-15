@@ -9,16 +9,33 @@ const { threadRows, unreadTotal }=await import('../ladies/static/explorer/js/app
 const classificationSource=fs.readFileSync(new URL('../ladies/messaging/classification.py',import.meta.url),'utf8')
 const classifiedServiceSource=fs.readFileSync(new URL('../ladies/messaging/service_classified.py',import.meta.url),'utf8')
 const classifiedRoutesSource=fs.readFileSync(new URL('../ladies/messaging/routes_classified.py',import.meta.url),'utf8')
+const integrationSource=fs.readFileSync(new URL('../ladies/messaging/integration.py',import.meta.url),'utf8')
+const effectsSource=fs.readFileSync(new URL('../ladies/static/explorer/js/effects/messaging.js',import.meta.url),'utf8')
+
 assert.ok(classificationSource.includes('LADIES_CONFIRMED = "LADIES_CONFIRMED"'))
 assert.ok(classificationSource.includes('NON_LADIES = "NON_LADIES"'))
-assert.ok(classificationSource.includes('if row.status in {LADIES_CONFIRMED, NON_LADIES}:'))
-assert.ok(classificationSource.includes('if any(item.status == NON_LADIES'))
+assert.ok(classificationSource.includes('on_conflict_do_nothing'))
+assert.ok(classificationSource.includes('_detach_non_ladies_identity'))
+assert.ok(classificationSource.includes('def reconcile_thread_in_session'))
 for(const forbidden of ['PersonUserState','favorite','preference','DISLIKE'])assert.ok(!classificationSource.includes(forbidden),`classification must not depend on ${forbidden}`)
-assert.ok(classifiedServiceSource.includes('if not add_system_message and not self._auto_identity_allowed'))
-assert.ok(classifiedServiceSource.includes('row.status != NON_LADIES'))
+
+const filterBlock=classificationSource.split('def filter_items',2)[1].split('def summary',1)[0]
+const summaryBlock=classificationSource.split('def summary',2)[1].split('__all__',1)[0]
+assert.ok(!filterBlock.includes('self.reconcile()'),'inbox/review reads must be mutation free')
+assert.ok(!summaryBlock.includes('self.reconcile()'),'classification summary must be mutation free')
+assert.ok(classifiedServiceSource.includes('ASSIGNMENT_AUTO = "AUTO_IDENTITY"'))
+assert.ok(classifiedServiceSource.includes('ASSIGNMENT_MANUAL = "MANUAL_LADIES"'))
+assert.ok(classifiedServiceSource.includes('assignment_intent'))
+assert.ok(classifiedServiceSource.includes('def assign_endpoint'))
+assert.ok(classifiedServiceSource.includes('person_is_ladies'))
+assert.ok(classifiedServiceSource.includes('method="manual_assignment"'))
+assert.ok(integrationSource.includes('reconcile_thread_in_session'))
+assert.ok(integrationSource.includes('source_status != NON_LADIES'))
+assert.ok(integrationSource.includes('target_status != NON_LADIES'))
 assert.ok(classifiedRoutesSource.includes('/api/messaging/inbox'))
 assert.ok(classifiedRoutesSource.includes('/api/messaging/review'))
 assert.ok(classifiedRoutesSource.includes('/classification'))
+assert.ok(!effectsSource.includes("await api.classifyThread(threadId,{status:'LADIES_CONFIRMED',method:'manual_assignment'})"),'manual assignment must be atomic on backend')
 
 let state=structuredClone(initialState)
 const threads=[
