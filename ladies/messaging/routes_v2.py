@@ -18,7 +18,7 @@ from ladies_v9.request_parsing import read_bool, read_int
 from .connection_lifecycle import WhatsAppConnectionLifecycle
 from .models import ChatMessage, ChatThread, ContactEndpoint
 from .scope import bind_provider_address, refresh_endpoint_identity
-from .service_v2 import MessagingService
+from .service_classified import MessagingService
 
 LOGGER = logging.getLogger("ladies_explorer.messaging.routes")
 MAX_MEDIA_BYTES = 100 * 1024 * 1024

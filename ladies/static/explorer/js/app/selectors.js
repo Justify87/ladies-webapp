@@ -79,12 +79,18 @@ export const listRows = state => {
     return time(right)-time(left);
   });
 };
+const threadClassification=row=>String(row.classification || (row.assigned?'LADIES_CONFIRMED':'UNKNOWN')).toUpperCase();
 export const threadRows = state => {
   const query=(state.messaging.query || '').trim().toLowerCase();
   const filter=String(state.messaging.viewFilter||'ALL').toUpperCase();
   return (state.messaging.threads || []).map(threadVm).filter(row=>{
-    if(filter==='UNREAD' && !row.unread)return false;
-    if(filter==='UNASSIGNED' && row.assigned)return false;
+    const classification=threadClassification(row);
+    if(filter==='UNASSIGNED'){
+      if(classification!=='UNKNOWN')return false;
+    }else{
+      if(classification!=='LADIES_CONFIRMED')return false;
+      if(filter==='UNREAD' && !row.unread)return false;
+    }
     return !query || `${row.name} ${row.preview} ${row.endpoint?.display_phone||''} ${row.endpoint?.normalized_phone||''}`.toLowerCase().includes(query);
   });
 };
@@ -98,7 +104,7 @@ export const currentThread = state => {
   vm.whatsappAvatar=contact?.profile_picture_url||'';
   return vm;
 };
-export const unreadTotal = state => (state.messaging.threads || []).reduce((sum,row)=>sum+Number(row.unread_count || row.unread || 0),0);
+export const unreadTotal = state => (state.messaging.threads || []).map(threadVm).filter(row=>threadClassification(row)==='LADIES_CONFIRMED').reduce((sum,row)=>sum+Number(row.unread || 0),0);
 export const profileTab = (state,personId) => state.profileUi.tabByPerson[String(personId)] || 'info';
 export const profileMediaIndex = (state,personId) => Number(state.profileUi.mediaByPerson[String(personId)] || 0);
 export const rootNav = routeName => ({profile:null,chat:'messages',history:'settings',archive:'settings'}[routeName] ?? routeName);

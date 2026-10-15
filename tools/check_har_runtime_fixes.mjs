@@ -178,12 +178,14 @@ assert.match(mapService,/"address_label": item\["address_label"\]/,'map refs mus
 assert.doesNotMatch(mapService,/"profile_count"|"profiles_json"/,'map API must not expose person-labelled listing counters');
 assert.doesNotMatch(mapService,/params=\{[^}]*hidden_location/s,'hidden address text must never be sent to the geocoding provider');
 
-// The backend is the sole source of truth for thread order. The browser preserves
-// the canonical newest-first order instead of applying a second business rule.
+// Each classified backend view is the sole source of truth for its own thread
+// order. The browser may merge the two product collections, but never re-sort them.
 assert.match(messagingService,/order_by\(desc\(ChatThread\.last_message_at\), desc\(ChatThread\.updated_at\)\)/);
 assert.doesNotMatch(messagingService,/out\.sort\(key=lambda item:/,'favorite/like ordering must not override message recency');
-assert.match(messagingSource,/type:'THREADS',items:d\?\.items\|\|\[\]/);
-assert.doesNotMatch(messagingSource,/newestThreads|threadTime/,'frontend must not duplicate canonical thread ordering');
+assert.match(messagingSource,/api\.messagingInbox\('ALL'\)/,'Ladies inbox must come from the classified backend view');
+assert.match(messagingSource,/api\.messagingReview\(\)/,'review queue must come from the classified backend view');
+assert.match(messagingSource,/type:'THREADS',items:\[\.\.\.merged\.values\(\)\]/,'classified views are merged without client-side business sorting');
+assert.doesNotMatch(messagingSource,/newestThreads|threadTime|\.sort\(/,'frontend must not duplicate canonical thread ordering');
 
 // One shared pricing capability definition drives both actions and UI.
 const pricingState=(enabled,magic,ready)=>({settings:{pricing:{price_intelligence_enabled:enabled,price_magic_button_enabled:magic},pricingRuntime:{extractor:{ready}}}});

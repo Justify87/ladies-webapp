@@ -1,0 +1,46 @@
+name: Messaging classification runtime
+
+on:
+  pull_request:
+    paths:
+      - 'ladies/messaging/**'
+      - 'ladies/models.py'
+      - 'ladies/database.py'
+      - 'tools/check_messaging_classification_runtime.py'
+      - '.github/workflows/messaging-classification-runtime.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'ladies/messaging/**'
+      - 'ladies/models.py'
+      - 'ladies/database.py'
+      - 'tools/check_messaging_classification_runtime.py'
+      - '.github/workflows/messaging-classification-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: messaging-classification-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    name: Classification transitions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install application
+        run: python -m pip install -e .
+
+      - name: Run classification transition checks
+        run: python tools/check_messaging_classification_runtime.py

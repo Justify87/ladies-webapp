@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+import logging
+
+from flask import jsonify, request
+
+from ladies_v9.errors import NotFoundError, ValidationError
+
+from .classification import LADIES_CONFIRMED, NON_LADIES, UNKNOWN, MessagingClassifier
+from .routes_v2 import install_messaging as install_core_messaging
+from .scope import reconcile_ladies_endpoints
+
+LOGGER = logging.getLogger("ladies_explorer.messaging.classification")
+
+
+def install_messaging(app, *, data_dir, database=None):
+    """Install canonical messaging plus a persistent product-classification layer."""
+
+    service = install_core_messaging(app, data_dir=data_dir, database=database)
+    classifier = MessagingClassifier(service.database)
+    app.extensions["ladies_messaging_classifier"] = classifier
+
+    @app.after_request
+    def reconcile_new_ladies_identity(response):
+        # Search ingestion may make a previously unknown exact identity provable.
+        # Reconcile only after this identity-changing write; inbox/review reads are
+        # deliberately side-effect free and therefore safe to load concurrently.
+        if request.method == "POST" and request.path == "/api/search" and 200 <= response.status_code < 300:
+            try:
+                repaired = reconcile_ladies_endpoints(service)
+                classifier.reconcile()
+                service.events.publish({"type": "classification_update", "count": repaired})
+            except Exception:
+                LOGGER.exception("Post-search WhatsApp identity reconciliation failed")
+        if request.path in {
+            "/api/messaging/inbox",
+            "/api/messaging/review",
+            "/api/messaging/classification",
+        }:
+            response.headers["Cache-Control"] = "private, no-store"
+        return response
+
+    @app.get("/api/messaging/inbox")
+    def messaging_inbox():
+        filter_name = str(request.args.get("filter") or "ALL").upper()
+        if filter_name not in {"ALL", "UNREAD"}:
+            raise ValidationError("Ungültiger Nachrichtenfilter")
+        items = classifier.filter_items(service.threads("ALL"), view="INBOX")
+        if filter_name == "UNREAD":
+            items = [item for item in items if int(item.get("unread_count") or 0) > 0]
+        return jsonify(items=items, classification=classifier.summary())
+
+    @app.get("/api/messaging/review")
+    def messaging_review_queue():
+        items = classifier.filter_items(service.threads("ALL"), view="REVIEW")
+        return jsonify(items=items, classification=classifier.summary())
+
+    @app.get("/api/messaging/classification")
+    def messaging_classification_summary():
+        return jsonify(classifier.summary())
+
+    @app.post("/api/messaging/threads/<int:thread_id>/classification")
+    def messaging_classify_thread(thread_id: int):
+        data = request.get_json(silent=True) or {}
+        status = str(data.get("status") or "").upper()
+        method = str(data.get("method") or "manual")
+        if status not in {LADIES_CONFIRMED, UNKNOWN, NON_LADIES}:
+            raise ValidationError("Ungültige Chat-Klassifizierung")
+        try:
+            return jsonify(classifier.set_thread(thread_id, status, method=method))
+        except KeyError as exc:
+            raise NotFoundError("Chat nicht gefunden") from exc
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+
+    return service
+
+
+__all__ = ["install_messaging"]
