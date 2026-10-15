@@ -1,5 +1,3 @@
-import * as S from './app/selectors.js';
-
 const NOW_SLUG='jetzt-offen';
 const TODAY_SLUG='heute-offen';
 const LEGACY_NOW='jetzt geöffnet';
@@ -43,18 +41,15 @@ export function filtersWithAvailabilityMode(filters,mode='ALL') {
   return next;
 }
 
-export function installSearchIntelligence({store,effects,router}) {
+export function installSearchIntelligence({store,effects}) {
   if(document.documentElement.dataset.searchIntelligenceInstalled==='1')return;
   document.documentElement.dataset.searchIntelligenceInstalled='1';
 
   async function setAvailability(mode,{run=false}={}){
-    const beforeRoute=S.currentRoute(store.getState()).name;
     const filters=filtersWithAvailabilityMode(store.getState().search.filters,mode);
     store.dispatch({type:'SEARCH_FILTERS',filters});
     effects.schedulePreview({immediate:true});
-    if(!run)return;
-    await effects.performSearch();
-    if(beforeRoute==='grid')router.replaceRoot('grid');
+    if(run)await effects.performSearch();
   }
 
   document.addEventListener('click',async event=>{
