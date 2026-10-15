@@ -5,18 +5,21 @@ from typing import Any
 
 from sqlalchemy import desc, func, or_, select
 
-from ladies_v9.models import Listing, PriceItem, PriceList, utcnow
-from ladies_v9.messaging.models import ChatMessage, ChatThread
+from ladies_v9.models import Listing, ListingSnapshot, PriceItem, PriceList, utcnow
+from ladies_v9.messaging.models import ChatMessage, ChatThread, ContactEndpoint
 from ladies_v9.search_catalog import FILTER_VALUE_MAP
 
 from .context import build_context
 from .detector import PriceMessageDetector
 from .extraction_core import PriceExtractionCore, dumps, loads
+from .grounding import validate_proposal_grounding
 from .models import (
     PriceCondition,
     PriceEvidence,
     PriceExtraction,
+    PriceExtractionLocation,
     PriceExtractionMessage,
+    PriceListLocationSnapshot,
     PriceListRevisionMeta,
     PriceOfferMeta,
     PriceServiceRule,
@@ -162,6 +165,59 @@ class PriceIntelligenceService(PriceExtractionCore):
                 items.append(payload)
             return {"thread_id": thread.thread_id, "items": items}
 
+    def _current_proposal_for_listing(
+        self,
+        db,
+        person_id: int,
+        listing_id: int | None,
+    ) -> tuple[int | None, dict[str, Any] | None]:
+        query = select(PriceList).where(PriceList.person_id == int(person_id))
+        query = query.where(
+            PriceList.listing_id.is_(None) if listing_id is None else PriceList.listing_id == int(listing_id)
+        )
+        row = db.scalar(query.order_by(desc(PriceList.observed_at), desc(PriceList.price_list_id)).limit(1))
+        return (row.price_list_id, self._proposal_from_price_list(db, row)) if row else (None, None)
+
+    def _listing_id_from_message(self, db, person_id: int, message_id: int) -> int | None:
+        message = db.get(ChatMessage, int(message_id))
+        endpoint = db.get(ContactEndpoint, message.endpoint_id) if message and message.endpoint_id else None
+        listing_id = int(endpoint.source_listing_id) if endpoint and endpoint.source_listing_id else None
+        if listing_id is None:
+            return None
+        listing = db.get(Listing, listing_id)
+        if listing is None or listing.person_id != int(person_id):
+            return None
+        return listing_id
+
+    def _suggested_listing_id_for_messages(self, db, person_id: int, message_ids: list[int]) -> int | None:
+        for message_id in message_ids:
+            listing_id = self._listing_id_from_message(db, person_id, message_id)
+            if listing_id is not None:
+                return listing_id
+        return None
+
+    def _suggested_listing_id(self, db, extraction: PriceExtraction) -> int | None:
+        scope = db.get(PriceExtractionLocation, extraction.price_extraction_id)
+        if scope is not None:
+            return int(scope.suggested_listing_id) if scope.suggested_listing_id else None
+        if extraction.base_price_list_id:
+            base = db.get(PriceList, extraction.base_price_list_id)
+            if base is not None:
+                return int(base.listing_id) if base.listing_id else None
+        anchors = db.scalars(
+            select(PriceExtractionMessage)
+            .where(PriceExtractionMessage.price_extraction_id == extraction.price_extraction_id)
+            .order_by(PriceExtractionMessage.position)
+        ).all()
+        ordered = [x for x in anchors if x.role == "PRIMARY"] + [x for x in anchors if x.role != "PRIMARY"]
+        if extraction.person_id is None:
+            return None
+        return self._suggested_listing_id_for_messages(
+            db,
+            int(extraction.person_id),
+            [int(anchor.message_id) for anchor in ordered],
+        )
+
     def create_proposal(
         self,
         thread_id: int,
@@ -190,7 +246,17 @@ class PriceIntelligenceService(PriceExtractionCore):
                 seed_message_id=seed_message_id,
             )
             person_id = int(thread.person_id)
-            current_id, current = self._current_proposal(db, person_id)
+            location_message_ids = [int(seed_message_id)] + [
+                int(message.message_id)
+                for message in reversed(context.messages)
+                if int(message.message_id) != int(seed_message_id)
+            ]
+            suggested_listing_id = self._suggested_listing_id_for_messages(
+                db, person_id, location_message_ids
+            )
+            current_id, current = self._current_proposal_for_listing(
+                db, person_id, suggested_listing_id
+            )
 
         proposal = self.semantic.extract_price_proposal(
             context.as_text(),
@@ -218,6 +284,10 @@ class PriceIntelligenceService(PriceExtractionCore):
             )
             db.add(extraction)
             db.flush()
+            db.add(PriceExtractionLocation(
+                price_extraction_id=extraction.price_extraction_id,
+                suggested_listing_id=suggested_listing_id,
+            ))
             for position, message in enumerate(context.messages):
                 role = (
                     "PRIMARY"
@@ -237,6 +307,7 @@ class PriceIntelligenceService(PriceExtractionCore):
                     )
                 )
             db.flush()
+            self._validate_grounding(db, extraction, proposal)
             return self._extraction_payload(db, extraction, current=current)
 
     def _legacy_items(self, db, price_list_id: int | None) -> list[PriceItem]:
@@ -296,16 +367,26 @@ class PriceIntelligenceService(PriceExtractionCore):
                     excerpt=old_ev.excerpt,
                 ))
 
-    def _prepare_review(self, db, extraction: PriceExtraction, data: dict[str, Any]):
+    def _validate_grounding(self, db, extraction: PriceExtraction, proposal: dict[str, Any]) -> None:
+        validate_proposal_grounding(db, extraction, proposal, self._effective_text)
+
+    def _prepare_review(
+        self,
+        db,
+        extraction: PriceExtraction,
+        data: dict[str, Any],
+        *,
+        base_price_list_id: int | None,
+        current: dict[str, Any] | None,
+    ):
         original = validate_proposal(loads(extraction.original_proposal_json, {}))
         reviewed_raw = data.get("proposal") if isinstance(data, dict) else None
         reviewed = validate_proposal(reviewed_raw if isinstance(reviewed_raw, dict) else original)
         user_edited = dumps(reviewed) != dumps(original)
         if reviewed["update_mode"] == "UNKNOWN":
-            reviewed["update_mode"] = "PARTIAL" if extraction.base_price_list_id else "FULL"
+            reviewed["update_mode"] = "PARTIAL" if base_price_list_id else "FULL"
         if not user_edited:
             self._validate_grounding(db, extraction, reviewed)
-        current = self._proposal_from_price_list(db, db.get(PriceList, extraction.base_price_list_id)) if extraction.base_price_list_id else None
         effective = merge_partial(current, reviewed) if reviewed["update_mode"] == "PARTIAL" else validate_proposal(reviewed)
         effective["update_mode"] = "FULL"
         return reviewed, effective, current, user_edited
@@ -382,14 +463,120 @@ class PriceIntelligenceService(PriceExtractionCore):
             )
 
     def _review_listing_id(self, db, extraction: PriceExtraction, data: dict[str, Any]) -> int | None:
-        raw = data.get("listing_id") if isinstance(data, dict) else None
-        listing_id = int(raw) if raw not in (None, "") else self._suggested_listing_id(db, extraction)
+        if isinstance(data, dict) and "listing_id" in data:
+            raw = data.get("listing_id")
+            listing_id = int(raw) if raw not in (None, "") else None
+        else:
+            listing_id = self._suggested_listing_id(db, extraction)
         if listing_id is None:
             return None
         listing = db.get(Listing, listing_id)
         if listing is None or extraction.person_id is None or listing.person_id != int(extraction.person_id):
             raise ValueError("Gewählter Ort gehört nicht zu dieser Person")
         return listing_id
+
+    @staticmethod
+    def _snapshot_location_payload(listing: Listing, snapshot: ListingSnapshot | None) -> dict[str, Any]:
+        address = snapshot.hidden_location if snapshot else None
+        city = snapshot.city if snapshot else None
+        postal_code = snapshot.postal_code if snapshot else None
+        locality = " ".join(part for part in (postal_code, city) if part)
+        parts: list[str] = []
+        for value in (address, locality, listing.external_listing_id):
+            text = str(value or "").strip()
+            if text and text not in parts:
+                parts.append(text)
+        return {
+            "listing_id": listing.listing_id,
+            "listing_snapshot_id": snapshot.snapshot_id if snapshot else None,
+            "label": " · ".join(parts) or f"Inserat {listing.listing_id}",
+            "city": city,
+            "postal_code": postal_code,
+            "address": address,
+            "external_listing_id": listing.external_listing_id,
+        }
+
+    def _persist_price_list_location(self, db, price_list: PriceList) -> None:
+        if price_list.listing_id is None:
+            db.add(PriceListLocationSnapshot(price_list_id=price_list.price_list_id))
+            return
+        listing = db.get(Listing, int(price_list.listing_id))
+        if listing is None:
+            db.add(PriceListLocationSnapshot(
+                price_list_id=price_list.price_list_id,
+                listing_id=price_list.listing_id,
+            ))
+            return
+        snapshot = db.get(ListingSnapshot, listing.current_snapshot_id) if listing.current_snapshot_id else None
+        payload = self._snapshot_location_payload(listing, snapshot)
+        db.add(PriceListLocationSnapshot(
+            price_list_id=price_list.price_list_id,
+            listing_id=listing.listing_id,
+            listing_snapshot_id=payload["listing_snapshot_id"],
+            label=payload["label"],
+            city=payload["city"],
+            postal_code=payload["postal_code"],
+            address=payload["address"],
+            external_listing_id=payload["external_listing_id"],
+        ))
+
+    def _price_list_location_payload(self, db, row: PriceList | None) -> dict[str, Any] | None:
+        if row is None or row.listing_id is None:
+            return None
+        stored = db.get(PriceListLocationSnapshot, row.price_list_id)
+        if stored is not None:
+            return {
+                "listing_id": stored.listing_id,
+                "listing_snapshot_id": stored.listing_snapshot_id,
+                "label": stored.label,
+                "city": stored.city,
+                "postal_code": stored.postal_code,
+                "address": stored.address,
+                "external_listing_id": stored.external_listing_id,
+            }
+        listing = db.get(Listing, int(row.listing_id))
+        if listing is None:
+            return None
+        snapshot = db.scalar(
+            select(ListingSnapshot)
+            .where(
+                ListingSnapshot.listing_id == listing.listing_id,
+                ListingSnapshot.captured_at <= row.observed_at,
+            )
+            .order_by(desc(ListingSnapshot.captured_at), desc(ListingSnapshot.snapshot_id))
+            .limit(1)
+        )
+        if snapshot is None and listing.current_snapshot_id:
+            snapshot = db.get(ListingSnapshot, listing.current_snapshot_id)
+        return self._snapshot_location_payload(listing, snapshot)
+
+    def _price_list_payload(self, db, row: PriceList) -> dict[str, Any]:
+        payload = super()._price_list_payload(db, row)
+        payload["location"] = self._price_list_location_payload(db, row)
+        return payload
+
+    def _extraction_payload(self, db, row: PriceExtraction, *, current: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = super()._extraction_payload(db, row, current=current)
+        if row.accepted_price_list_id:
+            accepted = db.get(PriceList, row.accepted_price_list_id)
+            payload["listing_id"] = accepted.listing_id if accepted else None
+            payload["location"] = self._price_list_location_payload(db, accepted)
+        else:
+            listing_id = self._suggested_listing_id(db, row)
+            payload["listing_id"] = listing_id
+            payload["location"] = self._location_payload(db, listing_id)
+        return payload
+
+    def _set_selected_listing(self, db, extraction: PriceExtraction, listing_id: int | None) -> None:
+        scope = db.get(PriceExtractionLocation, extraction.price_extraction_id)
+        if scope is None:
+            scope = PriceExtractionLocation(
+                price_extraction_id=extraction.price_extraction_id,
+                suggested_listing_id=self._suggested_listing_id(db, extraction),
+            )
+            db.add(scope)
+        scope.selected_listing_id = listing_id
+        scope.updated_at = utcnow()
 
     def accept(self, extraction_id: int, data: dict[str, Any]) -> dict[str, Any]:
         with self.database.session() as db:
@@ -401,10 +588,14 @@ class PriceIntelligenceService(PriceExtractionCore):
             if extraction.person_id is None:
                 raise ValueError("Preisvorschlag ist keiner Person mehr zugeordnet")
 
-            latest_id, _ = self._current_proposal(db, int(extraction.person_id))
-            if latest_id != extraction.base_price_list_id:
+            suggested_listing_id = self._suggested_listing_id(db, extraction)
+            listing_id = self._review_listing_id(db, extraction, data)
+            latest_id, current = self._current_proposal_for_listing(
+                db, int(extraction.person_id), listing_id
+            )
+            if listing_id == suggested_listing_id and latest_id != extraction.base_price_list_id:
                 extraction.status = "STALE"
-                extraction.error = "Neuere Preisrevision vorhanden; Vorschlag muss neu erkannt werden"
+                extraction.error = "Neuere Preisrevision für diesen Ort vorhanden; Vorschlag muss neu erkannt werden"
                 extraction.reviewed_at = utcnow()
                 return {
                     "price_extraction_id": extraction.price_extraction_id,
@@ -413,22 +604,32 @@ class PriceIntelligenceService(PriceExtractionCore):
                     "error": extraction.error,
                 }
 
-            reviewed, effective, current, user_edited = self._prepare_review(db, extraction, data)
-            listing_id = self._review_listing_id(db, extraction, data)
+            base_price_list_id = extraction.base_price_list_id if listing_id == suggested_listing_id else latest_id
+            current = (
+                self._proposal_from_price_list(db, db.get(PriceList, base_price_list_id))
+                if base_price_list_id
+                else None
+            )
+            reviewed, effective, current, user_edited = self._prepare_review(
+                db,
+                extraction,
+                data,
+                base_price_list_id=base_price_list_id,
+                current=current,
+            )
+            self._set_selected_listing(db, extraction, listing_id)
             fingerprint = self._proposal_fingerprint(effective)
-            legacy_items = self._legacy_items(db, extraction.base_price_list_id)
+            legacy_items = self._legacy_items(db, base_price_list_id)
 
-            if extraction.base_price_list_id:
-                base_list = db.get(PriceList, extraction.base_price_list_id)
-                current_meta = db.get(PriceListRevisionMeta, extraction.base_price_list_id)
+            if base_price_list_id:
+                current_meta = db.get(PriceListRevisionMeta, base_price_list_id)
                 current_fp = current_meta.fingerprint if current_meta else self._proposal_fingerprint(current or empty_proposal())
                 full_would_remove_legacy = reviewed["update_mode"] == "FULL" and bool(legacy_items)
-                location_changed = (base_list.listing_id if base_list else None) != listing_id
-                if current_fp == fingerprint and not full_would_remove_legacy and not location_changed:
+                if current_fp == fingerprint and not full_would_remove_legacy:
                     extraction.status = "ACCEPTED_NO_CHANGE"
                     extraction.reviewed_proposal_json = dumps(reviewed)
                     extraction.reviewed_at = utcnow()
-                    extraction.accepted_price_list_id = extraction.base_price_list_id
+                    extraction.accepted_price_list_id = base_price_list_id
                     return self._extraction_payload(db, extraction, current=current)
 
             price_list = PriceList(
@@ -441,15 +642,16 @@ class PriceIntelligenceService(PriceExtractionCore):
             )
             db.add(price_list)
             db.flush()
+            self._persist_price_list_location(db, price_list)
 
             self._persist_offers(db, price_list, extraction, effective, user_edited=user_edited)
-            if reviewed["update_mode"] == "PARTIAL" and extraction.base_price_list_id:
-                self._clone_legacy_items(db, extraction.base_price_list_id, price_list.price_list_id)
+            if reviewed["update_mode"] == "PARTIAL" and base_price_list_id:
+                self._clone_legacy_items(db, base_price_list_id, price_list.price_list_id)
             self._persist_rules_and_conditions(db, price_list, extraction, effective, user_edited=user_edited)
 
             db.add(PriceListRevisionMeta(
                 price_list_id=price_list.price_list_id,
-                supersedes_price_list_id=extraction.base_price_list_id,
+                supersedes_price_list_id=base_price_list_id,
                 source_extraction_id=extraction.price_extraction_id,
                 revision_type=reviewed["update_mode"],
                 completeness="MERGED_PARTIAL" if reviewed["update_mode"] == "PARTIAL" else "FULL",
