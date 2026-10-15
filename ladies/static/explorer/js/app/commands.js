@@ -4,7 +4,7 @@ import { profileBundleVm } from '../data/adapters.js';
 export function createCommands({store,router,effects}) {
   const state=()=>store.getState();
   const handlers={
-    'root-route': async el => { const name=el.dataset.route; router.replaceRoot(name); if(name==='favorites')await effects.loadList(); if(name==='messages')await Promise.all([effects.loadMessagingStatus(),effects.loadThreads('ALL')]); if(name==='swipe')await effects.prefetchCurrent(); if(name==='settings')await Promise.all([effects.loadSettings(),effects.loadDashboard(),effects.loadPricingSettings()]); },
+    'root-route': async el => { const name=el.dataset.route; router.replaceRoot(name); if(name==='favorites')await effects.loadList(); if(name==='messages')await Promise.all([effects.loadMessagingStatus(),effects.loadThreads('ALL')]); if(name==='discover'){if(state().discover.mode==='swipe')await effects.prefetchCurrent();else if(state().discover.mode==='map')void effects.loadMapPoints();} if(name==='settings')await Promise.all([effects.loadSettings(),effects.loadDashboard(),effects.loadPricingSettings()]); },
     'back':()=>router.back(),
     'sheet-close':()=>store.dispatch({type:'SHEET',value:null}),
     'search-submit':()=>effects.performSearch(),
@@ -13,6 +13,7 @@ export function createCommands({store,router,effects}) {
     'filter-category':el=>{const f=structuredClone(state().search.filters);f.category=el.dataset.value||'';store.dispatch({type:'SEARCH_FILTERS',filters:f});effects.schedulePreview();},
     'filter-image-mode':el=>{const f=structuredClone(state().search.filters);f.local={...(f.local||{}),imageMode:el.dataset.value||'ALL'};store.dispatch({type:'SEARCH_FILTERS',filters:f});},
     'recent-search':el=>{const item=state().search.recent[Number(el.dataset.index)];if(!item)return;const f=structuredClone(state().search.filters);f.city=item.city||item.city_slug||f.city;f.radius=Number(item.radius_km||f.radius);const saved=item.filters||{};if(saved.category!==undefined)f.category=saved.category||'';if(saved.age_min)f.ageMin=saved.age_min;if(saved.age_max)f.ageMax=saved.age_max;if(saved.height_min)f.heightMin=saved.height_min;if(saved.height_max)f.heightMax=saved.height_max;if(saved.selected)f.selected=structuredClone(saved.selected);store.dispatch({type:'SEARCH_FILTERS',filters:f});effects.schedulePreview({immediate:true});},
+    'discover-view':async el=>{const mode=String(el.dataset.mode||'swipe');if(!['swipe','grid','map'].includes(mode))return;store.dispatch({type:'DISCOVER_MODE',mode});if(mode==='swipe')await effects.prefetchCurrent();else if(mode==='map')void effects.loadMapPoints();},
     'discover-reset':()=>{store.dispatch({type:'DISCOVER_INDEX',index:0});effects.prefetchCurrent();},
     'discover-like':()=>effects.discoverDecision('LIKE'),
     'discover-dislike':()=>effects.discoverDecision('DISLIKE'),
@@ -35,7 +36,7 @@ export function createCommands({store,router,effects}) {
     'encounter-services':el=>{const personId=Number(el.dataset.personId);const d=S.detailFor(state(),personId);const encounter=d?.encounters?.[0]||null;store.dispatch({type:'SHEET',value:{kind:'encounter-services',payload:{personId,encounter}}});},
     'person-pricing':el=>effects.openPersonPricing(Number(el.dataset.personId)),
     'profile-tab':el=>store.dispatch({type:'PROFILE_TAB',personId:Number(el.dataset.personId),tab:el.dataset.tab}),
-    'profile-media-step':el=>{const pid=Number(el.dataset.personId),d=S.detailFor(state(),pid);const bundleRoute=S.currentRoute(state());let count=d?.media?.length||0;if(!count&&bundleRoute.name==='swipe'){const row=S.currentSearchRow(state());const vm=row?profileBundleVm(state().profiles.bundles[row.advertId],row):null;count=vm?.media?.length||0;}const currentIndex=S.profileMediaIndex(state(),pid);const next=Math.max(0,Math.min(Math.max(0,count-1),currentIndex+Number(el.dataset.delta||0)));store.dispatch({type:'PROFILE_MEDIA',personId:pid,index:next});if(bundleRoute.name!=='swipe')effects.autoAnalyzeCurrent();},
+    'profile-media-step':el=>{const pid=Number(el.dataset.personId),d=S.detailFor(state(),pid);let count=d?.media?.length||0;if(!count&&S.isSwipeDiscover(state())){const row=S.currentSearchRow(state());const vm=row?profileBundleVm(state().profiles.bundles[row.advertId],row):null;count=vm?.media?.length||0;}const currentIndex=S.profileMediaIndex(state(),pid);const next=Math.max(0,Math.min(Math.max(0,count-1),currentIndex+Number(el.dataset.delta||0)));store.dispatch({type:'PROFILE_MEDIA',personId:pid,index:next});if(!S.isSwipeDiscover(state()))effects.autoAnalyzeCurrent();},
     'rating-select':el=>{const root=el.closest('[data-rating-name]');root?.querySelectorAll('button').forEach(b=>b.classList.toggle('selected',b===el));},
     'choice-select':el=>{const root=el.closest('[data-choice-name]');root?.querySelectorAll('button').forEach(b=>b.classList.toggle('selected',b===el));},
     'snapshot-compare':el=>effects.snapshotCompare(el.dataset.a,el.dataset.b),

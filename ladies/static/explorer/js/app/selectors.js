@@ -1,6 +1,7 @@
 import { searchResultVm, profileBundleVm, personDetailVm, listItemVm, threadVm, threadDetailVm } from '../data/adapters.js';
 
 export const currentRoute = state => state.navigation.stack.at(-1) || {name:'search',params:{}};
+export const isSwipeDiscover = state => currentRoute(state).name==='discover' && state.discover.mode==='swipe';
 
 export function businessProfileEvidence(row,bundle) {
   const profile=bundle?.profile || bundle?.snapshot || bundle?.latest_snapshot || {};
@@ -110,4 +111,4 @@ export const currentThread = state => {
 export const unreadTotal = state => (state.messaging.threads || []).reduce((sum,row)=>sum+Number(row.unread_count || row.unread || 0),0);
 export const profileTab = (state,personId) => state.profileUi.tabByPerson[String(personId)] || 'info';
 export const profileMediaIndex = (state,personId) => Number(state.profileUi.mediaByPerson[String(personId)] || 0);
-export const rootNav = routeName => ({grid:'swipe',profile:null,chat:'messages',history:'settings',archive:'settings'}[routeName] ?? routeName);
+export const rootNav = routeName => ({profile:null,chat:'messages',history:'settings',archive:'settings'}[routeName] ?? routeName);

@@ -40,8 +40,7 @@ export function installActiveSearchSync({store,effects,search=searchTransient}) 
       hydratedKey=key;
       inFlightKey=null;
       store.dispatch({type:'SEARCH_RESULTS',results:data?.results||[],meta:{...(data?.meta||{}),automatic:true,transient:true}});
-      const route=S.currentRoute(store.getState());
-      if(route.name==='swipe'||route.name==='grid')void effects.prefetchCurrent();
+      if(S.isSwipeDiscover(store.getState()))void effects.prefetchCurrent();
     }catch(error){
       if(error?.name!=='AbortError')console.warn('Automatic search result sync failed',error);
       if(sequence===generation)inFlightKey=null;

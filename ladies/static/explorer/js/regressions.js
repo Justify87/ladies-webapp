@@ -176,7 +176,7 @@ export function installRegressionUi({store,effects}) {
   },true);
 
   document.addEventListener('pointerdown',event=>{
-    if(swipeBusy||S.currentRoute(store.getState()).name!=='swipe')return;
+    if(swipeBusy||!S.isSwipeDiscover(store.getState()))return;
     const tap=event.target.closest('.media-tap');
     const surface=event.target.closest('[data-profile-media]');
     if(!tap||!surface)return;

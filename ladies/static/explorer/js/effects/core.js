@@ -83,9 +83,9 @@ export function createCoreEffects({store,router}) {
       store.dispatch({type:'SEARCH_RESULTS',results:data?.results || [],meta});
       store.dispatch({type:'SEARCH_LOADING',value:false});
       await loadRecentSearches();
-      router.replaceRoot('swipe');
+      router.replaceRoot('discover');
       if(meta?.radius_auto_expanded)toast(`Ladies hat den Umkreis automatisch von ${meta.requested_radius_km} auf ${meta.effective_radius_km} km erweitert.`);
-      await prefetchCurrent();
+      if(state().discover.mode==='swipe')await prefetchCurrent();
       void classifyBusinessProfiles();
     } catch(error) {
       store.dispatch({type:'SEARCH_LOADING',value:false,error:error.message}); toast(error.message);
@@ -128,9 +128,6 @@ export function createCoreEffects({store,router}) {
       if(!row||row.businessProfileKnown)continue;
       const queue=S.discoverQueueRows(state());
       const queueIndex=queue.findIndex(item=>item.advertId===advertId);
-      // The active/already-passed card is classified by normal profile loading.
-      // Background work is limited to future visible rows and uses the lightweight
-      // HTML-only endpoint, never the full profile/media ingestion path.
       if(queueIndex<0||queueIndex<=state().discover.index)continue;
       try {
         const result=await api.profileClassification(advertId);
