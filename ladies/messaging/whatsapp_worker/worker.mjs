@@ -271,18 +271,6 @@ function mapReceiptStatus(value) {
   return null
 }
 
-async function resolveTargetJid(current, jid) {
-  if (!isPhoneJid(jid)) return jid
-  try {
-    const mapping = current.signalRepository?.lidMapping
-    const lid = mapping?.getLIDForPN ? await mapping.getLIDForPN(jid) : null
-    return lid || jid
-  } catch (error) {
-    logger.debug({ err: errorText(error) }, 'PN to LID lookup failed')
-    return jid
-  }
-}
-
 async function resolvePhoneJid(current, jid) {
   if (isPhoneJid(jid)) return jid
   if (!isLidJid(jid)) return null
@@ -306,23 +294,22 @@ async function inspectContact(current, jid, includePicture = false) {
     result = (rows || []).find(row => row?.jid === phoneJid) || rows?.[0] || null
   } catch (error) {
     logger.warn({ err: errorText(error) }, 'WhatsApp availability lookup failed')
-    return { exists: null, jid, phone_jid: phoneJid, profile_picture_url: null, detail: 'availability_lookup_failed' }
+    return { exists: null, jid: phoneJid, phone_jid: phoneJid, profile_picture_url: null, detail: 'availability_lookup_failed' }
   }
   const exists = Boolean(result?.exists)
-  const registeredJid = result?.jid || phoneJid
-  const target = exists ? await resolveTargetJid(current, registeredJid) : registeredJid
+  const registeredJid = isPhoneJid(result?.jid) ? result.jid : phoneJid
   let profilePictureUrl = null
   if (exists && includePicture) {
     try {
-      profilePictureUrl = await current.profilePictureUrl(target, 'preview', 5000) || null
+      profilePictureUrl = await current.profilePictureUrl(registeredJid, 'preview', 5000) || null
     } catch (error) {
       logger.debug({ err: errorText(error) }, 'WhatsApp profile picture lookup failed')
     }
   }
   return {
     exists,
-    jid: target || registeredJid,
-    phone_jid: phoneJid,
+    jid: registeredJid,
+    phone_jid: registeredJid,
     profile_picture_url: profilePictureUrl,
     detail: exists ? 'registered' : 'not_registered',
   }
@@ -447,7 +434,8 @@ async function connectedTarget(command) {
   if (!sock) throw new Error('WhatsApp ist nicht verbunden')
   const info = await inspectContact(sock, command.jid, false)
   if (info.exists === false) throw new Error('Diese Nummer ist nicht bei WhatsApp registriert')
-  return resolveTargetJid(sock, info.jid || command.jid)
+  if (!isPhoneJid(info.phone_jid)) throw new Error('WhatsApp-Telefonnummer konnte nicht aufgelöst werden')
+  return info.phone_jid
 }
 
 async function sendAndReply(id, command, content, options = {}) {
@@ -517,7 +505,7 @@ async function connect() {
       printQRInTerminal: false,
       markOnlineOnConnect: false,
       syncFullHistory: false,
-      // Keep bootstrap/mapping records required by Baileys 7 PN<->LID resolution.
+      // Keep mapping records required to resolve incoming LIDs back to phone JIDs.
       shouldSyncHistoryMessage: ({ syncType }) => syncType !== proto.HistorySync.HistorySyncType.FULL,
       generateHighQualityLinkPreview: false,
     })
@@ -693,15 +681,13 @@ async function handle(command) {
         break
       }
       case 'presence': {
-        if (!sock) throw new Error('WhatsApp ist nicht verbunden')
-        const target = await resolveTargetJid(sock, command.jid)
+        const target = await connectedTarget(command)
         await sock.sendPresenceUpdate(command.state, target)
         reply(id, true, { provider_address: target })
         break
       }
       case 'subscribe_presence': {
-        if (!sock) throw new Error('WhatsApp ist nicht verbunden')
-        const target = await resolveTargetJid(sock, command.jid)
+        const target = await connectedTarget(command)
         await sock.presenceSubscribe(target)
         reply(id, true, { provider_address: target })
         break
