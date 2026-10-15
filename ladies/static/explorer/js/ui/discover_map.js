@@ -268,8 +268,7 @@ function installLayers(instance,target,getState){
     cluster:true,
     clusterMaxZoom:13,
     clusterRadius:48,
-    clusterProperties:{
-      listing_total:['+',['get','listing_count']],
+    clusterProperties:{listing_total:['+',['get','listing_count']],
       price_60_sum_cents:['+',['get','price_60_sum_cents']],
       price_60_count:['+',['get','price_60_count']]
     }
