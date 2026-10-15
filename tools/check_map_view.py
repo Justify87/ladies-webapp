@@ -97,12 +97,13 @@ def row(listing_id, person_id, advert_id, *, city=None, postal_code=None, hidden
 # A not-yet-ingested listing must use its own active search-result city, while a
 # canonical snapshot city remains authoritative when it exists. The response contract
 # is listing-based: multiple listings of one person remain distinct map references.
+# A locally known hidden location is returned only as that listing's display label.
 with tempfile.TemporaryDirectory() as tmp:
     background = Background()
     service = MapService(
         Repository([
             row(1, 101, "a", city=None),
-            row(2, 101, "b", city="Grimma"),
+            row(2, 101, "b", city="Grimma", hidden_location="Musterstraße 12, Grimma"),
         ]),
         data_dir=tmp,
         background=background,
@@ -125,6 +126,9 @@ with tempfile.TemporaryDirectory() as tmp:
         for ref in json.loads(feature["properties"]["listing_refs_json"])
     ]
     assert sorted(ref["listing_id"] for ref in refs) == [1, 2]
+    refs_by_listing = {ref["listing_id"]: ref for ref in refs}
+    assert refs_by_listing[1]["address_label"] == "Markkleeberg"
+    assert refs_by_listing[2]["address_label"] == "Musterstraße 12, Grimma"
     assert all("profile_count" not in feature["properties"] for feature in points["features"])
     assert all("profiles_json" not in feature["properties"] for feature in points["features"])
     assert not background.submissions
