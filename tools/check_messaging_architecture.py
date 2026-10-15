@@ -53,6 +53,10 @@ def check_backend() -> None:
     require("shutil.rmtree(self.auth_dir" in connection, "complete auth reset")
     require("gateway.command(\"logout\"" in connection, "remote logout before local reset")
     require("messages/media/history" in connection, "reset scope documents chat preservation")
+    require('gateway.command("connect"' in connection, "pairing starts via explicit lifecycle command")
+    require("wa-resume-session" in connection, "registered sessions resume explicitly")
+    require("self.service.gateway.stop()" in connection, "unregistered startup worker is stopped")
+    require("pairing_failed_code_" in connection, "pairing failure translated for UI")
 
     routes = source("ladies/messaging/routes_v2.py")
     require("WhatsAppConnectionLifecycle(service)" in routes, "lifecycle wired directly into canonical router")
@@ -74,6 +78,15 @@ def check_worker() -> None:
     require("history_metadata" in worker, "worker history metadata")
     require("messageCachePath(identity)" in worker, "worker canonical raw cache")
     require("provider_message_id: msg.key?.id" not in worker, "worker raw id no longer canonical")
+    require("fetchLatestWaWebVersion" in worker, "worker prefers live WhatsApp Web version")
+    require("fetchLatestBaileysVersion" in worker, "worker retains version fallback")
+    require("Browsers.ubuntu('Chrome')" in worker, "worker uses web browser subplatform for pairing")
+    require("Browsers.macOS('Desktop')" not in worker, "worker avoids rejected DARWIN desktop pairing identity")
+    require("registeredAtStart" in worker, "worker distinguishes pairing from registered reconnect")
+    require("pairing_failed_code_" in worker, "unregistered pairing failures are terminal")
+    require("DisconnectReason.restartRequired" in worker, "pairing restart required is handled explicitly")
+    tail = worker.split("emit({ type: 'ready' })", 1)[-1]
+    require("connect().catch" not in tail, "worker does not auto-pair on process startup")
 
 
 def check_frontend() -> None:
