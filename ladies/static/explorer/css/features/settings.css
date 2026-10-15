@@ -34,11 +34,17 @@
 .wa-status-copy b { font-size: 13px; }
 .wa-status-copy small { margin-top: 2px; color: #858c9a; font-size: 10.5px; }
 .preview-badge { padding: 5px 8px; border-radius: 12px; background: #f5e4ec; color: #b22a69; font-size: 7.5px; font-weight: 700; }
-.wa-preview { margin: 5px 0 9px; padding: 10px; display: grid; grid-template-columns: 94px 1fr; gap: 12px; align-items: center; border: 1px solid #ececf2; border-radius: 15px; background: #f5f5f9; }
-.wa-qr { width: 94px; height: 94px; border-radius: 8px; background: #fff; box-shadow: 0 3px 12px rgba(31,35,47,.08); }
+.wa-preview { margin: 5px 0 9px; padding: 12px; display: grid; grid-template-columns: 188px minmax(0,1fr); gap: 16px; align-items: center; border: 1px solid #ececf2; border-radius: 15px; background: #f5f5f9; }
+.wa-qr { width: 188px; max-width: 100%; height: auto; aspect-ratio: 1 / 1; object-fit: contain; border-radius: 10px; background: #fff; box-shadow: 0 3px 12px rgba(31,35,47,.08); }
+.wa-copy { min-width: 0; }
 .wa-copy b { display: block; font-size: 9.5px; }
 .wa-copy ol { margin: 5px 0; padding-left: 17px; color: #6c7484; font-size: 7.5px; line-height: 1.45; }
 .wa-copy small { color: #969ba6; font-size: 7.3px; }
+
+@media (max-width: 520px) {
+  .wa-preview { grid-template-columns: 1fr; justify-items: center; gap: 12px; }
+  .wa-copy { width: 100%; }
+}
 
 .settings-action-row { display: flex; flex-wrap: wrap; gap: 5px; margin: 7px 0 10px; }
 .settings-action-row button { min-height: 40px; padding: 9px 12px; border: 0; border-radius: 16px; background: #f4f4f8; font-size: 11px; }
