@@ -14,6 +14,12 @@ from .encounter_metadata import install_encounter_metadata
 from .lan_access import LanAccessManager
 from .messaging import install_messaging
 from .messaging.integration import merge_messaging_person, reconcile_identity_events as reconcile_messaging_identity_events
+from .messaging.scope import (
+    reconcile_ladies_endpoints,
+    refresh_endpoint_identity,
+    scoped_thread_items,
+    thread_is_ladies_scoped,
+)
 from .pricing import install_pricing
 from .pricing.integration import merge_pricing_person, reconcile_identity_events as reconcile_pricing_identity_events
 from .search_preview import install_search_preview
@@ -55,23 +61,43 @@ def _is_loopback(remote_addr: str | None) -> bool:
         return False
 
 
+def _positive_int(value) -> int | None:
+    try:
+        parsed = int(value or 0)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _thread_id_from_call(args, kwargs) -> int | None:
+    if "thread_id" in kwargs:
+        return _positive_int(kwargs.get("thread_id"))
+    return _positive_int(args[0]) if args else None
+
+
 def _install_domain_route_integrations(app, *, database, messaging, background) -> None:
-    """Attach domain side effects to the routes that own the corresponding mutation."""
+    """Attach domain side effects and the Ladies-only boundary to messaging routes."""
 
     def reconcile_identity_state() -> None:
         # Pricing needs the source chat thread before messaging may collapse it.
         reconcile_pricing_identity_events(database)
         reconcile_messaging_identity_events(database)
 
-    def rehydrate_liked_person(person_id: int) -> None:
+    def rehydrate_chat_person(person_id: int) -> None:
         result = messaging.rehydrate_recent_history(int(person_id), limit=10)
         LOGGER.info(
-            "WhatsApp rehydrate after like person_id=%s restored=%s requested=%s existing=%s",
+            "WhatsApp rehydrate after chat open person_id=%s restored=%s requested=%s existing=%s",
             person_id,
             result.get("restored", 0),
             result.get("requested", 0),
             result.get("existing", 0),
         )
+
+    def scoped_thread_or_404(args, kwargs):
+        thread_id = _thread_id_from_call(args, kwargs)
+        if thread_is_ladies_scoped(database, thread_id):
+            return None
+        return jsonify(error="Chat ist keiner Ladies-Person zugeordnet."), 404
 
     profile_view = app.view_functions["api_profile"]
 
@@ -107,30 +133,139 @@ def _install_domain_route_integrations(app, *, database, messaging, background) 
 
     app.view_functions["api_identity_merge"] = merge_with_identity_sync
 
-    person_state_view = app.view_functions["api_person_state"]
+    threads_view = app.view_functions["messaging_threads"]
 
-    @wraps(person_state_view)
-    def person_state_with_rehydrate(*args, **kwargs):
-        submitted = request.get_json(silent=True) or {}
-        response = app.make_response(person_state_view(*args, **kwargs))
-        if response.status_code >= 400 or str(submitted.get("preference") or "").upper() != "LIKE":
-            return response
+    @wraps(threads_view)
+    def messaging_threads_scoped(*args, **kwargs):
+        filter_name = str(request.args.get("filter") or "ALL").upper()
         try:
-            person_id = kwargs.get("person_id")
-            if person_id is None and args:
-                person_id = args[0]
-            if person_id is not None:
-                person_id = int(person_id)
-                background.submit(
-                    f"wa-rehydrate:{person_id}",
-                    rehydrate_liked_person,
-                    person_id,
-                )
+            reconcile_ladies_endpoints(messaging)
+            response = app.make_response(threads_view(*args, **kwargs))
+            if response.status_code >= 400:
+                return response
+            payload = response.get_json(silent=True) or {}
+            payload["items"] = scoped_thread_items(
+                database,
+                payload.get("items") or [],
+                include_unassigned=filter_name == "UNASSIGNED",
+            )
+            return jsonify(payload)
         except Exception:
-            LOGGER.exception("WhatsApp rehydrate scheduling failed endpoint=api_person_state")
+            # Fail closed: unrelated WhatsApp conversations must never leak into
+            # the Ladies Explorer when scope resolution itself fails.
+            LOGGER.exception("Ladies messaging scope failed filter=%s", filter_name)
+            return jsonify(items=[])
+
+    app.view_functions["messaging_threads"] = messaging_threads_scoped
+
+    unassigned_view = app.view_functions["messaging_unassigned"]
+
+    @wraps(unassigned_view)
+    def messaging_unassigned_scoped(*args, **kwargs):
+        try:
+            reconcile_ladies_endpoints(messaging)
+            response = app.make_response(unassigned_view(*args, **kwargs))
+            if response.status_code >= 400:
+                return response
+            payload = response.get_json(silent=True) or {}
+            payload["items"] = scoped_thread_items(
+                database,
+                payload.get("items") or [],
+                include_unassigned=True,
+            )
+            return jsonify(payload)
+        except Exception:
+            LOGGER.exception("Ladies unassigned messaging scope failed")
+            return jsonify(items=[])
+
+    app.view_functions["messaging_unassigned"] = messaging_unassigned_scoped
+
+    thread_view = app.view_functions["messaging_thread"]
+
+    @wraps(thread_view)
+    def messaging_thread_scoped(*args, **kwargs):
+        reconcile_ladies_endpoints(messaging)
+        denied = scoped_thread_or_404(args, kwargs)
+        if denied is not None:
+            return denied
+        return thread_view(*args, **kwargs)
+
+    app.view_functions["messaging_thread"] = messaging_thread_scoped
+
+    person_thread_view = app.view_functions["messaging_person_thread"]
+
+    @wraps(person_thread_view)
+    def person_thread_with_identity(*args, **kwargs):
+        response = app.make_response(person_thread_view(*args, **kwargs))
+        if response.status_code >= 400:
+            return response
+        payload = response.get_json(silent=True) or {}
+        endpoint_id = _positive_int((payload.get("endpoint") or {}).get("endpoint_id"))
+        if endpoint_id:
+            refresh_endpoint_identity(messaging, endpoint_id)
+        person_id = _positive_int(kwargs.get("person_id") if "person_id" in kwargs else (args[0] if args else None))
+        if person_id:
+            background.submit(
+                f"wa-rehydrate:{person_id}",
+                rehydrate_chat_person,
+                person_id,
+            )
         return response
 
-    app.view_functions["api_person_state"] = person_state_with_rehydrate
+    app.view_functions["messaging_person_thread"] = person_thread_with_identity
+
+    send_view = app.view_functions["messaging_send"]
+
+    @wraps(send_view)
+    def messaging_send_with_identity(*args, **kwargs):
+        denied = scoped_thread_or_404(args, kwargs)
+        if denied is not None:
+            return denied
+        submitted = request.get_json(silent=True) or {}
+        endpoint_id = _positive_int(submitted.get("endpoint_id"))
+        if endpoint_id:
+            refresh_endpoint_identity(messaging, endpoint_id)
+        response = app.make_response(send_view(*args, **kwargs))
+        if response.status_code < 400:
+            payload = response.get_json(silent=True) or {}
+            sent_endpoint_id = _positive_int((payload.get("message") or {}).get("endpoint_id")) or endpoint_id
+            if sent_endpoint_id:
+                refresh_endpoint_identity(messaging, sent_endpoint_id)
+        return response
+
+    app.view_functions["messaging_send"] = messaging_send_with_identity
+
+    send_media_view = app.view_functions["messaging_send_media"]
+
+    @wraps(send_media_view)
+    def messaging_send_media_with_identity(*args, **kwargs):
+        denied = scoped_thread_or_404(args, kwargs)
+        if denied is not None:
+            return denied
+        endpoint_id = _positive_int(request.form.get("endpoint_id"))
+        if endpoint_id:
+            refresh_endpoint_identity(messaging, endpoint_id)
+        response = app.make_response(send_media_view(*args, **kwargs))
+        if response.status_code < 400:
+            payload = response.get_json(silent=True) or {}
+            sent_endpoint_id = _positive_int((payload.get("message") or {}).get("endpoint_id")) or endpoint_id
+            if sent_endpoint_id:
+                refresh_endpoint_identity(messaging, sent_endpoint_id)
+        return response
+
+    app.view_functions["messaging_send_media"] = messaging_send_media_with_identity
+
+    for endpoint_name in ("messaging_read", "messaging_presence"):
+        original = app.view_functions[endpoint_name]
+
+        @wraps(original)
+        def scoped_thread_action(*args, __original=original, **kwargs):
+            denied = scoped_thread_or_404(args, kwargs)
+            if denied is not None:
+                return denied
+            return __original(*args, **kwargs)
+
+        app.view_functions[endpoint_name] = scoped_thread_action
 
 
 def create_app(
@@ -186,15 +321,13 @@ def create_app(
         if not response.headers.get("Content-Security-Policy"):
             response.headers["Content-Security-Policy"] = BROWSER_CSP
 
-        # These read-only summaries are triggered by several independent UI
-        # mutations. A one-second private browser cache coalesces bursts without
-        # turning application state into a long-lived cache.
-        if request.method == "GET" and response.status_code == 200 and request.path in {
-            "/api/dashboard",
-            "/api/storage",
-            "/api/messaging/threads",
-        }:
-            response.headers["Cache-Control"] = "private, max-age=1"
+        if request.method == "GET" and response.status_code == 200:
+            if request.path in {"/api/messaging/threads", "/api/messaging/unassigned"}:
+                # Thread mutations must be visible immediately; caching can hide a
+                # newly-created chat directly after the first outgoing message.
+                response.headers["Cache-Control"] = "private, no-store"
+            elif request.path in {"/api/dashboard", "/api/storage"}:
+                response.headers["Cache-Control"] = "private, max-age=1"
         return response
 
     @app.get("/pair/<token>")
