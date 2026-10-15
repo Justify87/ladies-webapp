@@ -25,9 +25,21 @@ assert.match(mapSource,/instance\.resize\(\)/,'map must resize after mount/layou
 assert.match(mapSource,/current\.resizeObserver\?\.disconnect\(\)/,'map cleanup must disconnect its observer');
 assert.match(mapSource,/current\.map\.remove\(\)/,'map cleanup must remove the MapLibre instance');
 assert.match(mapSource,/source\.setData\(latestData\)/,'map data changes must update the existing GeoJSON source');
+assert.match(mapSource,/initialFitDone:false/,'each mounted map may auto-fit only its first available dataset');
+assert.match(mapSource,/current\.initialFitDone\|\|/,'filter updates must not re-fit a map whose initial camera has already been established');
+assert.doesNotMatch(mapSource,/fittedSignature/,'data signatures must not drive repeated camera fits');
+assert.match(mapSource,/price_60_sum_cents:\['\+',\['get','price_60_sum_cents'\]\]/,'cluster price sums must aggregate in MapLibre');
+assert.match(mapSource,/price_60_count:\['\+',\['get','price_60_count'\]\]/,'cluster price counts must aggregate in MapLibre');
+assert.match(mapSource,/CLUSTER_PRICE_LAYER/,'clusters must expose a 60-minute average price label');
+assert.match(mapSource,/LOCATION_PRICE_LAYER/,'unclustered points must expose a 60-minute average price label');
 assert.match(mapSource,/getClusterExpansionZoom\(clusterId\)/,'cluster taps must expand through the source API');
 assert.match(mapSource,/instance\.on\('error',reportMapError\)/,'MapLibre runtime errors must remain observable');
 assert.match(mapSource,/maplibrePromise=null/,'failed MapLibre imports must reset the shared import promise');
+assert.match(mapRepository,/PriceItem\.duration_minutes == 60/,'map pricing must use the explicit 60-minute offer');
+assert.match(mapRepository,/PriceItem\.item_type == "BASE"/,'map pricing must use base offers only');
+assert.match(mapRepository,/PriceList\.currency == "EUR"/,'map pricing must match the displayed euro currency');
+assert.match(mapRepository,/desc\(PriceList\.observed_at\)/,'latest applicable 60-minute price data must win');
+assert.match(mapService,/"price_60_cents": item\.get\("price_60_cents"\)/,'map refs must carry 60-minute prices into the browser');
 
 // Lifecycle behavior is tested directly: same-container initialization is single-flight,
 // failures at every initialization stage release ownership, and stale work cannot become
@@ -153,19 +165,25 @@ assert.equal(readyInstance.hasLoadListener(),false,'successful load must remove 
 assert.equal(readyCleanup,null,'successful load must unregister its pending cleanup');
 
 // Map identity is listing-based end-to-end. Two listings belonging to one person
-// must never bind through person_id alone.
+// must never bind through person_id alone. Price aggregation follows the same filtered
+// listing refs, so locally hidden results cannot influence the displayed average.
 const samePersonPoint={type:'FeatureCollection',features:[{
   type:'Feature',geometry:{type:'Point',coordinates:[12.3,51.3]},properties:{
     location_key:'city:DE:leipzig',listing_count:2,
     listing_refs_json:JSON.stringify([
-      {person_id:7,listing_id:101,advert_id:'a',address_label:'04109 Leipzig'},
-      {person_id:7,listing_id:202,advert_id:'b',address_label:'04107 Leipzig'}
+      {person_id:7,listing_id:101,advert_id:'a',address_label:'04109 Leipzig',price_60_cents:10000},
+      {person_id:7,listing_id:202,advert_id:'b',address_label:'04107 Leipzig',price_60_cents:14000}
     ])
   }
 }]};
+const allVisible=filterMapFeatures(samePersonPoint,[{personId:7,listing_id:101,advertId:'a'},{personId:7,listing_id:202,advertId:'b'}]);
+assert.equal(allVisible.features[0].properties.price_60_sum_cents,24000);
+assert.equal(allVisible.features[0].properties.price_60_count,2);
 const filtered=filterMapFeatures(samePersonPoint,[{personId:7,listing_id:202,advertId:'b'}]);
 assert.equal(filtered.features.length,1);
 assert.equal(filtered.features[0].properties.listing_count,1);
+assert.equal(filtered.features[0].properties.price_60_sum_cents,14000);
+assert.equal(filtered.features[0].properties.price_60_count,1);
 const refs=JSON.parse(filtered.features[0].properties.listing_refs_json);
 assert.deepEqual(refs.map(item=>item.listing_id),[202]);
 assert.equal(refs[0].address_label,'04107 Leipzig','map filtering must preserve the selected listing address label');
