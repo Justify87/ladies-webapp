@@ -59,7 +59,9 @@ export function resetScrollState(host,selector=DEFAULT_SELECTOR){
 export function updateScrollableRegion(host,html,{previousHtml=null,force=false,snapshot=null,reset=false,selector=DEFAULT_SELECTOR}={}){
   const replaced=Boolean(force)||html!==previousHtml;
   if(!replaced)return {replaced:false,restored:false};
-  const liveSnapshot=Array.isArray(snapshot)&&snapshot.length?snapshot:captureScrollState(host,selector);
+  const liveSnapshot=Array.isArray(snapshot)&&snapshot.length
+    ? snapshot
+    : reset ? [] : captureScrollState(host,selector);
   host.innerHTML=html;
   const restored=restoreScrollState(host,liveSnapshot,selector);
   if(reset&&!restored)resetScrollState(host,selector);
