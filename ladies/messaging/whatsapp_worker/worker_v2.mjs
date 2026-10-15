@@ -680,6 +680,7 @@ async function handleConnectionUpdate(current, update) {
   logger.warn({ code, reason, retry_ms: delay }, 'WhatsApp connection closed; reconnecting')
   emit({ type: 'connection', state: 'RECONNECTING', detail: `code_${code || 'unknown'};retry_in_${delay}ms` })
   setTimeout(() => {
+    if (stopped || manualDisconnect) return
     connecting = null
     connect().catch(err => emit({ type: 'error', code: 'RECONNECT_FAILED', message: errorText(err) }))
   }, delay)
@@ -776,7 +777,7 @@ async function processEvents(current, events, saveCreds) {
 }
 
 async function connect() {
-  if (stopped) return
+  if (stopped || sock) return
   if (connecting) return connecting
   connecting = (async () => {
     emit({ type: 'connection', state: 'CONNECTING' })
