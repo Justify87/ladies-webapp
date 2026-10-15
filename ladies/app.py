@@ -17,6 +17,7 @@ from .messaging.integration import merge_messaging_person, reconcile_identity_ev
 from .messaging.scope import hydrate_ladies_history, reconcile_ladies_endpoints
 from .pricing import install_pricing
 from .pricing.integration import merge_pricing_person, reconcile_identity_events as reconcile_pricing_identity_events
+from .saved_searches import install_saved_searches
 from .search_preview import install_search_preview
 from .web import create_app as create_core_app
 
@@ -189,6 +190,14 @@ def create_app(
 
     database = app.extensions["ladies_database"]
     repositories = app.extensions["ladies_repositories"]
+    saved_search_scheduler = install_saved_searches(
+        app,
+        background=background,
+        default_city=default_city,
+        default_radius=default_radius,
+    )
+    atexit.register(saved_search_scheduler.shutdown)
+
     messaging = install_messaging(app, database=database, data_dir=data_dir)
     install_pricing(app, database=database, data_dir=data_dir)
 
