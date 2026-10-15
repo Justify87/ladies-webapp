@@ -1,6 +1,5 @@
 import * as S from './app/selectors.js';
 import { api } from './api/client.js';
-import { availabilityMode } from './search_intelligence.js';
 import { escapeHtml as e, escapeAttr as a, flatten, fmtDate, euro } from './shared/html.js';
 import { icon } from './shared/icons.js';
 
@@ -111,27 +110,6 @@ function cleanGrid(hiddenAdverts) {
   document.querySelectorAll('#screenHost .grid-card[data-advert-id]').forEach(card=>{if(hiddenAdverts.has(String(card.dataset.advertId||'')))card.remove();});
 }
 
-function cleanSwipe(store) {
-  const root=document.querySelector('#screenHost .swipe-screen');
-  if(!root)return;
-  root.querySelectorAll('.swipe-details .profile-meta-place,.swipe-details .badge-row').forEach(node=>node.remove());
-  const panel=root.querySelector('.swipe-media-panel');
-  const identity=root.querySelector('.profile-identity');
-  const pill=root.querySelector('.online-pill');
-  if(panel&&identity) {
-    identity.classList.add('requested-swipe-identity');
-    panel.appendChild(identity);
-  }
-  if(panel&&pill) {
-    const mode=availabilityMode(stateOf(store).search.filters);
-    const label=mode==='NOW'?'Jetzt laut Anzeige':mode==='TODAY'?'Heute laut Anzeige':'Heute verfügbar';
-    pill.classList.remove('media-availability');
-    pill.classList.add('requested-profile-availability');
-    pill.innerHTML=`${icon('calendar')}<span>${label}</span>`;
-    panel.appendChild(pill);
-  }
-}
-
 function threadUnreadForPerson(state,personId) {
   return (state.messaging.threads||[]).reduce((sum,row)=>Number(row.person_id||0)===Number(personId)?sum+Number(row.unread_count||row.unread||0):sum,0);
 }
@@ -217,7 +195,6 @@ function enhanceServicePanel(panel) {
 function enhanceAnalysisPanel(panel) {
   removeCardsByHeading(panel,['Aktuelle Filter']);
 }
-
 function consolidateDataTab(store) {
   const encounterTab=document.querySelector('#screenHost .profile-tabs button[data-tab="encounters"]');
   if(encounterTab?.classList.contains('active')) {
@@ -294,7 +271,6 @@ export function installRequestedFixes({store,effects}) {
   function enhanceDom() {
     addHideLikesOption(store);
     cleanGrid(hiddenLikedAdverts);
-    cleanSwipe(store);
     consolidateDataTab(store);
     enhanceProfilePanels();
     enhanceActionStates(store);
