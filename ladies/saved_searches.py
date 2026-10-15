@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from flask import Flask, jsonify, request
 
+from .core.services.profile import ProfileService
 from .core.services.saved_searches import SavedSearchScheduler, SavedSearchService
 from .core.services.search import SearchService
 from .errors import NotFoundError, ValidationError
-from .source import build_session
+from .source import FixedRateLimiter, build_session
 
 
 def install_saved_searches(
@@ -14,15 +15,27 @@ def install_saved_searches(
     background,
     default_city: str,
     default_radius: int,
+    profile_delay: float,
 ) -> SavedSearchScheduler:
     repositories = app.extensions["ladies_repositories"]
+    http = build_session()
     search = SearchService(
         repositories.search,
-        build_session(),
+        http,
         default_city=default_city,
         default_radius=default_radius,
     )
-    service = SavedSearchService(repositories.settings, search)
+    profiles = ProfileService(
+        repositories.persons,
+        http,
+        FixedRateLimiter(profile_delay),
+        classification_repository=repositories.search,
+    )
+    service = SavedSearchService(
+        repositories.settings,
+        search,
+        business_classifier=profiles.classify_business_profile,
+    )
     scheduler = SavedSearchScheduler(service, background)
     app.extensions["saved_search_service"] = service
     app.extensions["saved_search_scheduler"] = scheduler
@@ -69,5 +82,4 @@ def install_saved_searches(
     def api_saved_search_acknowledge():
         return jsonify(items=service.acknowledge_all())
 
-    scheduler.start()
     return scheduler
