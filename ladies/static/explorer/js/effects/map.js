@@ -16,11 +16,7 @@ function uniqueListingIds(results=[]){
 export function mapRequestDescriptor(state){
   const listingIds=uniqueListingIds(state?.search?.results);
   const city=String(state?.search?.filters?.city||'').trim();
-  return {
-    listingIds,
-    city,
-    key:`${city.toLocaleLowerCase('de-DE')}|${listingIds.join(',')}`
-  };
+  return {listingIds,city,key:`${city.toLocaleLowerCase('de-DE')}|${listingIds.join(',')}`};
 }
 
 export function createMapEffects({store}) {
@@ -37,13 +33,13 @@ export function createMapEffects({store}) {
 
   async function loadMapPoints({force=false,quiet=true}={}) {
     const requested=mapRequestDescriptor(store.getState());
+    const current=store.getState().discover.map||{};
     if(!requested.listingIds.length){
       cancel();
-      store.dispatch({type:'DISCOVER_MAP_CLEAR'});
+      if(current.key||current.points||current.loading||current.error)store.dispatch({type:'DISCOVER_MAP_CLEAR'});
       return null;
     }
 
-    const current=store.getState().discover.map||{};
     if(!force&&current.key===requested.key&&current.points&&!current.points?.meta?.pending_count)return current.points;
     if(!force&&current.key===requested.key&&current.loading)return current.points||null;
 
@@ -53,10 +49,7 @@ export function createMapEffects({store}) {
     store.dispatch({type:'DISCOVER_MAP_LOADING',key:requested.key,value:true});
 
     try{
-      const points=await api.mapPoints({
-        listing_ids:requested.listingIds,
-        fallback_city:requested.city
-      });
+      const points=await api.mapPoints({listing_ids:requested.listingIds,fallback_city:requested.city});
       const latest=mapRequestDescriptor(store.getState());
       if(sequence!==generation||latest.key!==requested.key)return null;
 
@@ -68,9 +61,7 @@ export function createMapEffects({store}) {
           const now=mapRequestDescriptor(store.getState());
           if(now.key===requested.key)void loadMapPoints({force:true,quiet:true});
         },REFRESH_DELAY_MS);
-      }else{
-        refreshes=0;
-      }
+      }else refreshes=0;
       return points;
     }catch(error){
       if(sequence!==generation)return null;
