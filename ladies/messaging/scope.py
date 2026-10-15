@@ -97,8 +97,84 @@ def _endpoint_candidate_ids(
     return candidates
 
 
+def _endpoint_is_ladies(db, endpoint: ContactEndpoint | None, provider_map=None) -> bool:
+    if endpoint is None:
+        return False
+    if endpoint.person_id is not None:
+        return _person_is_ladies(db, int(endpoint.person_id))
+    candidates = _endpoint_candidate_ids(db, endpoint, provider_map)
+    return bool(candidates)
+
+
+def endpoint_is_ladies_scoped(database, endpoint_id: int | None) -> bool:
+    endpoint_id = int(endpoint_id or 0)
+    if not endpoint_id:
+        return False
+    with database.session() as db:
+        endpoint = db.get(ContactEndpoint, endpoint_id)
+        if endpoint is None:
+            return False
+        provider_map = _provider_person_map(db) if endpoint.provider_address else {}
+        return _endpoint_is_ladies(db, endpoint, provider_map)
+
+
+def _thread_is_ladies(db, thread: ChatThread | None, provider_map=None) -> bool:
+    if thread is None:
+        return False
+    if thread.person_id is not None:
+        return _person_is_ladies(db, int(thread.person_id))
+    endpoint_ids = db.scalars(
+        select(ChatMessage.endpoint_id)
+        .where(ChatMessage.thread_id == thread.thread_id, ChatMessage.endpoint_id.is_not(None))
+        .distinct()
+    ).all()
+    for endpoint_id in endpoint_ids:
+        endpoint = db.get(ContactEndpoint, int(endpoint_id))
+        if _endpoint_is_ladies(db, endpoint, provider_map):
+            return True
+    return False
+
+
+def thread_is_ladies_scoped(database, thread_id: int | None) -> bool:
+    thread_id = int(thread_id or 0)
+    if not thread_id:
+        return False
+    with database.session() as db:
+        thread = db.get(ChatThread, thread_id)
+        if thread is None:
+            return False
+        provider_map = _provider_person_map(db) if thread.person_id is None else {}
+        return _thread_is_ladies(db, thread, provider_map)
+
+
+def message_is_ladies_scoped(database, message_id: int | None) -> bool:
+    message_id = int(message_id or 0)
+    if not message_id:
+        return False
+    with database.session() as db:
+        message = db.get(ChatMessage, message_id)
+        if message is None:
+            return False
+        thread = db.get(ChatThread, int(message.thread_id))
+        provider_map = _provider_person_map(db) if thread is not None and thread.person_id is None else {}
+        return _thread_is_ladies(db, thread, provider_map)
+
+
+def event_is_ladies_scoped(database, event: dict[str, Any]) -> bool:
+    """Filter resource-bound browser events; global connection events stay visible."""
+    if not isinstance(event, dict):
+        return False
+    if event.get("thread_id") is not None:
+        return thread_is_ladies_scoped(database, event.get("thread_id"))
+    if event.get("message_id") is not None:
+        return message_is_ladies_scoped(database, event.get("message_id"))
+    if event.get("endpoint_id") is not None:
+        return endpoint_is_ladies_scoped(database, event.get("endpoint_id"))
+    return True
+
+
 def reconcile_ladies_endpoints(service) -> int:
-    """Heal only unassigned WhatsApp endpoints with unambiguous Ladies evidence."""
+    """One-shot repair for unresolved endpoints with unambiguous Ladies evidence."""
     with service.database.session() as db:
         provider_map = _provider_person_map(db)
         repairs: list[tuple[int, int]] = []
@@ -155,32 +231,9 @@ def scoped_thread_items(database, items: list[dict[str, Any]], *, include_unassi
                 continue
             endpoint_id = int((item.get("endpoint") or {}).get("endpoint_id") or 0)
             endpoint = db.get(ContactEndpoint, endpoint_id) if endpoint_id else None
-            if endpoint is not None and _endpoint_candidate_ids(db, endpoint, provider_map):
+            if _endpoint_is_ladies(db, endpoint, provider_map):
                 visible.append(item)
         return visible
-
-
-def thread_is_ladies_scoped(database, thread_id: int | None) -> bool:
-    """Authorize a thread only when it belongs to, or is unresolved evidence for, Ladies."""
-    thread_id = int(thread_id or 0)
-    if not thread_id:
-        return False
-    with database.session() as db:
-        thread = db.get(ChatThread, thread_id)
-        if thread is None:
-            return False
-        if thread.person_id is not None:
-            return _person_is_ladies(db, int(thread.person_id))
-        last = db.scalar(
-            select(ChatMessage)
-            .where(ChatMessage.thread_id == thread.thread_id)
-            .order_by(ChatMessage.timestamp.desc(), ChatMessage.message_id.desc())
-            .limit(1)
-        )
-        endpoint = db.get(ContactEndpoint, int(last.endpoint_id)) if last is not None and last.endpoint_id else None
-        if endpoint is None:
-            return False
-        return bool(_endpoint_candidate_ids(db, endpoint, _provider_person_map(db)))
 
 
 def _merge_provider_endpoint(service, db, target: ContactEndpoint, other: ContactEndpoint) -> bool:
@@ -230,40 +283,11 @@ def _merge_provider_endpoint(service, db, target: ContactEndpoint, other: Contac
     return True
 
 
-def refresh_endpoint_identity(service, endpoint_id: int | None) -> str | None:
-    """Resolve PN -> LID and persist it without ever blocking the actual message flow."""
+def bind_provider_address(service, endpoint_id: int | None, provider_address: str | None) -> str | None:
     endpoint_id = int(endpoint_id or 0)
-    if not endpoint_id or service.gateway.state != "CONNECTED":
+    provider_address = str(provider_address or "").strip()
+    if not endpoint_id or not provider_address:
         return None
-    try:
-        with service.database.session() as db:
-            endpoint = db.get(ContactEndpoint, endpoint_id)
-            if endpoint is None or endpoint.state != "ACTIVE" or not endpoint.normalized_phone:
-                return None
-            if endpoint.provider_address and str(endpoint.provider_address).endswith("@lid"):
-                return str(endpoint.provider_address)
-            phone_jid = endpoint.normalized_phone.lstrip("+") + "@s.whatsapp.net"
-    except Exception:
-        LOGGER.warning("WhatsApp identity preflight failed endpoint_id=%s", endpoint_id, exc_info=True)
-        return None
-
-    try:
-        event = service.gateway.command(
-            "contact_info",
-            jid=phone_jid,
-            include_profile_picture=False,
-            timeout=8,
-        )
-    except Exception:
-        LOGGER.debug("WhatsApp identity refresh failed endpoint_id=%s", endpoint_id, exc_info=True)
-        return None
-    payload = event.get("payload") or {}
-    if payload.get("exists") is False:
-        return None
-    provider_address = str(payload.get("jid") or "").strip()
-    if not provider_address:
-        return None
-
     try:
         with service.database.session() as db:
             target = db.get(ContactEndpoint, endpoint_id)
@@ -294,3 +318,55 @@ def refresh_endpoint_identity(service, endpoint_id: int | None) -> str | None:
         LOGGER.warning("WhatsApp identity persistence failed endpoint_id=%s", endpoint_id, exc_info=True)
         return None
     return provider_address
+
+
+def refresh_endpoint_identity(service, endpoint_id: int | None) -> str | None:
+    """Resolve PN -> LID and persist it without ever blocking the actual message flow."""
+    endpoint_id = int(endpoint_id or 0)
+    if not endpoint_id or service.gateway.state != "CONNECTED":
+        return None
+    try:
+        with service.database.session() as db:
+            endpoint = db.get(ContactEndpoint, endpoint_id)
+            if endpoint is None or endpoint.state != "ACTIVE" or not endpoint.normalized_phone:
+                return None
+            if endpoint.provider_address and str(endpoint.provider_address).endswith("@lid"):
+                return str(endpoint.provider_address)
+            phone_jid = endpoint.normalized_phone.lstrip("+") + "@s.whatsapp.net"
+    except Exception:
+        LOGGER.warning("WhatsApp identity preflight failed endpoint_id=%s", endpoint_id, exc_info=True)
+        return None
+
+    try:
+        event = service.gateway.command(
+            "contact_info",
+            jid=phone_jid,
+            include_profile_picture=False,
+            timeout=8,
+        )
+    except Exception:
+        LOGGER.debug("WhatsApp identity refresh failed endpoint_id=%s", endpoint_id, exc_info=True)
+        return None
+    payload = event.get("payload") or {}
+    if payload.get("exists") is False:
+        return None
+    return bind_provider_address(service, endpoint_id, payload.get("jid"))
+
+
+def hydrate_ladies_history(service, person_id: int, limit: int = 10) -> dict[str, Any]:
+    """Hydrate cached WhatsApp history as soon as a Ladies identity becomes known."""
+    person_id = int(person_id)
+    if not person_is_ladies_scoped(service.database, person_id):
+        return {"person_id": person_id, "requested": 0, "restored": 0, "existing": 0}
+    service.sync_person(person_id)
+    with service.database.session() as db:
+        endpoint_ids = list(db.scalars(
+            select(ContactEndpoint.endpoint_id).where(
+                ContactEndpoint.person_id == person_id,
+                ContactEndpoint.provider == "WHATSAPP",
+                ContactEndpoint.state == "ACTIVE",
+            )
+        ).all())
+    for endpoint_id in endpoint_ids:
+        refresh_endpoint_identity(service, int(endpoint_id))
+    return service.rehydrate_recent_history(person_id, limit=limit)
