@@ -11,6 +11,7 @@ const classifiedServiceSource=fs.readFileSync(new URL('../ladies/messaging/servi
 const classifiedRoutesSource=fs.readFileSync(new URL('../ladies/messaging/routes_classified.py',import.meta.url),'utf8')
 const integrationSource=fs.readFileSync(new URL('../ladies/messaging/integration.py',import.meta.url),'utf8')
 const effectsSource=fs.readFileSync(new URL('../ladies/static/explorer/js/effects/messaging.js',import.meta.url),'utf8')
+const overlaysSource=fs.readFileSync(new URL('../ladies/static/explorer/js/ui/screens/overlays.js',import.meta.url),'utf8')
 
 assert.ok(classificationSource.includes('LADIES_CONFIRMED = "LADIES_CONFIRMED"'))
 assert.ok(classificationSource.includes('NON_LADIES = "NON_LADIES"'))
@@ -36,6 +37,8 @@ assert.ok(classifiedRoutesSource.includes('/api/messaging/inbox'))
 assert.ok(classifiedRoutesSource.includes('/api/messaging/review'))
 assert.ok(classifiedRoutesSource.includes('/classification'))
 assert.ok(!effectsSource.includes("await api.classifyThread(threadId,{status:'LADIES_CONFIRMED',method:'manual_assignment'})"),'manual assignment must be atomic on backend')
+assert.ok(!overlaysSource.includes('data-create-person-form'),'review UI must not create arbitrary non-Ladies persons')
+assert.ok(overlaysSource.includes('bereits von Ladies.de bekannten Personen'),'review UI explains the assignment boundary')
 
 let state=structuredClone(initialState)
 const threads=[
