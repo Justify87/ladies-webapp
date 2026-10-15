@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 import logging
 import threading
@@ -11,10 +10,7 @@ from typing import Any
 LOGGER = logging.getLogger("ladies_explorer.saved_searches")
 MAX_SAVED_SEARCHES = 25
 BACKGROUND_REFRESH_SECONDS = 15 * 60
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+BACKGROUND_RETRY_SECONDS = 5 * 60
 
 
 def _parse_time(value: str | None) -> datetime | None:
@@ -34,61 +30,11 @@ def _result_key(row: dict[str, Any]) -> str:
     return str(row.get("advert_id") or row.get("external_listing_id") or "").strip()
 
 
-def _unique_result_keys(results: list[dict[str, Any]]) -> list[str]:
-    seen: set[str] = set()
-    keys: list[str] = []
-    for row in results:
-        key = _result_key(row)
-        if key and key not in seen:
-            seen.add(key)
-            keys.append(key)
-    return keys
-
-
-def baseline_from_results(results: list[dict[str, Any]], completed_at: str) -> dict[str, Any]:
-    return {"completed_at": completed_at, "keys": _unique_result_keys(results)}
-
-
-def compute_result_delta(
-    item: dict[str, Any],
-    results: list[dict[str, Any]],
-    completed_at: str,
-) -> dict[str, Any]:
-    current = baseline_from_results(results, completed_at)
-    previous = item.get("result_baseline")
-    if not isinstance(previous, dict) or not isinstance(previous.get("keys"), list):
-        return {
-            "initial": True,
-            "current_result_count": len(current["keys"]),
-            "new_results_count": 0,
-            "removed_results_count": 0,
-            "new_result_keys": [],
-        }
-
-    previous_keys = {str(value) for value in previous.get("keys", []) if str(value)}
-    seen_source = item.get("seen_result_keys")
-    seen_keys = {
-        str(value)
-        for value in (seen_source if isinstance(seen_source, list) and seen_source else previous.get("keys", []))
-        if str(value)
-    }
-    current_keys = set(current["keys"])
-    new_keys = [key for key in current["keys"] if key not in seen_keys]
-    removed = [key for key in previous_keys if key not in current_keys]
-    return {
-        "initial": False,
-        "current_result_count": len(current["keys"]),
-        "new_results_count": len(new_keys),
-        "removed_results_count": len(removed),
-        "new_result_keys": new_keys,
-    }
-
-
 def filter_saved_search_results(
     results: list[dict[str, Any]],
     filters: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Apply the same local visibility semantics used by the Explorer result selectors."""
+    """Apply the same local visibility semantics as the active Explorer selectors."""
     local = filters.get("local") if isinstance(filters.get("local"), dict) else {}
     mode = str(local.get("imageMode") or "ALL").upper()
     out: list[dict[str, Any]] = []
@@ -99,6 +45,8 @@ def filter_saved_search_results(
             continue
         if local.get("hideLikes") is True and str(row.get("preference") or "NONE") == "LIKE":
             continue
+        # Unknown classifications behave exactly like the active result selector:
+        # only a positively known business profile is hidden.
         if local.get("hideBusinessProfiles") is not False and bool(row.get("is_business_profile")):
             continue
         if local.get("photosOnly") and not str(row.get("thumbnail_url") or "").strip():
@@ -137,45 +85,16 @@ def search_payload_from_filters(filters: dict[str, Any]) -> dict[str, Any]:
 
 
 class SavedSearchService:
-    """Owns saved-search state, execution and race-safe mutation."""
+    """Owns saved-search definitions, read-only execution and result history."""
 
-    def __init__(self, settings_repository, search_service, *, business_classifier=None):
-        self.settings = settings_repository
+    def __init__(self, repository, search_service):
+        self.repository = repository
         self.search = search_service
-        self.business_classifier = business_classifier
         self._lock = threading.RLock()
         self._run_locks: dict[str, threading.Lock] = {}
 
-    def _items(self) -> list[dict[str, Any]]:
-        return copy.deepcopy(self.settings.get_saved_searches())
-
-    def _store(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return copy.deepcopy(self.settings.set_saved_searches(items[:MAX_SAVED_SEARCHES]))
-
-    def _classify_business_results(
-        self,
-        results: list[dict[str, Any]],
-        filters: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        local = filters.get("local") if isinstance(filters.get("local"), dict) else {}
-        if local.get("hideBusinessProfiles") is False or self.business_classifier is None:
-            return results
-
-        enriched: list[dict[str, Any]] = []
-        for row in results:
-            current = dict(row)
-            if not bool(current.get("business_profile_known")):
-                advert_id = _result_key(current)
-                if advert_id:
-                    classification = self.business_classifier(advert_id)
-                    if isinstance(classification, dict):
-                        current.update(classification)
-            enriched.append(current)
-        return enriched
-
     def list(self) -> list[dict[str, Any]]:
-        with self._lock:
-            return self._items()
+        return self.repository.list()
 
     def create(self, *, name: str, filters: dict[str, Any]) -> list[dict[str, Any]]:
         clean_name = str(name or "").strip()
@@ -183,22 +102,10 @@ class SavedSearchService:
             raise ValueError("Name fehlt")
         if not isinstance(filters, dict):
             raise ValueError("Filter fehlen")
-        now = _now_iso()
-        item = {
-            "id": str(uuid.uuid4()),
-            "name": clean_name,
-            "filters": copy.deepcopy(filters),
-            "created_at": now,
-            "updated_at": now,
-            "last_run_at": None,
-            "result_baseline": None,
-            "seen_result_keys": [],
-            "last_delta": None,
-            "unread_new_results": False,
-            "new_results_at": None,
-        }
         with self._lock:
-            return self._store([item, *self._items()])
+            if len(self.repository.list()) >= MAX_SAVED_SEARCHES:
+                raise ValueError(f"Maximal {MAX_SAVED_SEARCHES} gespeicherte Suchen sind möglich")
+            return self.repository.create(str(uuid.uuid4()), name=clean_name, filters=filters)
 
     def update(self, saved_id: str, *, name: str, filters: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
         clean_name = str(name or "").strip()
@@ -206,53 +113,22 @@ class SavedSearchService:
             raise ValueError("Name fehlt")
         if not isinstance(filters, dict):
             raise ValueError("Filter fehlen")
-        with self._lock:
-            items = self._items()
-            current = next((item for item in items if str(item.get("id")) == str(saved_id)), None)
-            if current is None:
-                raise KeyError(saved_id)
-            changed = current.get("filters") != filters
-            now = _now_iso()
-            updated = []
-            for item in items:
-                if str(item.get("id")) != str(saved_id):
-                    updated.append(item)
-                    continue
-                next_item = {
-                    **item,
-                    "name": clean_name,
-                    "filters": copy.deepcopy(filters),
-                    "updated_at": now,
-                }
-                if changed:
-                    next_item.update({
-                        "last_run_at": None,
-                        "result_baseline": None,
-                        "seen_result_keys": [],
-                        "last_delta": None,
-                        "unread_new_results": False,
-                        "new_results_at": None,
-                    })
-                updated.append(next_item)
-            return self._store(updated), changed
+        return self.repository.update_definition(saved_id, name=clean_name, filters=filters)
 
     def delete(self, saved_id: str) -> list[dict[str, Any]]:
-        with self._lock:
-            items = self._items()
-            next_items = [item for item in items if str(item.get("id")) != str(saved_id)]
-            if len(next_items) == len(items):
-                raise KeyError(saved_id)
-            return self._store(next_items)
+        return self.repository.delete(saved_id)
 
     def acknowledge_all(self) -> list[dict[str, Any]]:
-        with self._lock:
-            items = self._items()
-            if not any(bool(item.get("unread_new_results")) for item in items):
-                return items
-            return self._store([
-                {**item, "unread_new_results": False} if item.get("unread_new_results") else item
-                for item in items
-            ])
+        return self.repository.acknowledge_all()
+
+    def results(self, saved_id: str) -> list[dict[str, Any]]:
+        return self.repository.results(saved_id)
+
+    def materialize_result(self, saved_id: str, result_key: str) -> dict[str, Any]:
+        payload = self.repository.result(saved_id, result_key)
+        if payload is None:
+            raise KeyError(result_key)
+        return self.search.materialize_probe_result(payload)
 
     def _run_lock(self, saved_id: str) -> threading.Lock:
         with self._lock:
@@ -260,59 +136,45 @@ class SavedSearchService:
 
     def run(self, saved_id: str, *, mark_seen: bool) -> dict[str, Any]:
         with self._run_lock(saved_id):
-            with self._lock:
-                snapshot = next(
-                    (item for item in self._items() if str(item.get("id")) == str(saved_id)),
-                    None,
+            snapshot = self.repository.get(saved_id)
+            if snapshot is None:
+                raise KeyError(saved_id)
+            definition_version = int(snapshot.get("definition_version") or 1)
+            filters = snapshot.get("filters") or {}
+
+            try:
+                data = self.search.execute_probe(search_payload_from_filters(filters))
+                results = data.get("results") or []
+                visible = filter_saved_search_results(results, filters)
+                visible_keys = {_result_key(row) for row in visible if _result_key(row)}
+                outcome = self.repository.record_success(
+                    saved_id,
+                    definition_version=definition_version,
+                    results=results,
+                    visible_keys=visible_keys,
+                    mark_seen=mark_seen,
                 )
-                if snapshot is None:
-                    raise KeyError(saved_id)
-                revision = snapshot.get("updated_at")
-                filters = copy.deepcopy(snapshot.get("filters") or {})
+            except Exception as exc:
+                self.repository.record_failure(
+                    saved_id,
+                    definition_version=definition_version,
+                    error=str(exc),
+                )
+                raise
 
-            data = self.search.execute_transient(search_payload_from_filters(filters))
-            canonical_results = self._classify_business_results(data.get("results") or [], filters)
-            visible_results = filter_saved_search_results(canonical_results, filters)
-            completed_at = _now_iso()
-            baseline = baseline_from_results(visible_results, completed_at)
-            delta = compute_result_delta(snapshot, visible_results, completed_at)
-
-            with self._lock:
-                items = self._items()
-                current = next((item for item in items if str(item.get("id")) == str(saved_id)), None)
-                if current is None or current.get("updated_at") != revision:
-                    return {"items": items, "delta": None, "stale": True}
-
-                previous = current.get("result_baseline") or {}
-                previous_keys = previous.get("keys") if isinstance(previous.get("keys"), list) else []
-                seen = list(dict.fromkeys([
-                    *[str(value) for value in current.get("seen_result_keys") or []],
-                    *[str(value) for value in previous_keys],
-                    *baseline["keys"],
-                ]))
-                next_items = []
-                for item in items:
-                    if str(item.get("id")) != str(saved_id):
-                        next_items.append(item)
-                        continue
-                    has_new = int(delta.get("new_results_count") or 0) > 0
-                    next_items.append({
-                        **item,
-                        "last_run_at": completed_at,
-                        "result_baseline": baseline,
-                        "seen_result_keys": seen,
-                        "last_delta": delta,
-                        "unread_new_results": False if mark_seen else bool(item.get("unread_new_results") or has_new),
-                        "new_results_at": completed_at if has_new else item.get("new_results_at"),
-                    })
-                stored = self._store(next_items)
-                return {"items": stored, "delta": delta, "stale": False}
+            return {
+                "items": self.repository.list(),
+                "delta": outcome.get("delta"),
+                "stale": bool(outcome.get("stale")),
+            }
 
     def refresh_due(self) -> None:
         now = datetime.now(timezone.utc)
-        for item in self.list():
-            last = _parse_time(item.get("last_run_at"))
-            if last is not None and (now - last).total_seconds() < BACKGROUND_REFRESH_SECONDS:
+        for item in self.repository.list():
+            failed = bool(item.get("last_error"))
+            reference = _parse_time(item.get("last_attempt_at") if failed else item.get("last_run_at"))
+            minimum_age = BACKGROUND_RETRY_SECONDS if failed else BACKGROUND_REFRESH_SECONDS
+            if reference is not None and (now - reference).total_seconds() < minimum_age:
                 continue
             try:
                 self.run(str(item.get("id") or ""), mark_seen=False)
