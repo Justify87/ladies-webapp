@@ -15,9 +15,9 @@ export function createPricingEffects({store,getEffects}) {
   async function acceptPricing(form){
     const id=Number(form.dataset.extractionId),extraction=state().pricing.proposal;
     if(!id||!extraction?.proposal)return toast('Preisvorschlag fehlt');
-    const proposal=structuredClone(extraction.proposal);
+    const proposal=structuredClone(extraction.proposal),location=form.querySelector('[data-pricing-location]'),listingId=location?.value?Number(location.value):null;
     try{
-      await api.acceptPriceProposal(id,{proposal});
+      await api.acceptPriceProposal(id,{proposal,listing_id:Number.isFinite(listingId)?listingId:null});
       const t=S.currentThread(state());
       if(t)await loadPricingForThread(t.threadId);
       store.dispatch({type:'PRICING_PROPOSAL',value:null});

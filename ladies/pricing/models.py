@@ -54,6 +54,24 @@ class PriceExtraction(Base):
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
+class PriceExtractionLocation(Base):
+    """Location scope chosen for one extraction without mutating the extraction schema."""
+
+    __tablename__ = "price_extraction_locations"
+
+    price_extraction_id: Mapped[int] = mapped_column(
+        ForeignKey("price_extractions.price_extraction_id", ondelete="CASCADE"), primary_key=True
+    )
+    suggested_listing_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("listings.listing_id", ondelete="SET NULL")
+    )
+    selected_listing_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("listings.listing_id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class PriceExtractionMessage(Base):
     __tablename__ = "price_extraction_messages"
     __table_args__ = (
@@ -86,6 +104,26 @@ class PriceListRevisionMeta(Base):
     completeness: Mapped[str] = mapped_column(String(24), default="FULL", nullable=False)
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class PriceListLocationSnapshot(Base):
+    """Immutable display/location snapshot for one accepted price revision."""
+
+    __tablename__ = "price_list_location_snapshots"
+
+    price_list_id: Mapped[int] = mapped_column(
+        ForeignKey("price_lists.price_list_id", ondelete="CASCADE"), primary_key=True
+    )
+    listing_id: Mapped[Optional[int]] = mapped_column(ForeignKey("listings.listing_id", ondelete="SET NULL"))
+    listing_snapshot_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("listing_snapshots.snapshot_id", ondelete="SET NULL")
+    )
+    label: Mapped[Optional[str]] = mapped_column(String(512))
+    city: Mapped[Optional[str]] = mapped_column(String(160))
+    postal_code: Mapped[Optional[str]] = mapped_column(String(32))
+    address: Mapped[Optional[str]] = mapped_column(String(160))
+    external_listing_id: Mapped[Optional[str]] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class PriceOfferMeta(Base):
