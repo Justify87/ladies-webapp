@@ -1,4 +1,5 @@
-from .routes import install_messaging
+from .profile_requests import install_profile_requests
+from .routes import install_messaging as _install_messaging
 from .service import MessagingService, jid_phone
 
 # Baileys includes ``last_seen`` on presence events. The canonical service
@@ -15,5 +16,12 @@ def _presence_browser_event_with_last_seen(self, payload):
 
 
 MessagingService._presence_browser_event = _presence_browser_event_with_last_seen
+
+
+def install_messaging(app, *, data_dir, database=None):
+    service = _install_messaging(app, data_dir=data_dir, database=database)
+    install_profile_requests(app, messaging=service)
+    return service
+
 
 __all__ = ["MessagingService", "install_messaging", "jid_phone"]
