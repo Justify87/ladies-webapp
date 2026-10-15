@@ -36,7 +36,8 @@ class WhatsAppGateway:
 
     Runtime provisioning belongs to ``ladies_explorer.py``. This class only
     verifies that the prepared runtime exists and then manages one worker
-    process plus its request/response IPC contract.
+    process plus its request/response IPC contract. A worker process may only
+    exist while an explicit connection intent is active.
     """
 
     def __init__(self, worker_dir: Path, auth_dir: Path, event_handler: Callable[[dict[str, Any]], None]):
@@ -48,7 +49,9 @@ class WhatsAppGateway:
         self._write_lock = threading.Lock()
         self._serial_lock = threading.Lock()
         self._pending: dict[str, queue.Queue] = {}
-        self._stopping = False
+        self._stopping = True
+        self._desired_running = False
+        self._generation = 0
         self._restart_attempt = 0
         self._app_state_failures: list[float] = []
         self._last_app_state_recovery = 0.0
@@ -102,8 +105,22 @@ class WhatsAppGateway:
             return False, "WhatsApp-Abhängigkeiten fehlen; starte Ladies Explorer über den Launcher"
         return True, None
 
+    def activate(self) -> None:
+        """Enable the worker for an explicit connect/resume intent."""
+        with self._lock:
+            if not self._desired_running:
+                self._desired_running = True
+                self._generation += 1
+            self._stopping = False
+        self.start()
+
     def start(self) -> None:
         with self._lock:
+            # Legacy callers may still ask the gateway to start during service
+            # construction. Without an explicit connection intent this is a
+            # deliberate no-op; the connection lifecycle is the sole owner.
+            if not self._desired_running:
+                return
             if self.proc and self.proc.poll() is None:
                 return
             ok, detail = self.dependency_status()
@@ -112,6 +129,7 @@ class WhatsAppGateway:
                 return
             self.auth_dir.mkdir(parents=True, exist_ok=True)
             self._stopping = False
+            generation = self._generation
             self._set_state("CONNECTING")
             env = os.environ.copy()
             env["LADIES_WHATSAPP_AUTH_DIR"] = str(self.auth_dir)
@@ -128,7 +146,7 @@ class WhatsAppGateway:
             self.proc = proc
             threading.Thread(target=self._read_stdout, args=(proc,), daemon=True, name="wa-json").start()
             threading.Thread(target=self._read_stderr, args=(proc,), daemon=True, name="wa-log").start()
-            threading.Thread(target=self._watch, args=(proc,), daemon=True, name="wa-watch").start()
+            threading.Thread(target=self._watch, args=(proc, generation), daemon=True, name="wa-watch").start()
 
     def _read_stdout(self, proc: subprocess.Popen[str]) -> None:
         if not proc.stdout:
@@ -245,12 +263,17 @@ class WhatsAppGateway:
             level, safe = self._worker_log_level(raw)
             LOGGER.log(level, "baileys: %s", safe)
 
-    def _watch(self, proc: subprocess.Popen[str]) -> None:
+    def _watch(self, proc: subprocess.Popen[str], generation: int) -> None:
         code = proc.wait()
         with self._lock:
             if self.proc is proc:
                 self.proc = None
-            if self._stopping or self.state == "LOGGED_OUT":
+            if (
+                self._stopping
+                or not self._desired_running
+                or generation != self._generation
+                or self.state == "LOGGED_OUT"
+            ):
                 return
             delay = RESTART_DELAYS[min(self._restart_attempt, len(RESTART_DELAYS) - 1)]
             self._restart_attempt += 1
@@ -258,10 +281,24 @@ class WhatsAppGateway:
         LOGGER.warning("WhatsApp worker crashed code=%s restart_in=%ss", code, delay)
         time.sleep(delay)
         with self._lock:
-            if self._stopping or self.state == "LOGGED_OUT":
+            if (
+                self._stopping
+                or not self._desired_running
+                or generation != self._generation
+                or self.state == "LOGGED_OUT"
+            ):
                 return
-        self._set_state("RECONNECTING", f"Worker-Neustart nach {delay}s")
-        self.start()
+        try:
+            self._set_state("RECONNECTING", f"Worker-Neustart nach {delay}s")
+            self.start()
+            # The worker is intentionally idle on process startup. Reconnect
+            # explicitly so a crashed registered session really resumes.
+            self.command("connect", timeout=15)
+        except Exception:
+            with self._lock:
+                if self._desired_running and generation == self._generation and not self._stopping:
+                    self._set_state("ERROR", "WhatsApp-Worker konnte nicht neu verbunden werden")
+            LOGGER.warning("WhatsApp worker restart failed", exc_info=True)
 
     def _handle(self, event: dict[str, Any]) -> None:
         event_type = event.get("type")
@@ -298,7 +335,10 @@ class WhatsAppGateway:
     def command(self, command_type: str, timeout: int = 15, **payload):
         guard = self._serial_lock if command_type in SERIAL_COMMANDS else nullcontext()
         with guard:
-            self.start()
+            if command_type == "connect":
+                self.activate()
+            else:
+                self.start()
             with self._lock:
                 proc = self.proc
             if not proc or proc.poll() is not None:
@@ -338,11 +378,15 @@ class WhatsAppGateway:
                     self._pending.pop(request_id, None)
 
     def stop(self) -> None:
+        """Stop the worker and invalidate every pending automatic restart."""
         with self._lock:
+            self._desired_running = False
+            self._stopping = True
+            self._generation += 1
+            self._restart_attempt = 0
             proc = self.proc
             if not proc:
                 return
-            self._stopping = True
         try:
             request_id = uuid.uuid4().hex
             if proc.stdin:
