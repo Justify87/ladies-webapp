@@ -30,21 +30,6 @@ export function renderSwipeScreen(state){
   return `<div class="screen-view discover-screen">${renderDiscoverSwitcher('swipe')}<div class="discover-view-body"><div class="swipe-shell">${swipe}<button class="swipe-undo" data-action="discover-undo" ${state.discover.history.length?'':'disabled'} title="Letzte Entscheidung zurücknehmen">${icon('undo')}</button></div></div></div>`;
 }
 
-function renderMapPreview(state){
-  const selected=state.discover.map?.selected;
-  if(!selected)return '';
-  const rows=S.visibleSearchRows(state);
-  const row=rows.find(item=>Number(item.personId||0)===Number(selected.person_id||0)||String(item.advertId||'')===String(selected.advert_id||''));
-  const personId=Number(selected.person_id||row?.personId||0)||'';
-  const advertId=String(selected.advert_id||row?.advertId||'');
-  const name=row?.name||selected.name||'Unbekannt';
-  const city=row?.city||selected.city||'';
-  const postal=selected.postal_code||'';
-  const image=row?.thumbnail||selected.thumbnail_url||'';
-  const precision=selected.precision==='POSTAL'?'PLZ-Gebiet':'Suchgebiet';
-  return `<article class="discover-map-preview"><button type="button" class="discover-map-preview-close" data-map-preview-close aria-label="Vorschau schließen">×</button><button type="button" class="discover-map-preview-main" data-action="open-profile" data-person-id="${a(personId)}" data-advert-id="${a(advertId)}">${image?`<img src="${a(image)}" alt="${a(name)}">`:`<span class="discover-map-preview-image">${icon('user')}</span>`}<span class="discover-map-preview-copy"><b>${e(name)}${row?.age?` <small>${e(row.age)}</small>`:''}</b><span>${icon('pin')}${e([city,postal].filter(Boolean).join(' '))}</span><small>${e(precision)} · Profil öffnen</small></span></button>${personId?`<button type="button" class="discover-map-preview-like ${row?.preference==='LIKE'?'selected':''}" data-action="grid-like" data-person-id="${a(personId)}" data-advert-id="${a(advertId)}" aria-label="Like">${icon('heart')}</button>`:''}</article>`;
-}
-
 export function renderMapScreen(state){
   const mapState=state.discover.map||{};
   const rows=S.visibleSearchRows(state);
@@ -52,5 +37,5 @@ export function renderMapScreen(state){
   if(!rows.length)status=`<div class="discover-map-state">${icon('users')}<span>Keine Treffer für die aktuellen Filter.</span></div>`;
   else if(mapState.loading&&!mapState.points)status='<div class="discover-map-state"><span class="spinner"></span><span>Karte wird vorbereitet …</span></div>';
   else if(mapState.error&&!mapState.points)status=`<div class="discover-map-state">${icon('info')}<span>${e(mapState.error)}</span></div>`;
-  return `<div class="screen-view discover-screen map-screen">${renderDiscoverSwitcher('map')}<div class="discover-view-body"><div class="discover-map-shell"><div id="discoverMap" class="discover-map" aria-label="Kartenansicht der Profile"></div>${status}${renderMapPreview(state)}</div></div></div>`;
+  return `<div class="screen-view discover-screen map-screen">${renderDiscoverSwitcher('map')}<div class="discover-view-body"><div class="discover-map-shell"><div id="discoverMap" class="discover-map" aria-label="Kartenansicht der Profile"></div>${status}<div class="discover-map-preview-host" aria-live="polite"></div></div></div></div>`;
 }
