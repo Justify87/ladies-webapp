@@ -18,9 +18,7 @@ DEFAULT_SETTINGS = {
     "autoplay_videos": False,
     "reduced_motion": False,
     "default_filters": None,
-    "saved_searches": [],
 }
-PRIVATE_SETTING_KEYS = {"saved_searches"}
 
 
 def _dumps(value: Any) -> str:
@@ -37,7 +35,7 @@ def _loads(value: str | None, default: Any = None) -> Any:
 
 
 class SettingsRepository:
-    """Persistence boundary for application settings and private service state."""
+    """Persistence boundary for application settings."""
 
     def __init__(self, database: Database):
         self.database = database
@@ -59,8 +57,6 @@ class SettingsRepository:
     def set(self, key: str, value: Any) -> dict[str, Any]:
         if key not in DEFAULT_SETTINGS:
             raise ValueError(f"Unbekannte Einstellung: {key}")
-        if key in PRIVATE_SETTING_KEYS:
-            raise ValueError(f"Einstellung {key} wird ausschließlich über ihren Fachdienst verwaltet")
         with self.database.session() as db:
             row = db.get(AppSetting, key)
             if row is None:
@@ -69,21 +65,3 @@ class SettingsRepository:
                 row.value_json = _dumps(value)
                 row.updated_at = utcnow()
         return self.get_all()
-
-    def get_saved_searches(self) -> list[dict[str, Any]]:
-        with self.database.session() as db:
-            row = db.get(AppSetting, "saved_searches")
-            value = _loads(row.value_json if row else None, [])
-            return value if isinstance(value, list) else []
-
-    def set_saved_searches(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if not isinstance(items, list):
-            raise ValueError("saved_searches muss eine Liste sein")
-        with self.database.session() as db:
-            row = db.get(AppSetting, "saved_searches")
-            if row is None:
-                db.add(AppSetting(key="saved_searches", value_json=_dumps(items)))
-            else:
-                row.value_json = _dumps(items)
-                row.updated_at = utcnow()
-        return self.get_saved_searches()
