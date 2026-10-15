@@ -110,4 +110,4 @@ export const currentThread = state => {
 export const unreadTotal = state => (state.messaging.threads || []).reduce((sum,row)=>sum+Number(row.unread_count || row.unread || 0),0);
 export const profileTab = (state,personId) => state.profileUi.tabByPerson[String(personId)] || 'info';
 export const profileMediaIndex = (state,personId) => Number(state.profileUi.mediaByPerson[String(personId)] || 0);
-export const rootNav = routeName => ({grid:'swipe',profile:null,chat:'messages',history:'settings',archive:'settings'}[routeName] ?? routeName);
+export const rootNav = routeName => ({grid:'swipe',map:'swipe',profile:null,chat:'messages',history:'settings',archive:'settings'}[routeName] ?? routeName);
