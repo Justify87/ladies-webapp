@@ -1,6 +1,6 @@
 {
   "name": "ladies-whatsapp-worker",
-  "version": "9.9.8",
+  "version": "9.9.9",
   "private": true,
   "type": "module",
   "engines": {
