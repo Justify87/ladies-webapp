@@ -4,13 +4,12 @@ from typing import Any
 
 from sqlalchemy import select
 
-from ladies_v9.models import utcnow
+from ladies_v9.models import Listing, utcnow
 
 from .models import (
     ChatClassification,
     ChatMessage,
     ChatThread,
-    ContactEndpoint,
     EndpointClassification,
 )
 
@@ -18,6 +17,7 @@ LADIES_CONFIRMED = "LADIES_CONFIRMED"
 UNKNOWN = "UNKNOWN"
 NON_LADIES = "NON_LADIES"
 VALID_STATUSES = {LADIES_CONFIRMED, UNKNOWN, NON_LADIES}
+LADIES_SOURCE = "LADIES"
 
 
 class MessagingClassifier:
@@ -49,6 +49,19 @@ class MessagingClassifier:
         ]
 
     @staticmethod
+    def _person_is_ladies(db, person_id: int | None) -> bool:
+        if person_id is None:
+            return False
+        return db.scalar(
+            select(Listing.listing_id)
+            .where(
+                Listing.person_id == int(person_id),
+                Listing.source == LADIES_SOURCE,
+            )
+            .limit(1)
+        ) is not None
+
+    @staticmethod
     def _ensure_thread_row(db, thread: ChatThread) -> ChatClassification:
         row = db.get(ChatClassification, int(thread.thread_id))
         if row is None:
@@ -75,11 +88,12 @@ class MessagingClassifier:
         return row
 
     def reconcile(self) -> None:
-        """Backfill and promote only durable identity evidence.
+        """Backfill and promote only durable Ladies identity evidence.
 
-        Existing person links are repository-owned identity evidence. A persisted
-        NON_LADIES endpoint wins over a newly inferred person link until the user
-        explicitly confirms the chat again.
+        A Person link alone is not enough: automatic confirmation additionally
+        requires persistent LADIES listing provenance. A persisted NON_LADIES
+        endpoint wins over newly inferred identity until the user explicitly
+        confirms the chat again.
         """
 
         with self.database.session() as db:
@@ -103,15 +117,15 @@ class MessagingClassifier:
                     row.decided_at = utcnow()
                     row.updated_at = utcnow()
                     continue
-                if thread.person_id is not None:
+                if self._person_is_ladies(db, thread.person_id):
                     row.status = LADIES_CONFIRMED
-                    row.method = "persisted_person_link"
+                    row.method = "persisted_ladies_identity"
                     row.decided_at = utcnow()
                     row.updated_at = utcnow()
                     for item in endpoint_rows:
                         if item.status == UNKNOWN:
                             item.status = LADIES_CONFIRMED
-                            item.method = "persisted_person_link"
+                            item.method = "persisted_ladies_identity"
                             item.decided_at = utcnow()
                             item.updated_at = utcnow()
 
@@ -125,8 +139,8 @@ class MessagingClassifier:
             thread = db.get(ChatThread, int(thread_id))
             if thread is None:
                 raise KeyError(thread_id)
-            if status == LADIES_CONFIRMED and thread.person_id is None:
-                raise ValueError("Ein Ladies-Chat muss zuerst einer Ladies-Person zugeordnet werden")
+            if status == LADIES_CONFIRMED and not self._person_is_ladies(db, thread.person_id):
+                raise ValueError("Ein Ladies-Chat muss einer Person mit Ladies.de-Provenienz zugeordnet sein")
 
             row = self._ensure_thread_row(db, thread)
             row.status = status
@@ -150,6 +164,8 @@ class MessagingClassifier:
 
     def classify_person_thread(self, person_id: int, *, method: str) -> dict[str, Any] | None:
         with self.database.session() as db:
+            if not self._person_is_ladies(db, int(person_id)):
+                raise ValueError("Person besitzt keine Ladies.de-Provenienz")
             thread = db.scalar(select(ChatThread).where(ChatThread.person_id == int(person_id)).limit(1))
             thread_id = int(thread.thread_id) if thread is not None else None
         if thread_id is None:
