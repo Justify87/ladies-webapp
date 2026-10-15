@@ -15,7 +15,7 @@ export function renderApp(state) {
   const route=S.currentRoute(state);
   let body='';
   if(route.name==='search') body=renderSearch(state);
-  else if(route.name==='saved-searches') body=renderSavedSearches(state,route);
+  else if(route.name==='saved-searches'||route.name==='saved-search-results') body=renderSavedSearches(state,route);
   else if(route.name==='swipe') body=renderSwipeScreen(state);
   else if(route.name==='grid') body=renderGrid(state);
   else if(route.name==='favorites') body=renderFavorites(state);
