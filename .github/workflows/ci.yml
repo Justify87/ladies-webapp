@@ -68,14 +68,30 @@ jobs:
           assert 'BUSINESS_PROFILE_SOURCE = "BUSINESS_PROFILE"' in repository_source
           assert '**classification' in repository_source
 
-          normalize = runpy.run_path('ladies/pricing/normalize.py')
-          text = '10045 Minuten\n130 Std'
-          pairs = {(row['duration_minutes'], row['amount_cents']) for row in normalize['extract_price_duration_pairs'](text)}
-          durations = {row['minutes'] for row in normalize['extract_durations'](text)}
-          amounts = {row['amount_cents'] for row in normalize['extract_money'](text)}
-          assert (45, 10000) in pairs and (60, 13000) in pairs
-          assert {45, 60}.issubset(durations)
-          assert {10000, 13000}.issubset(amounts)
+          detector_source = Path('ladies/pricing/detector.py').read_text(encoding='utf-8')
+          assert 'import re' not in detector_source
+          detector_namespace = {}
+          exec(
+              detector_source.replace(
+                  'from .schema import PRICE_DURATION_OPTIONS',
+                  'PRICE_DURATION_OPTIONS = (15, 20, 30, 45, 60, 90, 120)',
+              ),
+              detector_namespace,
+          )
+          detector = detector_namespace['PriceMessageDetector'](['anal', 'zungenkuss', 'französisch'])
+          assert detector.detect('30 100 60 160').is_price_message
+          assert detector.detect('anal +50').is_price_message
+          assert detector.detect('100', previous_outgoing='Was kostet 30 Minuten?').is_price_message
+          assert detector.detect('10045 Minuten').is_price_message
+          assert not detector.detect('Bin gegen 18 Uhr da').is_price_message
+
+          model_source = Path('ladies/pricing/model_runtime.py').read_text(encoding='utf-8')
+          assert 'extract_price_proposal' in model_source
+          assert '"-j"' in model_source
+          assert '.find("{")' not in model_source
+          assert not Path('ladies/pricing/normalize.py').exists()
+          assert not Path('ladies/pricing/rules.py').exists()
+          assert not Path('ladies/pricing/signal.py').exists()
 
           class ValidationError(ValueError):
               pass
@@ -107,6 +123,7 @@ jobs:
 
           node --experimental-default-type=module - <<'JS'
           import assert from 'node:assert/strict';
+          import fs from 'node:fs';
           import { canonicalPricingService, currentSavedPricingExtractionId } from './ladies/static/explorer/js/ux_patch.js';
           import { captureScrollState, updateScrollableRegion } from './ladies/static/explorer/js/app/scroll_state.js';
           import { businessProfileEvidence, visibleSearchRows } from './ladies/static/explorer/js/app/selectors.js';
@@ -134,17 +151,19 @@ jobs:
             {label:'Girlfriend-Sex',value:'girlfriendsex'},
             {label:'69',value:'69-stellung'}
           ]}]};
-          assert.equal(canonicalPricingService({service_key:'KISSING',raw_label:'Küssen'},config)?.value,'zungenkuss');
-          assert.equal(canonicalPricingService({service_key:'FRENCH',raw_label:'Französisch'},config)?.value,'franzoesisch');
-          assert.equal(canonicalPricingService({service_key:'MASSAGE',raw_label:'Body to Body'},config)?.value,'body-to-body-massage');
-          assert.equal(canonicalPricingService({service_key:'GFE',raw_label:'GFE'},config)?.value,'girlfriendsex');
-          assert.equal(canonicalPricingService({service_key:'SIXTY_NINE',raw_label:'69'},config)?.value,'69-stellung');
+          assert.equal(canonicalPricingService({service_key:'zungenkuss',raw_label:'ZK'},config)?.value,'zungenkuss');
+          assert.equal(canonicalPricingService({service_key:'franzoesisch',raw_label:'Franz.'},config)?.value,'franzoesisch');
+          assert.equal(canonicalPricingService({service_key:null,raw_label:'AV'},config)?.value,'anal');
           assert.equal(canonicalPricingService({service_key:'unknown-old-service',raw_label:'legacy'},config),null);
           assert.equal(currentSavedPricingExtractionId([
             {price_extraction_id:4,status:'ACCEPTED',accepted_price_list_id:10},
             {price_extraction_id:7,status:'ACCEPTED',accepted_price_list_id:11},
             {price_extraction_id:8,status:'ACCEPTED_NO_CHANGE',accepted_price_list_id:11}
           ]),8);
+          const messagingSource=fs.readFileSync('./ladies/static/explorer/js/ui/screens/messaging.js','utf8');
+          assert.ok(messagingSource.includes('PRICING_DURATIONS=[15,20,30,45,60,90,120]'));
+          assert.ok(messagingSource.includes('data-pricing-field="duration"'));
+          assert.ok(messagingSource.includes('data-pricing-location'));
 
           function hostWithRoots(roots,nextRoots=[]){
             let writes=0;
