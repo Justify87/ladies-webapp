@@ -8,7 +8,7 @@ import {
 } from '../ladies/static/explorer/js/search_intelligence.js';
 import { savedSearchHasUnread } from '../ladies/static/explorer/js/saved_searches.js';
 import { installActiveSearchSync } from '../ladies/static/explorer/js/search_runtime.js';
-import { mapRequestDescriptor } from '../ladies/static/explorer/js/effects/map.js';
+import { createMapEffects, mapRequestDescriptor } from '../ladies/static/explorer/js/effects/map.js';
 import { filterMapFeatures } from '../ladies/static/explorer/js/ui/discover_map.js';
 import { threadRows, unreadTotal } from '../ladies/static/explorer/js/app/selectors.js';
 import { canonicalPriceRows, invalidatesProfilePricing } from '../ladies/static/explorer/js/requested_fixes.js';
@@ -32,10 +32,18 @@ assert.deepEqual(
 assert.equal(savedSearchHasUnread({savedSearches:{items:[{unread_new_results:false},{unread_new_results:true}]}}),true);
 assert.equal(savedSearchHasUnread({savedSearches:{items:[{unread_new_results:false}]}}),false);
 
-// Active map identity comes only from the current canonical active results.
-const descriptor=mapRequestDescriptor({search:{filters:{city:'Leipzig'},results:[{listing_id:7},{listing_id:8},{listing_id:7}]}});
-assert.deepEqual(descriptor.listingIds,[7,8]);
-assert.match(descriptor.key,/leipzig\|7,8$/);
+// Active map identity comes only from current canonical results and carries the
+// row-level city fallback for listings that have not been profile-ingested yet.
+const descriptor=mapRequestDescriptor({search:{results:[
+  {listing_id:7,city:'Leipzig'},
+  {listing_id:8,city:'Markkleeberg'},
+  {listing_id:7,city:'Leipzig'}
+]}});
+assert.deepEqual(descriptor.items,[
+  {listing_id:7,city:'Leipzig'},
+  {listing_id:8,city:'Markkleeberg'}
+]);
+assert.equal(descriptor.key,JSON.stringify([[7,'leipzig'],[8,'markkleeberg']]));
 
 // A logical location remains one map point even when multiple profiles share it;
 // local filters reduce the profile references without creating overlapping points.
@@ -52,6 +60,35 @@ const groupedFiltered=filterMapFeatures(groupedPoints,[{personId:2,listing_id:22
 assert.equal(groupedFiltered.features.length,1);
 assert.equal(groupedFiltered.features[0].properties.profile_count,1);
 assert.equal(JSON.parse(groupedFiltered.features[0].properties.profiles_json)[0].person_id,2);
+
+// A late response from an older active result set must never replace newer map data.
+const mapState={
+  search:{results:[{listing_id:1,city:'Leipzig'}]},
+  discover:{map:{key:null,points:null,loading:false,error:null}}
+};
+const mapStore={
+  getState:()=>mapState,
+  dispatch(action){
+    if(action.type==='DISCOVER_MAP_LOADING')mapState.discover.map={...mapState.discover.map,key:action.key,loading:Boolean(action.value),error:action.error||null};
+    else if(action.type==='DISCOVER_MAP_POINTS')mapState.discover.map={key:action.key,points:action.points,loading:false,error:null};
+    else if(action.type==='DISCOVER_MAP_CLEAR')mapState.discover.map={key:null,points:null,loading:false,error:null};
+  }
+};
+const mapRequests=[];
+const mapEffects=createMapEffects({
+  store:mapStore,
+  mapPoints:payload=>new Promise(resolve=>mapRequests.push({payload,resolve}))
+});
+const firstMapLoad=mapEffects.loadMapPoints();
+assert.deepEqual(mapRequests[0].payload.items,[{listing_id:1,city:'Leipzig'}]);
+mapState.search.results=[{listing_id:2,city:'Grimma'}];
+const secondMapLoad=mapEffects.loadMapPoints();
+assert.deepEqual(mapRequests[1].payload.items,[{listing_id:2,city:'Grimma'}]);
+mapRequests[1].resolve({type:'FeatureCollection',features:[],meta:{pending_count:0,marker:'new'}});
+await secondMapLoad;
+mapRequests[0].resolve({type:'FeatureCollection',features:[],meta:{pending_count:0,marker:'old'}});
+await firstMapLoad;
+assert.equal(mapState.discover.map.points.meta.marker,'new','late map responses must be ignored');
 
 // Manual A must suppress only the concurrent automatic fetch, not future A hydration after B.
 const baseFilters=city=>({city,radius:20,category:'',ageMin:18,ageMax:45,heightMin:140,heightMax:200,selected:{},local:{}});
@@ -178,6 +215,8 @@ opened=service.materialize_result(saved_id,'10')
 assert opened['person_id']==99 and search.materialized==['10']
 `], {stdio:'inherit'});
 
+execFileSync('python', ['tools/check_map_view.py'], {stdio:'inherit'});
+
 // Message filters are local views over one canonical all-thread collection.
 const messageState={messaging:{query:'',viewFilter:'UNASSIGNED',threads:[
   {thread_id:1,person_id:11,display_name:'A',unread_count:2},
@@ -207,6 +246,7 @@ const mapEffectsSource=readFileSync(new URL('../ladies/static/explorer/js/effect
 const mapServiceSource=readFileSync(new URL('../ladies/core/services/map.py',import.meta.url),'utf8');
 const mapRepositorySource=readFileSync(new URL('../ladies/core/repositories/map.py',import.meta.url),'utf8');
 const mapViewSource=readFileSync(new URL('../ladies/map_view.py',import.meta.url),'utf8');
+const appSource=readFileSync(new URL('../ladies/app.py',import.meta.url),'utf8');
 const profileSource=readFileSync(new URL('../ladies/static/explorer/js/ui/profile.js',import.meta.url),'utf8');
 const prototypeSource=readFileSync(new URL('../ladies/static/explorer/css/prototype.css',import.meta.url),'utf8');
 const chromeSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/chrome.js',import.meta.url),'utf8');
@@ -245,13 +285,20 @@ assert.match(mapEffectsSource,/mapRequestDescriptor\(store\.getState\(\)\)/,'map
 assert.match(mapEffectsSource,/sequence!==generation\|\|latest\.key!==requested\.key/,'stale map responses must be rejected');
 assert.doesNotMatch(mapEffectsSource,/recentSearches|search_run_id|runId/,'map must not fall back to historical search runs');
 assert.match(clientSource,/mapPoints:\s*payload\s*=>\s*request\('\/api\/map-points'/,'frontend must use the local map API');
-assert.match(mapViewSource,/@app\.post\("\/api\/map-points"\)/,'map API must be active-result scoped and POST-only');
-assert.match(mapViewSource,/listing_ids/,'map API must accept explicit active listing identities');
+assert.match(mapViewSource,/@app\.post\("\/api\/map-points"\)/,'map API must be POST-only');
+assert.match(mapViewSource,/payload\.get\("items"\)/,'map API must accept explicit active result identities plus row-level cities');
+assert.doesNotMatch(mapViewSource,/fallback_city|listing_ids/,'retired global-city/listing-id-only map payload must not return');
 assert.doesNotMatch(mapViewSource,/search_run_id/,'map API must not depend on SearchRun history');
 assert.match(mapRepositorySource,/ListingSnapshot\.snapshot_id == Listing\.current_snapshot_id/,'map repository must join only the canonical current snapshot');
 assert.doesNotMatch(mapRepositorySource,/order_by\(|captured_at/,'map repository must not load full snapshot history');
-assert.match(mapServiceSource,/background\.submit/,'missing geocodes must be warmed in the existing background executor');
+assert.match(mapServiceSource,/active_city_by_listing/,'map service must use each active row city only when canonical snapshot location is absent');
+assert.match(mapServiceSource,/0 if spec\["kind"\] == "postal" else 1/,'postal geocoding must be prioritized over city fallback');
+assert.match(mapServiceSource,/postal_record\.get\("status"\) == "NOT_FOUND"/,'city fallback must wait for a definitively unresolved postcode');
+assert.match(mapServiceSource,/background\.submit/,'missing geocodes must run in a background executor');
+assert.match(appSource,/map_background = BackgroundTasks\(max_workers=1, max_pending=4\)/,'map geocoding must have an isolated bounded executor');
+assert.match(appSource,/install_map_view\(app, background=map_background/,'map geocoding must not consume the shared domain background executor');
 assert.match(mapServiceSource,/map-location-cache\.json/,'resolved locations must be cached locally');
+assert.match(mapServiceSource,/with self\._lock:\s*payload = orjson\.dumps[\s\S]*tmp\.replace\(self\.cache_path\)/,'cache serialization and atomic replace must share one lock');
 assert.match(mapServiceSource,/POSTAL_RE/,'postcodes must be derived locally from stored data');
 assert.match(mapServiceSource,/groups\.setdefault\(location_key/,'profiles sharing a PLZ/search area must be grouped into one logical location');
 const featureCollectionBlock=mapServiceSource.split('def feature_collection',2)[1]||'';
