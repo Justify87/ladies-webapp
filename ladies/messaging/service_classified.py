@@ -2,17 +2,19 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from .classification import NON_LADIES
+from ladies_v9.models import Listing
+
+from .classification import LADIES_SOURCE, NON_LADIES
 from .models import ContactEndpoint, EndpointClassification
 from .service_v2 import MessagingService as _CanonicalMessagingService
 
 
 class MessagingService(_CanonicalMessagingService):
-    """Canonical service with sticky manual identity exclusions.
+    """Canonical service with durable Ladies identity boundaries.
 
-    This is deliberately narrow: transport/persistence stays in service_v2. The
-    only extra rule is that automatic identity discovery cannot override a user's
-    explicit NON_LADIES endpoint decision. Explicit/manual assignment still may.
+    Transport/persistence stays in service_v2. This layer only protects explicit
+    NON_LADIES decisions from automatic identity discovery and makes manual chat
+    assignment offer actual Ladies-backed persons.
     """
 
     @staticmethod
@@ -49,6 +51,25 @@ class MessagingService(_CanonicalMessagingService):
             person_id,
             add_system_message=add_system_message,
         )
+
+    def assignment_candidates(self, endpoint_id: int) -> list[dict]:
+        items = super().assignment_candidates(endpoint_id)
+        person_ids = [int(item.get("person_id") or 0) for item in items if item.get("person_id")]
+        if not person_ids:
+            return []
+        with self.database.session() as db:
+            ladies_ids = set(
+                int(value)
+                for value in db.scalars(
+                    select(Listing.person_id)
+                    .where(
+                        Listing.person_id.in_(person_ids),
+                        Listing.source == LADIES_SOURCE,
+                    )
+                    .distinct()
+                ).all()
+            )
+        return [item for item in items if int(item.get("person_id") or 0) in ladies_ids]
 
 
 __all__ = ["MessagingService"]
