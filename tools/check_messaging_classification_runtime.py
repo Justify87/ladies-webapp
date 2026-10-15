@@ -51,6 +51,14 @@ def _person(database: Database, name: str, phone: str | None = None) -> int:
         return int(person.person_id)
 
 
+def _plain_person(database: Database, name: str) -> int:
+    with database.session() as db:
+        person = Person(display_name=name)
+        db.add(person)
+        db.flush()
+        return int(person.person_id)
+
+
 def _conversation(
     database: Database,
     *,
@@ -136,6 +144,26 @@ def check_reads_are_side_effect_free(database: Database) -> None:
         assert db.get(ChatClassification, thread_id) is None
 
 
+def check_server_rejects_non_ladies_assignment(database: Database) -> None:
+    person_id = _plain_person(database, "PrivatePerson")
+    thread_id, endpoint_id, _ = _conversation(
+        database,
+        person_id=None,
+        phone="+491709999999",
+        text="not a ladies identity",
+    )
+    service = _service(database)
+    try:
+        service.assign_endpoint(endpoint_id, person_id)
+    except ValueError as exc:
+        assert "Ladies.de-Provenienz" in str(exc)
+    else:
+        raise AssertionError("manual assignment accepted a person without Ladies.de provenance")
+    with database.session() as db:
+        assert db.get(ContactEndpoint, endpoint_id).person_id is None
+        assert db.get(ChatThread, thread_id).person_id is None
+
+
 def check_sticky_exclusion_and_manual_override(database: Database) -> None:
     phone = "+491701111111"
     person_id = _person(database, "Sticky", phone)
@@ -217,6 +245,7 @@ def main() -> None:
         database.create_schema()
         check_race_safe_bootstrap(database)
         check_reads_are_side_effect_free(database)
+        check_server_rejects_non_ladies_assignment(database)
         check_sticky_exclusion_and_manual_override(database)
         check_identity_merge_keeps_private_chat_separate(database)
     print("messaging classification runtime checks passed")
