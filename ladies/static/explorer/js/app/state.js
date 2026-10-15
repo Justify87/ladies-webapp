@@ -8,6 +8,7 @@ export const initialState = Object.freeze({
     filters:{city:defaults.city || 'Leipzig',radius:Number(defaults.radius_km || 20),category:'',ageMin:18,ageMax:45,heightMin:140,heightMax:200,selected:{geschlecht:['weiblich']},local:{photosOnly:true,videoOnly:false,hideDislikes:true,imageMode:'ALL'}},
     filterQuery:'', preview:{status:'idle',count:null,error:null}, recent:[], results:[], meta:null, loading:false, error:null
   },
+  savedSearches:{items:[],resultsById:{},loadingById:{}},
   discover:{mode:'swipe',index:0,mediaIndex:{},history:[]},
   profiles:{bundles:{},details:{},loading:{}},
   lists:{tab:'FAVORITE',sort:'DATE',items:[],loading:false,statusCheck:{running:false,done:0,total:0,checkedAt:null}},
