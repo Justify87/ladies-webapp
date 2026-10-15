@@ -46,8 +46,6 @@ def _merge_profile_request_refs(
     source_thread_id: int | None = None,
     target_thread_id: int | None = None,
 ) -> bool:
-    # Import lazily so service.py -> integration.py does not create an import cycle
-    # while the messaging package registers the additive ProfileRequest model.
     from .profile_requests import ProfileRequest
 
     changed = False
@@ -80,8 +78,6 @@ def _move_mergeable_source_endpoints(
 ) -> bool:
     changed = False
     for endpoint in endpoints:
-        # Reconciliation structurally detaches NON_LADIES endpoints. Keep the
-        # explicit check as a fail-safe for legacy/inconsistent rows.
         if endpoint_status_in_session(db, int(endpoint.endpoint_id)) == NON_LADIES:
             if endpoint.person_id is not None:
                 endpoint.person_id = None
@@ -118,17 +114,12 @@ def merge_messaging_person(db: Session, source_id: int, target_id: int) -> bool:
     source_status = reconcile_thread_in_session(db, source_thread).status if source_thread is not None else None
     target_status = reconcile_thread_in_session(db, target_thread).status if target_thread is not None else None
 
-    # reconcile_thread_in_session detaches NON_LADIES thread/endpoint identity.
-    # Excluded conversations deliberately do not participate in the person merge.
     merge_source = source_thread if source_thread is not None and source_status != NON_LADIES else None
     merge_target = target_thread if target_thread is not None and target_status != NON_LADIES else None
 
     changed = bool(endpoints or source_thread is not None)
     changed = _move_mergeable_source_endpoints(db, endpoints, source_id, target_id) or changed
 
-    # If the old target conversation was explicitly excluded, it was detached by
-    # reconciliation. Any Ladies-domain request references must follow the new
-    # canonical conversation (or become unbound if no canonical chat exists).
     if target_thread is not None and target_status == NON_LADIES:
         changed = _move_profile_request_thread_refs(
             db,
@@ -137,8 +128,6 @@ def merge_messaging_person(db: Session, source_id: int, target_id: int) -> bool:
         ) or changed
 
     if source_thread is not None and source_status == NON_LADIES:
-        # The private conversation stays intact and unassigned. Only Ladies-domain
-        # request metadata follows the identity merge.
         changed = _merge_profile_request_refs(
             db,
             source_id,
@@ -150,7 +139,7 @@ def merge_messaging_person(db: Session, source_id: int, target_id: int) -> bool:
         if merge_target is None:
             merge_source.person_id = int(target_id)
             changed = _merge_profile_request_refs(db, source_id, target_id) or changed
-            reconcile_thread_in_session(db, merge_source)
+            merge_target = merge_source
         elif merge_target.thread_id != merge_source.thread_id:
             source_thread_id = int(merge_source.thread_id)
             target_thread_id = int(merge_target.thread_id)
@@ -173,7 +162,6 @@ def merge_messaging_person(db: Session, source_id: int, target_id: int) -> bool:
             times = [x for x in (merge_target.last_message_at, merge_source.last_message_at) if x]
             if times:
                 merge_target.last_message_at = max(times)
-            reconcile_thread_in_session(db, merge_target)
             db.execute(delete(ChatThread).where(ChatThread.thread_id == source_thread_id))
             try:
                 db.expunge(merge_source)
@@ -183,6 +171,12 @@ def merge_messaging_person(db: Session, source_id: int, target_id: int) -> bool:
             changed = _merge_profile_request_refs(db, source_id, target_id) or changed
     else:
         changed = _merge_profile_request_refs(db, source_id, target_id) or changed
+
+    if merge_target is not None:
+        # Newly moved endpoints inherit the surviving thread's sticky decision;
+        # if the target person now provides durable Ladies provenance, UNKNOWN is
+        # promoted exactly once here inside the same identity-merge transaction.
+        reconcile_thread_in_session(db, merge_target)
 
     LOGGER.info(
         "Messaging person merge source_person_id=%s target_person_id=%s source_status=%s target_status=%s",
