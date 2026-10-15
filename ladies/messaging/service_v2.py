@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy import desc, select
@@ -9,6 +10,8 @@ from ladies_v9.models import PersonUserState, utcnow
 from .models import ChatMessage, ChatThread
 from .service import MessagingService as _BaseMessagingService
 from .service import jid_phone
+
+LOGGER = logging.getLogger("ladies_explorer.messaging.service_v2")
 
 
 class MessagingService(_BaseMessagingService):
@@ -48,8 +51,9 @@ class MessagingService(_BaseMessagingService):
                     continue
                 payload = self._thread_payload(db, thread, last)
 
-                # A profile favorite is UI enrichment only. It never participates
-                # in thread selection, persistence, assignment, or message ingest.
+                # Profile state is optional UI enrichment only. It never
+                # participates in thread selection, persistence, assignment,
+                # history sync, or message ingest.
                 if thread.person_id is not None:
                     state = db.get(PersonUserState, int(thread.person_id))
                     payload["favorite"] = bool(state.favorite) if state else False
@@ -111,7 +115,21 @@ class MessagingService(_BaseMessagingService):
         return payload or {}
 
     def _worker_event(self, event: dict[str, Any]) -> None:
-        if event.get("type") == "sync":
+        event_type = event.get("type")
+        if event_type == "history_batch":
+            ingested = 0
+            for payload in event.get("payloads") or []:
+                if not isinstance(payload, dict):
+                    continue
+                try:
+                    self._ingest_message(payload)
+                    ingested += 1
+                except Exception:
+                    LOGGER.exception("Failed to ingest WhatsApp history message")
+            if ingested:
+                self.events.publish({"type": "history_batch", "count": ingested})
+            return
+        if event_type == "sync":
             self.events.publish(
                 {
                     "type": "sync",
