@@ -14,6 +14,7 @@ from .encounter_metadata import install_encounter_metadata
 from .lan_access import LanAccessManager
 from .messaging import install_messaging
 from .messaging.integration import merge_messaging_person, reconcile_identity_events as reconcile_messaging_identity_events
+from .messaging.scope import hydrate_ladies_history, reconcile_ladies_endpoints
 from .pricing import install_pricing
 from .pricing.integration import merge_pricing_person, reconcile_identity_events as reconcile_pricing_identity_events
 from .search_preview import install_search_preview
@@ -56,17 +57,16 @@ def _is_loopback(remote_addr: str | None) -> bool:
 
 
 def _install_domain_route_integrations(app, *, database, messaging, background) -> None:
-    """Attach domain side effects to the routes that own the corresponding mutation."""
+    """Attach identity side effects to the routes that establish Ladies identity."""
 
     def reconcile_identity_state() -> None:
-        # Pricing needs the source chat thread before messaging may collapse it.
         reconcile_pricing_identity_events(database)
         reconcile_messaging_identity_events(database)
 
-    def rehydrate_liked_person(person_id: int) -> None:
-        result = messaging.rehydrate_recent_history(int(person_id), limit=10)
+    def hydrate_person(person_id: int) -> None:
+        result = hydrate_ladies_history(messaging, int(person_id), limit=10)
         LOGGER.info(
-            "WhatsApp rehydrate after like person_id=%s restored=%s requested=%s existing=%s",
+            "WhatsApp history hydrated after Ladies identity ingest person_id=%s restored=%s requested=%s existing=%s",
             person_id,
             result.get("restored", 0),
             result.get("requested", 0),
@@ -84,8 +84,14 @@ def _install_domain_route_integrations(app, *, database, messaging, background) 
             payload = response.get_json(silent=True) or {}
             person_id = (payload.get("identity") or {}).get("person_id")
             if person_id:
-                messaging.sync_person(int(person_id))
+                person_id = int(person_id)
+                messaging.sync_person(person_id)
                 reconcile_identity_state()
+                background.submit(
+                    f"wa-hydrate:{person_id}",
+                    hydrate_person,
+                    person_id,
+                )
         except Exception:
             LOGGER.exception("Identity reconciliation failed endpoint=api_profile")
         return response
@@ -106,31 +112,6 @@ def _install_domain_route_integrations(app, *, database, messaging, background) 
         return response
 
     app.view_functions["api_identity_merge"] = merge_with_identity_sync
-
-    person_state_view = app.view_functions["api_person_state"]
-
-    @wraps(person_state_view)
-    def person_state_with_rehydrate(*args, **kwargs):
-        submitted = request.get_json(silent=True) or {}
-        response = app.make_response(person_state_view(*args, **kwargs))
-        if response.status_code >= 400 or str(submitted.get("preference") or "").upper() != "LIKE":
-            return response
-        try:
-            person_id = kwargs.get("person_id")
-            if person_id is None and args:
-                person_id = args[0]
-            if person_id is not None:
-                person_id = int(person_id)
-                background.submit(
-                    f"wa-rehydrate:{person_id}",
-                    rehydrate_liked_person,
-                    person_id,
-                )
-        except Exception:
-            LOGGER.exception("WhatsApp rehydrate scheduling failed endpoint=api_person_state")
-        return response
-
-    app.view_functions["api_person_state"] = person_state_with_rehydrate
 
 
 def create_app(
@@ -179,22 +160,14 @@ def create_app(
 
     @app.after_request
     def browser_runtime_policy(response):
-        # MediaPipe needs jsDelivr + Google model storage, but not Google's ODML
-        # telemetry endpoint. Only install the browser-wide policy when the route
-        # did not already provide a stricter policy (for example `sandbox` on
-        # active document downloads).
         if not response.headers.get("Content-Security-Policy"):
             response.headers["Content-Security-Policy"] = BROWSER_CSP
 
-        # These read-only summaries are triggered by several independent UI
-        # mutations. A one-second private browser cache coalesces bursts without
-        # turning application state into a long-lived cache.
-        if request.method == "GET" and response.status_code == 200 and request.path in {
-            "/api/dashboard",
-            "/api/storage",
-            "/api/messaging/threads",
-        }:
-            response.headers["Cache-Control"] = "private, max-age=1"
+        if request.method == "GET" and response.status_code == 200:
+            if request.path in {"/api/messaging/threads", "/api/messaging/unassigned"}:
+                response.headers["Cache-Control"] = "private, no-store"
+            elif request.path in {"/api/dashboard", "/api/storage"}:
+                response.headers["Cache-Control"] = "private, max-age=1"
         return response
 
     @app.get("/pair/<token>")
@@ -219,8 +192,6 @@ def create_app(
     messaging = install_messaging(app, database=database, data_dir=data_dir)
     install_pricing(app, database=database, data_dir=data_dir)
 
-    # Merge side effects are explicit and ordered. Pricing must run first because
-    # messaging may collapse/delete the source chat thread in the same transaction.
     repositories.persons.set_identity_merge_handlers(
         merge_pricing_person,
         merge_messaging_person,
@@ -229,6 +200,9 @@ def create_app(
     try:
         reconcile_pricing_identity_events(database)
         reconcile_messaging_identity_events(database)
+        # Repair pre-existing unresolved rows once at startup. Normal request
+        # reads never scan all unassigned WhatsApp endpoints.
+        reconcile_ladies_endpoints(messaging)
     except Exception:
         LOGGER.exception("Initial identity reconciliation failed")
 
