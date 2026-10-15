@@ -97,37 +97,16 @@ body { font-size: var(--text-body); background: var(--color-bg); color: var(--co
 .search-footer .primary { background: linear-gradient(105deg,#cd4381,#d12a79); }
 .search-footer svg { width: 19px; height: 19px; font-size: 19px; }
 
-/* Swipe: photo first, details revealed by vertical scroll. */
+/* Swipe keeps its larger media viewport and otherwise uses the standalone profile layout. */
 .swipe-shell { position: relative; }
-.swipe-screen .screen-scroll { padding: 10px 10px 110px; scroll-snap-type: y proximity; }
+.swipe-profile .screen-scroll { padding: 10px 10px 110px; scroll-snap-type: y proximity; }
 .swipe-media-panel { position: relative; height: min(720px, calc(100dvh - var(--status-h) - var(--header-h) - var(--nav-h) - 24px)); min-height: 535px; scroll-snap-align: start; }
 .swipe-media-panel .profile-media { height: 100%; min-height: 100%; border-radius: 23px; overflow: hidden; box-shadow: var(--shadow-float); background: #ded2cc; touch-action: pan-y; }
-.swipe-media-panel .profile-media::after { content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none; background: linear-gradient(to bottom, rgba(11,12,17,.01) 46%, rgba(11,12,17,.12) 64%, rgba(8,10,15,.88) 100%); }
 .swipe-media-panel .profile-media > img,.swipe-media-panel .profile-media > video { width: 100%; height: 100%; object-fit: cover; }
 .media-story { z-index: 5; top: 16px; left: 17px; right: 17px; gap: 5px; }
 .media-story i { height: 4px; background: rgba(255,255,255,.45); }
 .media-story i.active { background: rgba(255,255,255,.96); }
 .swipe-media-panel .media-count { display: none; }
-.swipe-details { position: relative; margin-top: 15px; padding: 16px 12px 96px; min-height: 520px; scroll-snap-align: start; background: transparent; }
-.swipe-details::before { display: none !important; }
-.swipe-details .profile-identity { position: absolute; z-index: 6; left: 22px; right: 22px; top: -176px; padding: 0; color: #fff; pointer-events: none; }
-.swipe-details .profile-name-row { align-items: flex-end; gap: 10px; }
-.swipe-details .profile-name-row h1 { color: #fff; font-size: 30px; line-height: 1; letter-spacing: -.7px; text-shadow: 0 2px 10px rgba(0,0,0,.18); }
-.swipe-details .profile-meta-place { margin-top: 9px; color: #fff; font-size: 13px; text-shadow: 0 1px 7px rgba(0,0,0,.2); }
-.swipe-details .badge-row { max-height: 43px; overflow: hidden; margin-top: 12px; gap: 7px; }
-.swipe-details .badge { min-height: 34px; padding: 0 12px; border-radius: 18px; background: rgba(255,255,255,.93); color: #4f5b70; font-size: 11px; box-shadow: none; }
-.swipe-details .badge:nth-child(n+4) { display: none; }
-.swipe-details .online-pill { position: absolute; left: 0; top: -390px; min-height: 36px; padding: 0 13px; display: inline-flex; align-items: center; border: 1px solid rgba(255,255,255,.7); border-radius: 19px; color: var(--color-accent); background: rgba(255,239,247,.95); font-size: 12px; }
-.swipe-details .profile-action-rail { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 10px; margin: 0 0 14px; }
-.swipe-details .profile-action { min-height: 62px; border: 1px solid #e7e9ef; border-radius: 20px; padding: 8px 10px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13px; font-weight: 700; box-shadow: var(--shadow-card); }
-.swipe-details .profile-action svg { width: 23px; height: 23px; }
-.swipe-details .profile-action:nth-child(3) { order: 1; color: #fff; border-color: transparent; background: linear-gradient(105deg,#cc4381,#d12878); }
-.swipe-details .profile-action:nth-child(1) { order: 2; color: #46536a; }
-.swipe-details .profile-action:nth-child(2) { order: 3; color: var(--color-accent); background: #fde4ef; border-color: #f3bfd5; }
-.swipe-details .profile-action:nth-child(4),.swipe-details .profile-action:nth-child(5) { display: none; }
-.swipe-details .profile-action:nth-child(3) span { font-size: 0; }
-.swipe-details .profile-action:nth-child(3) span::after { content: "Chat öffnen"; font-size: 13px; }
-.swipe-details .profile-details { margin-top: 0; }
 .profile-tabs { display: flex; overflow-x: auto; scrollbar-width: none; gap: 0; padding: 0; margin: 0 0 14px; border-radius: 18px; background: #fff; box-shadow: var(--shadow-card); }
 .profile-tabs::-webkit-scrollbar { display: none; }
 .profile-tabs button { flex: 0 0 20%; height: 62px; min-width: 72px; border-radius: 0; font-size: 11px; }
@@ -287,7 +266,6 @@ body { font-size: var(--text-body); background: var(--color-bg); color: var(--co
   .bottom-nav button { font-size: 9px; }
   .range-pair,.location-fields { grid-template-columns: 1fr; }
   .info-grid { grid-template-columns: repeat(2,1fr); }
-  .swipe-details .profile-action-rail { grid-template-columns: 1.2fr 1fr 1fr; }
   .favorite-card { grid-template-columns: 112px minmax(0,1fr); }
   .favorite-photo { width: 112px; }
   .favorite-info { padding-left: 11px; }
