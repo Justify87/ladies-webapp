@@ -8,6 +8,8 @@ import {
 } from '../ladies/static/explorer/js/search_intelligence.js';
 import { savedSearchHasUnread } from '../ladies/static/explorer/js/saved_searches.js';
 import { installActiveSearchSync } from '../ladies/static/explorer/js/search_runtime.js';
+import { mapRequestDescriptor } from '../ladies/static/explorer/js/effects/map.js';
+import { filterMapFeatures } from '../ladies/static/explorer/js/ui/discover_map.js';
 import { threadRows, unreadTotal } from '../ladies/static/explorer/js/app/selectors.js';
 import { canonicalPriceRows, invalidatesProfilePricing } from '../ladies/static/explorer/js/requested_fixes.js';
 
@@ -30,11 +32,33 @@ assert.deepEqual(
 assert.equal(savedSearchHasUnread({savedSearches:{items:[{unread_new_results:false},{unread_new_results:true}]}}),true);
 assert.equal(savedSearchHasUnread({savedSearches:{items:[{unread_new_results:false}]}}),false);
 
+// Active map identity comes only from the current canonical active results.
+const descriptor=mapRequestDescriptor({search:{filters:{city:'Leipzig'},results:[{listing_id:7},{listing_id:8},{listing_id:7}]}});
+assert.deepEqual(descriptor.listingIds,[7,8]);
+assert.match(descriptor.key,/leipzig\|7,8$/);
+
+// A logical location remains one map point even when multiple profiles share it;
+// local filters reduce the profile references without creating overlapping points.
+const groupedPoints={type:'FeatureCollection',features:[{
+  type:'Feature',geometry:{type:'Point',coordinates:[12.3,51.3]},properties:{
+    location_key:'postal:DE:04109',profile_count:2,
+    profiles_json:JSON.stringify([{person_id:1,listing_id:11,advert_id:'a'},{person_id:2,listing_id:22,advert_id:'b'}])
+  }
+}]};
+const groupedVisible=filterMapFeatures(groupedPoints,[{personId:1,listing_id:11,advertId:'a'},{personId:2,listing_id:22,advertId:'b'}]);
+assert.equal(groupedVisible.features.length,1);
+assert.equal(groupedVisible.features[0].properties.profile_count,2);
+const groupedFiltered=filterMapFeatures(groupedPoints,[{personId:2,listing_id:22,advertId:'b'}]);
+assert.equal(groupedFiltered.features.length,1);
+assert.equal(groupedFiltered.features[0].properties.profile_count,1);
+assert.equal(JSON.parse(groupedFiltered.features[0].properties.profiles_json)[0].person_id,2);
+
 // Manual A must suppress only the concurrent automatic fetch, not future A hydration after B.
 const baseFilters=city=>({city,radius:20,category:'',ageMin:18,ageMax:45,heightMin:140,heightMax:200,selected:{},local:{}});
 const runtimeState={
   search:{filters:baseFilters('Leipzig'),preview:{status:'idle'},loading:false,error:null,results:[],meta:null},
-  navigation:{stack:[{name:'search',params:{}}]}
+  navigation:{stack:[{name:'search',params:{}}]},
+  discover:{mode:'swipe'}
 };
 const runtimeListeners=new Set();
 const runtimeStore={
@@ -148,7 +172,6 @@ search.release.set(); thread.join(2)
 assert result.get('stale') is True
 assert service.list()[0]['name']=='Neu' and service.list()[0]['filters']['city']=='Berlin'
 
-# A successful probe populates only the saved-search result repository.
 search.started.clear(); search.release.set(); service.run(saved_id, mark_seen=True)
 assert [row['advert_id'] for row in service.results(saved_id)]==['10']
 opened=service.materialize_result(saved_id,'10')
@@ -177,8 +200,13 @@ assert.equal(invalidatesProfilePricing('PRICING_THREAD'),true);
 assert.equal(invalidatesProfilePricing('PRICING_PROPOSAL'),true);
 assert.equal(invalidatesProfilePricing('PROFILE_TAB'),false);
 
-// Focused guards for the Explorer follow-up fixes.
+// Focused guards for Explorer architecture and follow-up fixes.
 const discoverSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/discover.js',import.meta.url),'utf8');
+const discoverMapSource=readFileSync(new URL('../ladies/static/explorer/js/ui/discover_map.js',import.meta.url),'utf8');
+const mapEffectsSource=readFileSync(new URL('../ladies/static/explorer/js/effects/map.js',import.meta.url),'utf8');
+const mapServiceSource=readFileSync(new URL('../ladies/core/services/map.py',import.meta.url),'utf8');
+const mapRepositorySource=readFileSync(new URL('../ladies/core/repositories/map.py',import.meta.url),'utf8');
+const mapViewSource=readFileSync(new URL('../ladies/map_view.py',import.meta.url),'utf8');
 const profileSource=readFileSync(new URL('../ladies/static/explorer/js/ui/profile.js',import.meta.url),'utf8');
 const prototypeSource=readFileSync(new URL('../ladies/static/explorer/css/prototype.css',import.meta.url),'utf8');
 const chromeSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/chrome.js',import.meta.url),'utf8');
@@ -198,10 +226,38 @@ const encounterSource=readFileSync(new URL('../ladies/static/explorer/js/effects
 const requestedSource=readFileSync(new URL('../ladies/static/explorer/js/requested_fixes.js',import.meta.url),'utf8');
 const canonicalPricingSource=readFileSync(new URL('../ladies/pricing/canonical.py',import.meta.url),'utf8');
 const pricingWebSource=readFileSync(new URL('../ladies/pricing/web.py',import.meta.url),'utf8');
+
+assert.match(discoverSource,/\['swipe','cards','Swipe'\].*\['grid','grid','Raster'\].*\['map','pin','Karte'\]/s,'Entdecken must expose explicit Swipe, Raster and Karte modes');
+assert.match(discoverSource,/data-action="discover-view"/,'view mode switching must use the normal command boundary');
 assert.match(discoverSource,/grid-card-heart[^>]+data-action="grid-like"/s,'visible Grid heart must trigger Like');
-assert.doesNotMatch(discoverSource,/discover-mode-pills/,'availability controls must not be duplicated inside Grid or Swipe content');
-assert.match(chromeSource,/header-discovery-modes/,'Swipe and Grid availability controls must live in the shared header');
-assert.match(chromeSource,/route\.name==='swipe'.*data-route="grid".*gridGlyph\(\).*route\.name==='grid'.*data-route="swipe"/s,'shared header must expose both view switches with a real Grid glyph');
+assert.doesNotMatch(discoverSource,/discover-mode-pills/,'availability controls must not be duplicated inside discovery content');
+assert.match(chromeSource,/header-discovery-modes/,'availability controls must stay in the shared header');
+assert.match(chromeSource,/\['discover','cards','Entdecken'\]/,'bottom navigation must expose Entdecken instead of Swipe');
+assert.match(chromeSource,/route\.name==='discover'/,'shared header must recognize one discovery route');
+assert.doesNotMatch(chromeSource,/gridGlyph|cardsGlyph|view-switch/,'retired two-state header toggles must not return');
+
+assert.match(discoverMapSource,/maplibre-gl@6\.14\.0/,'MapLibre must remain pinned to the reviewed version');
+assert.match(discoverMapSource,/tiles\.openfreemap\.org\/styles\/liberty/,'map must use OpenFreeMap Liberty');
+assert.match(discoverMapSource,/cluster:true/,'map locations must use MapLibre clustering');
+assert.match(discoverMapSource,/clusterProperties:\{profile_total/,'cluster labels must aggregate profiles, not location buckets');
+assert.match(discoverMapSource,/discover-map-location-sheet/,'same-location profiles must open an explicit list instead of overlapping');
+assert.match(mapEffectsSource,/mapRequestDescriptor\(store\.getState\(\)\)/,'map requests must derive from the active result set');
+assert.match(mapEffectsSource,/sequence!==generation\|\|latest\.key!==requested\.key/,'stale map responses must be rejected');
+assert.doesNotMatch(mapEffectsSource,/recentSearches|search_run_id|runId/,'map must not fall back to historical search runs');
+assert.match(clientSource,/mapPoints:\s*payload\s*=>\s*request\('\/api\/map-points'/,'frontend must use the local map API');
+assert.match(mapViewSource,/@app\.post\("\/api\/map-points"\)/,'map API must be active-result scoped and POST-only');
+assert.match(mapViewSource,/listing_ids/,'map API must accept explicit active listing identities');
+assert.doesNotMatch(mapViewSource,/search_run_id/,'map API must not depend on SearchRun history');
+assert.match(mapRepositorySource,/ListingSnapshot\.snapshot_id == Listing\.current_snapshot_id/,'map repository must join only the canonical current snapshot');
+assert.doesNotMatch(mapRepositorySource,/order_by\(|captured_at/,'map repository must not load full snapshot history');
+assert.match(mapServiceSource,/background\.submit/,'missing geocodes must be warmed in the existing background executor');
+assert.match(mapServiceSource,/map-location-cache\.json/,'resolved locations must be cached locally');
+assert.match(mapServiceSource,/POSTAL_RE/,'postcodes must be derived locally from stored data');
+assert.match(mapServiceSource,/groups\.setdefault\(location_key/,'profiles sharing a PLZ/search area must be grouped into one logical location');
+const featureCollectionBlock=mapServiceSource.split('def feature_collection',2)[1]||'';
+assert.doesNotMatch(featureCollectionBlock,/_http\.get\(/,'normal map requests must never perform synchronous external geocoding');
+assert.doesNotMatch(mapServiceSource,/params=\{[^}]*hidden_location/s,'hidden locations must never be sent to external geocoders');
+
 assert.match(chromeSource,/data-saved-search-action="open"/,'search header action must open the dedicated saved-search screen');
 assert.match(chromeSource,/saved-search-notification/,'header must expose a dedicated new-result indicator');
 assert.match(chromeSource,/saved-search-results/,'saved result browsing must have its own header route');
