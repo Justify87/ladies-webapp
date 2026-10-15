@@ -173,7 +173,7 @@ export function reducer(state=initialState, action={}) {
       return updateSlice(state, 'messaging', patch);
     }
     case 'MESSAGE_FILTER':
-      return updateSlice(state, 'messaging', {filter: action.value || 'ALL', viewFilter: action.value || 'ALL'});
+      return updateSlice(state, 'messaging', {filter: 'ALL', viewFilter: action.value || 'ALL'});
     case 'MESSAGE_VIEW_FILTER':
       return updateSlice(state, 'messaging', {viewFilter: action.value || 'ALL', filter: 'ALL'});
     case 'MESSAGE_QUERY':
