@@ -55,12 +55,10 @@ export function createProfileRequestEffects({store}) {
     }
   }
 
-  async function sendProfileRequest(personId,_legacyListingId=null) {
+  async function sendProfileRequest(personId,advertId=null) {
     const pid=Number(personId||0);if(!pid)return null;
     const before=current(pid)||{};
     if(before.loading||before.sending||before.can_send===false)return null;
-    const route=state().navigation.stack.at(-1);
-    const advertId=route?.name==='profile'?route.params?.advertId:null;
     const listingId=resolveProfileRequestListingId(state().profiles.details?.[String(pid)],advertId);
     patch(pid,{sending:true,error:null});
     try {
