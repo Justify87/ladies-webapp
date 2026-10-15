@@ -107,4 +107,4 @@ export const currentThread = state => {
 export const unreadTotal = state => (state.messaging.threads || []).map(threadVm).filter(row=>threadClassification(row)==='LADIES_CONFIRMED').reduce((sum,row)=>sum+Number(row.unread || 0),0);
 export const profileTab = (state,personId) => state.profileUi.tabByPerson[String(personId)] || 'info';
 export const profileMediaIndex = (state,personId) => Number(state.profileUi.mediaByPerson[String(personId)] || 0);
-export const rootNav = routeName => ({profile:null,chat:'messages',history:'settings',archive:'settings'}[routeName] ?? routeName;
+export const rootNav = routeName => ({profile:null,chat:'messages',history:'settings',archive:'settings'}[routeName] ?? routeName);
