@@ -195,7 +195,6 @@ def create_app(
         background=background,
         default_city=default_city,
         default_radius=default_radius,
-        profile_delay=profile_delay,
     )
     atexit.register(saved_search_scheduler.shutdown)
 
