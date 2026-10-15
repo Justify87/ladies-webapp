@@ -4,7 +4,6 @@ import logging
 import re
 from typing import Any
 
-from ladies_v9.domain import SearchProfile
 from ladies_v9.errors import ExternalServiceError, ValidationError
 from ladies_v9.request_parsing import read_int, read_mapping
 from ladies_v9.source import build_filter_path, fetch_search_configured, resolve_location
@@ -191,6 +190,8 @@ class SearchService:
 
     def materialize_probe_result(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Bridge one explicitly opened saved-search result into the canonical profile domain."""
+        from ladies_v9.domain import SearchProfile
+
         advert_id = clean_text(str(payload.get("advert_id") or payload.get("external_listing_id") or ""))
         profile_url = clean_text(str(payload.get("profile_url") or ""))
         if not advert_id or not profile_url:
