@@ -14,7 +14,7 @@ class FunctionGemmaRuntime:
     """Local FunctionGemma 270M runtime for structured pricing extraction."""
 
     name = "FunctionGemma-270M"
-    version = "2"
+    version = "3"
 
     def __init__(self, data_dir: str | Path) -> None:
         self.data_dir = Path(data_dir)
@@ -60,21 +60,24 @@ class FunctionGemmaRuntime:
             catalog=catalog,
             has_existing_price_list=has_existing_price_list,
         )
-        proc = subprocess.run(
-            [
-                str(self.binary),
-                "-m", str(self.model_path),
-                "-p", prompt,
-                "-n", "1024",
-                "--temp", "0",
-                "--no-display-prompt",
-                "-j", json.dumps(schema, ensure_ascii=False, separators=(",", ":")),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=45,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                [
+                    str(self.binary),
+                    "-m", str(self.model_path),
+                    "-p", prompt,
+                    "-n", "1024",
+                    "--temp", "0",
+                    "--no-display-prompt",
+                    "-j", json.dumps(schema, ensure_ascii=False, separators=(",", ":")),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=45,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("FunctionGemma hat das Zeitlimit von 45 Sekunden überschritten") from exc
         if proc.returncode != 0:
             raise RuntimeError((proc.stderr or "FunctionGemma fehlgeschlagen")[-1500:])
         raw = proc.stdout.strip()
@@ -105,9 +108,10 @@ Regeln:
 - Zulässige Angebotsdauern sind ausschließlich: {durations} Minuten. Deute z. B. halbe Stunde als 30, eine Stunde/1 Std als 60 und zwei Stunden als 120. Wenn eine Dauer nicht sicher auf einen dieser Werte passt, trage sie nicht als Angebot ein und nenne die Unsicherheit.
 - Ein Basisangebot verbindet Dauer und Gesamtpreis. Ein Service-Aufpreis ist kein eigenes Basisangebot.
 - service_key darf ausschließlich einer der unten aufgeführten kanonischen Filterwerte sein. Wenn kein sicherer Treffer existiert, verwende den leeren String und nenne die Unsicherheit.
+- raw_label muss die tatsächlich im Chat verwendete Service-Bezeichnung enthalten, nicht eine erfundene Umschreibung.
 - INCLUDED = enthalten, SURCHARGE = Aufpreis, EXCLUDED = nicht angeboten, ON_REQUEST = auf Anfrage, NEGOTIABLE = verhandelbar, UNKNOWN = unklar.
-- Evidence muss die message_id und einen möglichst kurzen, wortgetreu aus dieser Nachricht kopierten Textausschnitt enthalten, der die Angabe belegt.
-- FULL bedeutet eine vollständige/neue Preisliste, PARTIAL nur eine Änderung/Ergänzung, UNKNOWN bei Unklarheit. Bestehende Preisliste vorhanden: {baseline}.
+- Evidence ist eine Liste aus message_id und kurzen, wortgetreu kopierten Textausschnitten. Sie muss alle Textstellen enthalten, die Preis, Dauer oder Service-Zuordnung belegen. Wenn die Zuordnung erst aus Frage plus Antwort entsteht, nenne beide Nachrichten als Evidence.
+- FULL bedeutet eine vollständige/neue Preisliste, PARTIAL nur eine Änderung/Ergänzung, UNKNOWN bei Unklarheit. Bestehende Preisliste für diesen Ort vorhanden: {baseline}.
 - Geldbeträge werden in Euro als Zahlen ausgegeben, nicht in Cent.
 
 Kanonische Services aus der Filtersicht:
@@ -119,7 +123,7 @@ CHAT:
 
     @staticmethod
     def _json_schema(service_keys: list[str]) -> dict[str, Any]:
-        evidence = {
+        evidence_item = {
             "type": "object",
             "additionalProperties": False,
             "properties": {
@@ -127,6 +131,12 @@ CHAT:
                 "excerpt": {"type": "string", "maxLength": 500},
             },
             "required": ["message_id", "excerpt"],
+        }
+        evidence = {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "items": evidence_item,
         }
         nullable_number = {"type": ["number", "null"]}
         nullable_string = {"type": ["string", "null"]}
@@ -218,7 +228,7 @@ CHAT:
                 "amount_cents": self._cents(row.get("amount_eur")),
                 "amount_max_cents": self._cents(row.get("amount_max_eur")),
                 "label": row.get("label") or f"{duration} Minuten",
-                "evidence": [self._evidence(row.get("evidence"))],
+                "evidence": self._evidence(row.get("evidence")),
             })
         for index, row in enumerate(data.get("service_rules") or [], start=1):
             service_key = str(row.get("service_key") or "").strip()
@@ -232,7 +242,7 @@ CHAT:
                 "status": row.get("status") or "UNKNOWN",
                 "amount_cents": self._cents(row.get("amount_eur")),
                 "note": row.get("note"),
-                "evidence": [self._evidence(row.get("evidence"))],
+                "evidence": self._evidence(row.get("evidence")),
             })
         for index, row in enumerate(data.get("conditions") or [], start=1):
             proposal["conditions"].append({
@@ -241,15 +251,19 @@ CHAT:
                 "label": str(row.get("label") or "Bedingung"),
                 "amount_cents": self._cents(row.get("amount_eur")),
                 "note": row.get("note"),
-                "evidence": [self._evidence(row.get("evidence"))],
+                "evidence": self._evidence(row.get("evidence")),
             })
         return validate_proposal(proposal)
 
     @staticmethod
-    def _evidence(value: Any) -> dict[str, Any]:
-        row = value if isinstance(value, dict) else {}
-        return {
-            "message_id": int(row.get("message_id") or 0),
-            "excerpt": str(row.get("excerpt") or "")[:500],
-            "source_type": "CHAT_TEXT",
-        }
+    def _evidence(value: Any) -> list[dict[str, Any]]:
+        rows = value if isinstance(value, list) else []
+        out = []
+        for raw in rows:
+            row = raw if isinstance(raw, dict) else {}
+            out.append({
+                "message_id": int(row.get("message_id") or 0),
+                "excerpt": str(row.get("excerpt") or "")[:500],
+                "source_type": "CHAT_TEXT",
+            })
+        return out
