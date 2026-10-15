@@ -45,21 +45,21 @@ assert.deepEqual(descriptor.items,[
 ]);
 assert.equal(descriptor.key,JSON.stringify([[7,'leipzig'],[8,'markkleeberg']]));
 
-// A logical location remains one map point even when multiple profiles share it;
-// local filters reduce the profile references without creating overlapping points.
+// A logical location remains one map point even when multiple listings share it;
+// local filters reduce listing references without creating overlapping points.
 const groupedPoints={type:'FeatureCollection',features:[{
   type:'Feature',geometry:{type:'Point',coordinates:[12.3,51.3]},properties:{
-    location_key:'postal:DE:04109',profile_count:2,
-    profiles_json:JSON.stringify([{person_id:1,listing_id:11,advert_id:'a'},{person_id:2,listing_id:22,advert_id:'b'}])
+    location_key:'postal:DE:04109',listing_count:2,
+    listing_refs_json:JSON.stringify([{person_id:1,listing_id:11,advert_id:'a'},{person_id:2,listing_id:22,advert_id:'b'}])
   }
 }]};
 const groupedVisible=filterMapFeatures(groupedPoints,[{personId:1,listing_id:11,advertId:'a'},{personId:2,listing_id:22,advertId:'b'}]);
 assert.equal(groupedVisible.features.length,1);
-assert.equal(groupedVisible.features[0].properties.profile_count,2);
+assert.equal(groupedVisible.features[0].properties.listing_count,2);
 const groupedFiltered=filterMapFeatures(groupedPoints,[{personId:2,listing_id:22,advertId:'b'}]);
 assert.equal(groupedFiltered.features.length,1);
-assert.equal(groupedFiltered.features[0].properties.profile_count,1);
-assert.equal(JSON.parse(groupedFiltered.features[0].properties.profiles_json)[0].person_id,2);
+assert.equal(groupedFiltered.features[0].properties.listing_count,1);
+assert.equal(JSON.parse(groupedFiltered.features[0].properties.listing_refs_json)[0].person_id,2);
 
 // A late response from an older active result set must never replace newer map data.
 const mapState={
@@ -279,8 +279,8 @@ assert.doesNotMatch(chromeSource,/gridGlyph|cardsGlyph|view-switch/,'retired two
 assert.match(discoverMapSource,/maplibre-gl@6\.14\.0/,'MapLibre must remain pinned to the reviewed version');
 assert.match(discoverMapSource,/tiles\.openfreemap\.org\/styles\/liberty/,'map must use OpenFreeMap Liberty');
 assert.match(discoverMapSource,/cluster:true/,'map locations must use MapLibre clustering');
-assert.match(discoverMapSource,/clusterProperties:\{profile_total/,'cluster labels must aggregate profiles, not location buckets');
-assert.match(discoverMapSource,/discover-map-location-sheet/,'same-location profiles must open an explicit list instead of overlapping');
+assert.match(discoverMapSource,/clusterProperties:\{listing_total/,'cluster labels must aggregate listings, not location buckets');
+assert.match(discoverMapSource,/discover-map-location-sheet/,'same-location listings must open an explicit list instead of overlapping');
 assert.match(mapEffectsSource,/mapRequestDescriptor\(store\.getState\(\)\)/,'map requests must derive from the active result set');
 assert.match(mapEffectsSource,/sequence!==generation\|\|latest\.key!==requested\.key/,'stale map responses must be rejected');
 assert.match(mapEffectsSource,/validCoordinatePair/,'frontend must reject invalid map coordinates before MapLibre sees them');
@@ -302,7 +302,7 @@ assert.match(appSource,/install_map_view\(app, background=map_background/,'map g
 assert.match(mapServiceSource,/map-location-cache\.json/,'resolved locations must be cached locally');
 assert.match(mapServiceSource,/with self\._lock:\s*payload = orjson\.dumps[\s\S]*tmp\.replace\(self\.cache_path\)/,'cache serialization and atomic replace must share one lock');
 assert.match(mapServiceSource,/POSTAL_RE/,'postcodes must be derived locally from stored data');
-assert.match(mapServiceSource,/groups\.setdefault\(location_key/,'profiles sharing a PLZ/search area must be grouped into one logical location');
+assert.match(mapServiceSource,/groups\.setdefault\(location_key/,'listings sharing a PLZ/search area must be grouped into one logical location');
 const featureCollectionBlock=mapServiceSource.split('def feature_collection',2)[1]||'';
 assert.doesNotMatch(featureCollectionBlock,/_http\.get\(/,'normal map requests must never perform synchronous external geocoding');
 assert.doesNotMatch(mapServiceSource,/params=\{[^}]*hidden_location/s,'hidden locations must never be sent to external geocoders');
