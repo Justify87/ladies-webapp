@@ -15,6 +15,7 @@ from .lan_access import LanAccessManager
 from .messaging import install_messaging
 from .messaging.integration import merge_messaging_person, reconcile_identity_events as reconcile_messaging_identity_events
 from .messaging.scope import (
+    person_is_ladies_scoped,
     reconcile_ladies_endpoints,
     refresh_endpoint_identity,
     scoped_thread_items,
@@ -151,8 +152,6 @@ def _install_domain_route_integrations(app, *, database, messaging, background) 
             )
             return jsonify(payload)
         except Exception:
-            # Fail closed: unrelated WhatsApp conversations must never leak into
-            # the Ladies Explorer when scope resolution itself fails.
             LOGGER.exception("Ladies messaging scope failed filter=%s", filter_name)
             return jsonify(items=[])
 
@@ -196,6 +195,9 @@ def _install_domain_route_integrations(app, *, database, messaging, background) 
 
     @wraps(person_thread_view)
     def person_thread_with_identity(*args, **kwargs):
+        person_id = _positive_int(kwargs.get("person_id") if "person_id" in kwargs else (args[0] if args else None))
+        if not person_is_ladies_scoped(database, person_id):
+            return jsonify(error="Person gehört zu keiner Ladies-Anzeige."), 404
         response = app.make_response(person_thread_view(*args, **kwargs))
         if response.status_code >= 400:
             return response
@@ -203,7 +205,6 @@ def _install_domain_route_integrations(app, *, database, messaging, background) 
         endpoint_id = _positive_int((payload.get("endpoint") or {}).get("endpoint_id"))
         if endpoint_id:
             refresh_endpoint_identity(messaging, endpoint_id)
-        person_id = _positive_int(kwargs.get("person_id") if "person_id" in kwargs else (args[0] if args else None))
         if person_id:
             background.submit(
                 f"wa-rehydrate:{person_id}",
@@ -314,17 +315,11 @@ def create_app(
 
     @app.after_request
     def browser_runtime_policy(response):
-        # MediaPipe needs jsDelivr + Google model storage, but not Google's ODML
-        # telemetry endpoint. Only install the browser-wide policy when the route
-        # did not already provide a stricter policy (for example `sandbox` on
-        # active document downloads).
         if not response.headers.get("Content-Security-Policy"):
             response.headers["Content-Security-Policy"] = BROWSER_CSP
 
         if request.method == "GET" and response.status_code == 200:
             if request.path in {"/api/messaging/threads", "/api/messaging/unassigned"}:
-                # Thread mutations must be visible immediately; caching can hide a
-                # newly-created chat directly after the first outgoing message.
                 response.headers["Cache-Control"] = "private, no-store"
             elif request.path in {"/api/dashboard", "/api/storage"}:
                 response.headers["Cache-Control"] = "private, max-age=1"
@@ -352,8 +347,6 @@ def create_app(
     messaging = install_messaging(app, database=database, data_dir=data_dir)
     install_pricing(app, database=database, data_dir=data_dir)
 
-    # Merge side effects are explicit and ordered. Pricing must run first because
-    # messaging may collapse/delete the source chat thread in the same transaction.
     repositories.persons.set_identity_merge_handlers(
         merge_pricing_person,
         merge_messaging_person,
