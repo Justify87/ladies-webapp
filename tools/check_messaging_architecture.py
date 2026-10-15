@@ -69,6 +69,12 @@ assert "FAVORITE" not in message_list
 assert "message-filter" not in message_list
 assert 'data-action="message-view-filter"' in message_list
 
+chat_screen = source("ladies/static/explorer/js/ui/screens/messaging.js")
+assert "renderMessages" not in chat_screen
+assert "message-filter" not in chat_screen
+assert "FAVORITE" not in chat_screen
+assert "export function renderChat" in chat_screen
+
 commands = source("ladies/static/explorer/js/app/commands.js")
 assert "'message-filter'" not in commands
 assert "'chat-favorite'" not in commands
