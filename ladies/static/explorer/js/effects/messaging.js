@@ -54,15 +54,12 @@ export function createMessagingEffects({store,router,getEffects}) {
   async function disconnectWhatsapp(){try{store.dispatch({type:'MESSAGE_STATUS',value:await api.messagingDisconnect()});toast('WhatsApp getrennt');}catch(error){toast(error.message);} }
 
   async function resetWhatsapp(){
-    if(!confirm('Gespeicherte WhatsApp-Verbindung löschen und neu einrichten?\n\nDie Chat-Historie bleibt erhalten. Die lokale WhatsApp-Anmeldung wird gelöscht und anschließend eine neue Kopplung gestartet.'))return;
+    if(!confirm('Alle lokalen WhatsApp-Verbindungsdaten vollständig löschen?\n\nGelöscht werden die komplette lokale Baileys-Anmeldung einschließlich Credentials und Signal-Keys. Chats, Nachrichten und Medien im Ladies Explorer bleiben erhalten. Danach wird keine neue Verbindung automatisch gestartet.'))return;
     try{
-      store.dispatch({type:'MESSAGE_STATUS',value:await api.messagingReset()});
-      contactProbeAt.clear();
-      const next=await api.messagingConnect();
+      const next=await api.messagingReset();
       store.dispatch({type:'MESSAGE_STATUS',value:next});
-      if(['DEPENDENCY_MISSING','ERROR'].includes(String(next?.state||'').toUpperCase()))toast(next?.detail||'Neue WhatsApp-Verbindung konnte nicht gestartet werden');
-      else toast('Verbindung zurückgesetzt – QR-Code wird vorbereitet');
-      setTimeout(loadMessagingStatus,800);
+      contactProbeAt.clear();
+      toast('WhatsApp-Verbindungsdaten vollständig gelöscht');
     }catch(error){toast(error.message);}
   }
 
