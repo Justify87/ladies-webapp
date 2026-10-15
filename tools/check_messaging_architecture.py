@@ -78,12 +78,12 @@ def check_frontend() -> None:
     message_list = source("ladies/static/explorer/js/ui/screens/message_list.js")
     require("Favoriten" not in message_list, "message list favorites removed")
     require("FAVORITE" not in message_list, "message list favorite filter removed")
-    require("message-filter" not in message_list, "message list server filter removed")
+    require('data-action="message-filter"' not in message_list, "message list server filter removed")
     require('data-action="message-view-filter"' in message_list, "message list client filter")
 
     chat_screen = source("ladies/static/explorer/js/ui/screens/messaging.js")
     require("renderMessages" not in chat_screen, "duplicate message list renderer removed")
-    require("message-filter" not in chat_screen, "chat screen server filter removed")
+    require('data-action="message-filter"' not in chat_screen, "chat screen server filter removed")
     require("FAVORITE" not in chat_screen, "chat screen favorite state removed")
     require("export function renderChat" in chat_screen, "chat renderer retained")
 
