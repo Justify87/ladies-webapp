@@ -176,7 +176,7 @@ wheels = [
 
 [[package]]
 name = "ladies-explorer"
-version = "9.9.10"
+version = "9.9.11"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
