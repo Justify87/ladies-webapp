@@ -15,13 +15,73 @@ const MAP_LOAD_TIMEOUT_MS=15000;
 
 let maplibrePromise=null;
 let runtime=null;
-let runtimeGeneration=0;
 let latestData=EMPTY;
 let fittedSignature='';
 let selectedLocationKey=null;
 let closeListenerInstalled=false;
 let wasActive=false;
 const reportedMapErrors=new Set();
+
+export function createMapLifecycle(){
+  let generation=0;
+  let current=null;
+
+  const runCleanups=entry=>{
+    const cleanups=entry?.cleanups?.splice(0).reverse()||[];
+    for(const cleanup of cleanups){try{cleanup();}catch{}}
+  };
+
+  const destroy=()=>{
+    generation+=1;
+    const active=current;
+    current=null;
+    runCleanups(active);
+  };
+
+  const run=(target,task)=>{
+    if(current?.target===target)return current.promise;
+    if(current)destroy();
+
+    const token=++generation;
+    const entry={target,token,cleanups:[],promise:null};
+    current=entry;
+    const active=()=>current===entry&&generation===token&&target?.isConnected!==false;
+    const cleanup=fn=>{
+      if(typeof fn!=='function')return ()=>{};
+      if(!active()){
+        try{fn();}catch{}
+        return ()=>{};
+      }
+      entry.cleanups.push(fn);
+      let registered=true;
+      return ()=>{
+        if(!registered)return;
+        registered=false;
+        const index=entry.cleanups.indexOf(fn);
+        if(index>=0)entry.cleanups.splice(index,1);
+      };
+    };
+
+    entry.promise=(async()=>{
+      try{
+        const value=await task({active,cleanup});
+        if(!active()){
+          if(current===entry)destroy();
+          return null;
+        }
+        return value;
+      }catch(error){
+        if(current===entry)destroy();
+        throw error;
+      }
+    })();
+    return entry.promise;
+  };
+
+  return Object.freeze({run,destroy,hasActive:()=>Boolean(current)});
+}
+
+const mapLifecycle=createMapLifecycle();
 
 function listingRefs(feature){
   const raw=feature?.properties?.listing_refs_json;
@@ -87,19 +147,12 @@ function queueResize(instance,target){
 }
 
 function destroyMap(){
-  runtimeGeneration+=1;
-  const active=runtime;
+  mapLifecycle.destroy();
   runtime=null;
   latestData=EMPTY;
   fittedSignature='';
   selectedLocationKey=null;
   reportedMapErrors.clear();
-  active?.resizeObserver?.disconnect();
-  if(active?.map){try{active.map.remove();}catch{}}
-}
-
-function ownsMap(token,instance,target){
-  return token===runtimeGeneration&&runtime?.map===instance&&runtime.container===target&&target.isConnected;
 }
 
 function fitData(instance,state,data){
@@ -233,37 +286,49 @@ function installLayers(instance,target,getState){
   fitData(instance,current,latestData);
 }
 
-function waitUntilLoaded(instance,token,target,getState){
+export function waitForMapReady({instance,isActive,onReady,registerCleanup,timeoutMs=MAP_LOAD_TIMEOUT_MS}){
   return new Promise((resolve,reject)=>{
-    const timeout=setTimeout(()=>{
-      if(!ownsMap(token,instance,target)){resolve(null);return;}
-      reject(new Error('Die Kartenbasis konnte nicht rechtzeitig geladen werden.'));
-    },MAP_LOAD_TIMEOUT_MS);
-    instance.once('load',()=>{
+    let settled=false;
+    let unregisterCleanup=()=>{};
+    const finish=(error,value)=>{
+      if(settled)return;
+      settled=true;
       clearTimeout(timeout);
-      if(!ownsMap(token,instance,target)){resolve(null);return;}
-      try{
-        installLayers(instance,target,getState);
-        runtime.loaded=true;
-        queueResize(instance,target);
-        resolve(instance);
-      }catch(error){
-        reject(error);
-      }
-    });
+      if(typeof instance.off==='function')instance.off('load',handleLoad);
+      unregisterCleanup();
+      if(error)reject(error);
+      else resolve(value);
+    };
+    const handleLoad=()=>{
+      if(!isActive()){finish(null,null);return;}
+      try{finish(null,onReady());}
+      catch(error){finish(error,null);}
+    };
+    const timeout=setTimeout(()=>{
+      if(!isActive()){finish(null,null);return;}
+      finish(new Error('Die Kartenbasis konnte nicht rechtzeitig geladen werden.'),null);
+    },timeoutMs);
+    try{
+      instance.once('load',handleLoad);
+      unregisterCleanup=registerCleanup(()=>finish(null,null));
+    }catch(error){
+      finish(error,null);
+    }
   });
 }
 
-async function ensureMap(target,getState){
-  if(runtime?.container===target)return runtime.promise;
-  if(runtime)destroyMap();
+function ensureMap(target,getState){
+  return mapLifecycle.run(target,async lifecycle=>{
+    const current={container:target,map:null,lib:null,loaded:false,resizeObserver:null};
+    runtime=current;
+    lifecycle.cleanup(()=>{
+      if(runtime===current)runtime=null;
+      current.resizeObserver?.disconnect();
+      if(current.map){try{current.map.remove();}catch{}}
+    });
 
-  const token=++runtimeGeneration;
-  const current={container:target,map:null,lib:null,loaded:false,resizeObserver:null,promise:null};
-  runtime=current;
-  current.promise=(async()=>{
     const lib=await loadMapLibre();
-    if(token!==runtimeGeneration||runtime!==current||!target.isConnected)return null;
+    if(!lifecycle.active())return null;
     current.lib=lib;
     const instance=new lib.Map({
       container:target,
@@ -283,14 +348,19 @@ async function ensureMap(target,getState){
       current.resizeObserver.observe(target);
     }
     queueResize(instance,target);
-    try{
-      return await waitUntilLoaded(instance,token,target,getState);
-    }catch(error){
-      if(runtime===current)destroyMap();
-      throw error;
-    }
-  })();
-  return current.promise;
+
+    return await waitForMapReady({
+      instance,
+      isActive:()=>lifecycle.active()&&runtime===current&&current.map===instance&&target.isConnected,
+      registerCleanup:lifecycle.cleanup,
+      onReady:()=>{
+        installLayers(instance,target,getState);
+        current.loaded=true;
+        queueResize(instance,target);
+        return instance;
+      }
+    });
+  });
 }
 
 function installCloseListener(){
