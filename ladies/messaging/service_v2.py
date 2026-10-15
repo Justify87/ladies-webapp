@@ -90,12 +90,14 @@ class MessagingService(_BaseMessagingService):
             )
         if not clauses:
             return None
-        return db.scalar(
+        rows = db.scalars(
             select(ProviderPeerState)
             .where(ProviderPeerState.provider == "WHATSAPP", or_(*clauses))
             .order_by(desc(ProviderPeerState.updated_at))
-            .limit(1)
-        )
+        ).all()
+        if not rows:
+            return None
+        return next((row for row in rows if row.display_name), rows[0])
 
     def _thread_payload(self, db, thread: ChatThread, last: ChatMessage | None) -> dict[str, Any]:
         payload = super()._thread_payload(db, thread, last)
@@ -479,9 +481,26 @@ class MessagingService(_BaseMessagingService):
             raw = message_raw_id(row.provider_message_id)
             if not raw:
                 continue
-            index[raw] = row if raw not in index else None
+            previous = index.get(raw)
+            if raw not in index:
+                index[raw] = row
+            elif previous is not None and previous.message_id == row.message_id:
+                index[raw] = row
+            else:
+                index[raw] = None
         cache[thread_id] = index
         return index
+
+    @staticmethod
+    def _register_raw_message(index: dict[str, ChatMessage | None], message: ChatMessage) -> None:
+        raw = message_raw_id(message.provider_message_id)
+        if not raw:
+            return
+        previous = index.get(raw)
+        if raw not in index or (previous is not None and previous.message_id == message.message_id):
+            index[raw] = message
+        else:
+            index[raw] = None
 
     def _ingest_provider_batch(self, payloads: list[dict[str, Any]], *, rehydrated: bool) -> int:
         prepared: list[dict[str, Any]] = []
@@ -530,6 +549,12 @@ class MessagingService(_BaseMessagingService):
                     thread = self._get_thread(db, person_id=endpoint.person_id, endpoint=endpoint)
                     thread_cache[thread_key] = thread
 
+                # Build the thread index before inserting the current row. This
+                # prevents the new message from being mistaken for a raw-ID
+                # collision while keeping later messages in the same batch
+                # available as quote targets.
+                raw_index = self._raw_message_index(db, thread.thread_id, raw_indexes)
+
                 provider_ts = payload.get("timestamp")
                 try:
                     timestamp = datetime.fromtimestamp(float(provider_ts), timezone.utc) if provider_ts else utcnow()
@@ -554,11 +579,7 @@ class MessagingService(_BaseMessagingService):
                 if provider_key:
                     meta.provider_key_json = _json(provider_key)
                 meta.view_once = bool(payload.get("view_once"))
-
-                raw_index = self._raw_message_index(db, thread.thread_id, raw_indexes)
-                raw_id = message_raw_id(canonical_id)
-                if raw_id:
-                    raw_index[raw_id] = message if raw_id not in raw_index else None
+                self._register_raw_message(raw_index, message)
 
                 quote = payload.get("quote") if isinstance(payload.get("quote"), dict) else None
                 if quote:
