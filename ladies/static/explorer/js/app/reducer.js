@@ -30,7 +30,12 @@ export function reducer(state=initialState, action={}) {
       return {
         ...state,
         search: {...state.search, results: action.results || [], meta: action.meta || null},
-        discover: {...state.discover, index: 0, history: []},
+        discover: {
+          ...state.discover,
+          index: 0,
+          history: [],
+          map: {key:null,points:null,loading:false,error:null},
+        },
       };
     case 'SEARCH_RESULT_PATCH': {
       const advertId=String(action.advertId||'');
@@ -59,8 +64,10 @@ export function reducer(state=initialState, action={}) {
 
     case 'DISCOVER_INDEX':
       return updateSlice(state, 'discover', {index: Math.max(0, action.index)});
-    case 'DISCOVER_MODE':
-      return updateSlice(state, 'discover', {mode: action.mode});
+    case 'DISCOVER_MODE': {
+      const mode=['swipe','grid','map'].includes(action.mode)?action.mode:'swipe';
+      return updateSlice(state, 'discover', {mode});
+    }
     case 'DISCOVER_MEDIA':
       return updateMappedSlice(state, 'discover', 'mediaIndex', {
         [String(action.advertId)]: Number(action.index || 0),
@@ -69,6 +76,16 @@ export function reducer(state=initialState, action={}) {
       return updateSlice(state, 'discover', {history: [...state.discover.history, action.entry]});
     case 'DISCOVER_HISTORY_POP':
       return updateSlice(state, 'discover', {history: state.discover.history.slice(0, -1)});
+    case 'DISCOVER_MAP_LOADING':
+      return updateSlice(state, 'discover', {
+        map:{...state.discover.map,key:action.key??state.discover.map.key,loading:Boolean(action.value),error:action.error||null}
+      });
+    case 'DISCOVER_MAP_POINTS':
+      return updateSlice(state, 'discover', {
+        map:{key:action.key||null,points:action.points||null,loading:false,error:null}
+      });
+    case 'DISCOVER_MAP_CLEAR':
+      return updateSlice(state, 'discover', {map:{key:null,points:null,loading:false,error:null}});
 
     case 'PROFILE_BUNDLE':
       return updateMappedSlice(state, 'profiles', 'bundles', {[String(action.advertId)]: action.bundle});
