@@ -233,8 +233,17 @@ jobs:
           assert.equal(newSheet.scrollTop,215);
           JS
 
-      - name: Messaging architecture regressions
-        run: python tools/check_messaging_architecture.py
+      - name: Messaging identity architecture
+        run: python tools/check_messaging_architecture.py identity
+
+      - name: Messaging backend architecture
+        run: python tools/check_messaging_architecture.py backend
+
+      - name: Messaging worker architecture
+        run: python tools/check_messaging_architecture.py worker
+
+      - name: Messaging frontend architecture
+        run: python tools/check_messaging_architecture.py frontend
 
       - name: Messaging provider identity
         run: node --experimental-default-type=module tools/check_messaging_provider_identity.mjs
