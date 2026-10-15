@@ -36,12 +36,7 @@ def person_is_ladies(db, person_id: int | None) -> bool:
 
 
 def endpoint_ids_for_thread(db, thread: ChatThread) -> list[int]:
-    """Return every endpoint owned by a conversation, even before it has messages.
-
-    Person-backed threads own all endpoints of that person. Unassigned threads own
-    the endpoints referenced by their persisted messages. The union is important
-    for sticky classification when a new phone appears before its first message.
-    """
+    """Return every endpoint owned by a conversation, even before it has messages."""
 
     values = {
         int(value)
@@ -137,6 +132,19 @@ def _promote_unknown_endpoints(
         item.updated_at = now
 
 
+def _detach_non_ladies_identity(db, thread: ChatThread, endpoint_ids: Iterable[int]) -> None:
+    """Make the exclusion boundary structural, not just a UI flag."""
+
+    thread.person_id = None
+    now = utcnow()
+    for endpoint_id in endpoint_ids:
+        endpoint = db.get(ContactEndpoint, int(endpoint_id))
+        if endpoint is None:
+            continue
+        endpoint.person_id = None
+        endpoint.updated_at = now
+
+
 def set_thread_classification_in_session(
     db,
     thread: ChatThread,
@@ -166,6 +174,9 @@ def set_thread_classification_in_session(
             endpoint_row.method = method
             endpoint_row.decided_at = now
             endpoint_row.updated_at = now
+
+    if status == NON_LADIES:
+        _detach_non_ladies_identity(db, thread, endpoint_ids)
     return row
 
 
@@ -177,10 +188,10 @@ def reconcile_thread_in_session(
 ) -> ChatClassification:
     """Apply sticky product classification inside an existing write transaction.
 
-    NON_LADIES is fail-closed: if an inconsistent legacy/merge state contains an
-    explicitly excluded endpoint, the thread is hidden rather than leaking that
-    endpoint into the Ladies inbox. Explicit manual assignment can later override
-    the whole conversation atomically.
+    NON_LADIES is fail-closed and structurally detached from Person identity. That
+    prevents later search/profile sync and person merges from accidentally pulling
+    a private WhatsApp conversation back into the Ladies inbox. Explicit manual
+    assignment is the only supported way to attach it again.
     """
 
     row = _ensure_thread_row(db, thread)
@@ -196,10 +207,12 @@ def reconcile_thread_in_session(
             row.decided_at = now
             row.updated_at = now
         _promote_unknown_endpoints(endpoint_rows, NON_LADIES, "sticky_endpoint_exclusion")
+        _detach_non_ladies_identity(db, thread, endpoint_ids)
         return row
 
     if row.status == NON_LADIES:
         _promote_unknown_endpoints(endpoint_rows, NON_LADIES, "sticky_thread_exclusion")
+        _detach_non_ladies_identity(db, thread, endpoint_ids)
         return row
 
     if row.status == LADIES_CONFIRMED:
