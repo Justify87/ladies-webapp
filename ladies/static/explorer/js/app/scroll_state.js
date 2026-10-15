@@ -12,8 +12,10 @@ function scrollRoots(host,selector=DEFAULT_SELECTOR){
 
 function applyScrollPosition(node,item){
   if(!node||!item)return;
-  node.style.overflowAnchor='none';
-  node.style.scrollBehavior='auto';
+  if(node.style){
+    node.style.overflowAnchor='none';
+    node.style.scrollBehavior='auto';
+  }
   node.scrollTop=Number(item.top||0);
   node.scrollLeft=Number(item.left||0);
 }
@@ -48,7 +50,7 @@ export function restoreScrollState(host,snapshot,selector=DEFAULT_SELECTOR){
 
 export function resetScrollState(host,selector=DEFAULT_SELECTOR){
   for(const node of scrollRoots(host,selector)){
-    node.style.overflowAnchor='none';
+    if(node.style)node.style.overflowAnchor='none';
     node.scrollTop=0;
     node.scrollLeft=0;
   }
