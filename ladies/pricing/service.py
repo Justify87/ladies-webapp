@@ -5,13 +5,14 @@ from typing import Any
 
 from sqlalchemy import desc, func, or_, select
 
-from ladies_v9.models import PriceItem, PriceList, utcnow
+from ladies_v9.models import Listing, PriceItem, PriceList, utcnow
 from ladies_v9.messaging.models import ChatMessage, ChatThread
+from ladies_v9.search_catalog import FILTER_VALUE_MAP
 
 from .context import build_context
+from .detector import PriceMessageDetector
 from .extraction_core import PriceExtractionCore, dumps, loads
 from .models import (
-    ChatMessageDerived,
     PriceCondition,
     PriceEvidence,
     PriceExtraction,
@@ -20,21 +21,29 @@ from .models import (
     PriceOfferMeta,
     PriceServiceRule,
 )
-from .rules import extract_with_rules, merge_partial
+from .proposal_ops import merge_partial
 from .schema import empty_proposal, validate_proposal
-from .signal import detect_price_signal
 
 HANDLED_STATUSES = {"ACCEPTED", "ACCEPTED_NO_CHANGE", "REJECTED"}
 TIMELINE_STATUSES = {"PENDING", "ACCEPTED", "ACCEPTED_NO_CHANGE", "STALE"}
+SERVICE_CATALOG = tuple(
+    {"label": str(label), "key": str(key)}
+    for label, key in FILTER_VALUE_MAP.get("service", {}).items()
+)
+SERVICE_TERMS = tuple(
+    dict.fromkeys(
+        [row["label"] for row in SERVICE_CATALOG]
+        + [row["key"] for row in SERVICE_CATALOG]
+    )
+)
 
 
 class PriceIntelligenceService(PriceExtractionCore):
-    """Canonical pricing service.
+    """Two-stage price intelligence: deterministic detection, FunctionGemma extraction."""
 
-    Extraction/OCR/persistence primitives live in ``PriceExtractionCore``;
-    this service owns signal, proposal orchestration and review/revision
-    semantics. There are no release-specific hardening subclasses.
-    """
+    def __init__(self, database, data_dir):
+        super().__init__(database, data_dir)
+        self.detector = PriceMessageDetector(SERVICE_TERMS)
 
     def _handled_through_message_id(self, db, thread_id: int) -> int:
         value = db.scalar(
@@ -50,13 +59,19 @@ class PriceIntelligenceService(PriceExtractionCore):
     def signal(self, thread_id: int, *, allow_ocr: bool = True) -> dict[str, Any]:
         settings = self.settings()
         if not settings["price_intelligence_enabled"]:
-            return {"thread_id": thread_id, "enabled": False, "strong": False, "score": 0, "reasons": []}
+            return {"thread_id": thread_id, "enabled": False, "strong": False, "reasons": []}
         with self.database.session() as db:
             thread = db.get(ChatThread, int(thread_id))
             if thread is None:
                 raise KeyError(thread_id)
             if thread.person_id is None:
-                return {"thread_id": thread_id, "enabled": True, "strong": False, "score": 0, "reasons": ["unassigned"]}
+                return {
+                    "thread_id": thread_id,
+                    "enabled": True,
+                    "strong": False,
+                    "classification": "OTHER",
+                    "reasons": ["unassigned"],
+                }
 
             handled_through = self._handled_through_message_id(db, thread.thread_id)
             rows = db.scalars(
@@ -66,7 +81,9 @@ class PriceIntelligenceService(PriceExtractionCore):
                 .limit(12)
             ).all()
             rows.reverse()
-            best = None
+            seed = None
+            reasons: list[str] = []
+            ocr_status = None
             previous_outgoing = None
             previous_outgoing_at = None
             contains_image = False
@@ -88,36 +105,34 @@ class PriceIntelligenceService(PriceExtractionCore):
                             question = None
                     except TypeError:
                         pass
-                result = detect_price_signal(text, previous_outgoing=question, has_image=message.message_type == "IMAGE")
-                derived.price_signal_score = result.score
-                derived.price_signal_reasons_json = dumps(list(result.reasons))
-                derived.updated_at = utcnow()
-                candidate = (result.score, message.message_id, list(result.reasons), derived.ocr_status)
-                if best is None or candidate[0] >= best[0]:
-                    best = candidate
-            score, seed, reasons, ocr_status = best or (0, None, [], None)
+                result = self.detector.detect(
+                    text,
+                    previous_outgoing=question,
+                    has_image=message.message_type == "IMAGE",
+                )
+                if result.is_price_message:
+                    seed = message.message_id
+                    reasons = list(result.reasons)
+                    ocr_status = derived.ocr_status
+
+            strong = seed is not None
             return {
                 "thread_id": thread.thread_id,
                 "person_id": thread.person_id,
                 "enabled": True,
                 "magic_button_enabled": settings["price_magic_button_enabled"],
-                "strong": bool(score >= 7),
-                "score": int(score),
+                "strong": strong,
+                "classification": "PRICE_RELATED" if strong else "OTHER",
                 "reasons": reasons,
                 "seed_message_id": seed,
                 "contains_image": contains_image,
                 "ocr_status": ocr_status,
                 "ocr_available": self.ocr.available(),
+                "detector": {"name": self.detector.name, "version": self.detector.version},
                 "handled_through_message_id": handled_through,
             }
 
     def timeline(self, thread_id: int, *, limit: int = 30) -> dict[str, Any]:
-        """Return local pricing artifacts that belong in a chat timeline.
-
-        These records are application-local UI artifacts backed by pricing
-        persistence. They are deliberately separate from ``ChatMessage`` so
-        they can never enter the WhatsApp send path.
-        """
         with self.database.session() as db:
             thread = db.get(ChatThread, int(thread_id))
             if thread is None:
@@ -159,6 +174,9 @@ class PriceIntelligenceService(PriceExtractionCore):
         if seed_message_id is None:
             signal = self.signal(thread_id)
             seed_message_id = signal.get("seed_message_id")
+            if not seed_message_id:
+                raise ValueError("Keine preisrelevante Nachricht erkannt")
+
         with self.database.session() as db:
             thread = db.get(ChatThread, int(thread_id))
             if thread is None:
@@ -171,19 +189,29 @@ class PriceIntelligenceService(PriceExtractionCore):
                 rows=self._context_rows(db, thread),
                 seed_message_id=seed_message_id,
             )
-            current_id, current = self._current_proposal(db, int(thread.person_id))
-            proposal = extract_with_rules(context, has_existing_price_list=current_id is not None)
-            if not (proposal["offers"] or proposal["service_rules"] or proposal["conditions"]):
-                raise ValueError("In diesem Chatabschnitt wurden keine ausreichend strukturierten Preisangaben erkannt")
+            person_id = int(thread.person_id)
+            current_id, current = self._current_proposal(db, person_id)
 
+        proposal = self.semantic.extract_price_proposal(
+            context.as_text(),
+            service_catalog=list(SERVICE_CATALOG),
+            has_existing_price_list=current_id is not None,
+        )
+        if not (proposal["offers"] or proposal["service_rules"] or proposal["conditions"]):
+            raise ValueError("FunctionGemma hat in diesem Chatabschnitt keine belastbaren Preisangaben extrahiert")
+
+        with self.database.session() as db:
+            thread = db.get(ChatThread, int(thread_id))
+            if thread is None or thread.person_id != person_id:
+                raise ValueError("Chat-Zuordnung hat sich während der Preiserkennung geändert")
             extraction = PriceExtraction(
-                person_id=thread.person_id,
+                person_id=person_id,
                 thread_id=thread.thread_id,
                 status="PENDING",
                 trigger_type=str(trigger_type or "MANUAL").upper()[:24],
                 schema_version=proposal["schema_version"],
-                extractor_name="rules",
-                extractor_version="1",
+                extractor_name=self.semantic.name,
+                extractor_version=self.semantic.version,
                 original_proposal_json=dumps(proposal),
                 context_fingerprint=context.fingerprint,
                 base_price_list_id=current_id,
@@ -353,6 +381,16 @@ class PriceIntelligenceService(PriceExtractionCore):
                 user_edited=user_edited,
             )
 
+    def _review_listing_id(self, db, extraction: PriceExtraction, data: dict[str, Any]) -> int | None:
+        raw = data.get("listing_id") if isinstance(data, dict) else None
+        listing_id = int(raw) if raw not in (None, "") else self._suggested_listing_id(db, extraction)
+        if listing_id is None:
+            return None
+        listing = db.get(Listing, listing_id)
+        if listing is None or extraction.person_id is None or listing.person_id != int(extraction.person_id):
+            raise ValueError("Gewählter Ort gehört nicht zu dieser Person")
+        return listing_id
+
     def accept(self, extraction_id: int, data: dict[str, Any]) -> dict[str, Any]:
         with self.database.session() as db:
             extraction = db.get(PriceExtraction, int(extraction_id))
@@ -376,14 +414,17 @@ class PriceIntelligenceService(PriceExtractionCore):
                 }
 
             reviewed, effective, current, user_edited = self._prepare_review(db, extraction, data)
+            listing_id = self._review_listing_id(db, extraction, data)
             fingerprint = self._proposal_fingerprint(effective)
             legacy_items = self._legacy_items(db, extraction.base_price_list_id)
 
             if extraction.base_price_list_id:
+                base_list = db.get(PriceList, extraction.base_price_list_id)
                 current_meta = db.get(PriceListRevisionMeta, extraction.base_price_list_id)
                 current_fp = current_meta.fingerprint if current_meta else self._proposal_fingerprint(current or empty_proposal())
                 full_would_remove_legacy = reviewed["update_mode"] == "FULL" and bool(legacy_items)
-                if current_fp == fingerprint and not full_would_remove_legacy:
+                location_changed = (base_list.listing_id if base_list else None) != listing_id
+                if current_fp == fingerprint and not full_would_remove_legacy and not location_changed:
                     extraction.status = "ACCEPTED_NO_CHANGE"
                     extraction.reviewed_proposal_json = dumps(reviewed)
                     extraction.reviewed_at = utcnow()
@@ -392,6 +433,7 @@ class PriceIntelligenceService(PriceExtractionCore):
 
             price_list = PriceList(
                 person_id=int(extraction.person_id),
+                listing_id=listing_id,
                 observed_at=utcnow(),
                 source="WHATSAPP_EXTRACTED",
                 currency=effective["currency"],
