@@ -9,7 +9,7 @@ export const pricingManualAvailable = state => pricingExtractionAvailable(state)
 
 export function businessProfileEvidence(row,bundle) {
   const profile=bundle?.profile || bundle?.snapshot || bundle?.latest_snapshot || {};
-  const storedAuxiliary=profile?.auxiliary && typeof profile.auxiliary==='object' ? profile.auxiliary : {};
+  const storedAuxiliary=profile?.auxiliary && typeof profile?.auxiliary==='object' ? profile.auxiliary : {};
   const nestedAuxiliary=storedAuxiliary?.auxiliary && typeof storedAuxiliary.auxiliary==='object' ? storedAuxiliary.auxiliary : storedAuxiliary;
   const website=String(
     profile?.business_website_url ||
@@ -85,22 +85,13 @@ export const threadRows = state => {
   return (state.messaging.threads || []).map(threadVm).filter(row=>{
     if(filter==='UNREAD' && !row.unread)return false;
     if(filter==='UNASSIGNED' && row.assigned)return false;
-    if(filter==='FAVORITE' && !row.favorite)return false;
     return !query || `${row.name} ${row.preview} ${row.endpoint?.display_phone||''} ${row.endpoint?.normalized_phone||''}`.toLowerCase().includes(query);
   });
 };
 export const currentThread = state => {
   const raw=state.messaging.currentThread;
   if(!raw)return null;
-  const vm=threadDetailVm(raw),pid=Number(vm.personId||0);
-  const summary=(state.messaging.threads||[]).map(threadVm).find(row=>row.threadId===vm.threadId);
-  const detailState=pid?state.profiles.details[String(pid)]?.user_state:null;
-  const searchState=pid?searchRows(state).find(row=>Number(row.personId)===pid):null;
-  const listState=pid?(state.lists.items||[]).find(row=>Number(row.person_id)===pid):null;
-  if(summary){vm.favorite=summary.favorite;vm.preference=summary.preference;}
-  else if(detailState){vm.favorite=Boolean(detailState.favorite);vm.preference=detailState.preference||vm.preference;}
-  else if(searchState){vm.favorite=Boolean(searchState.favorite);vm.preference=searchState.preference||vm.preference;}
-  else if(listState){vm.favorite=Boolean(listState.favorite);vm.preference=listState.preference||vm.preference;}
+  const vm=threadDetailVm(raw);
   const endpointId=Number(vm.selectedEndpoint?.endpoint_id||vm.selected_endpoint?.endpoint_id||vm.endpoint?.endpoint_id||vm.endpoints?.[0]?.endpoint_id||0);
   const contact=endpointId?state.messaging.contactByEndpoint?.[String(endpointId)]||null:null;
   vm.whatsappContact=contact;
