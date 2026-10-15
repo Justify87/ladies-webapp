@@ -2,6 +2,7 @@ import * as S from '../app/selectors.js';
 import { filterPayload } from '../data/adapters.js';
 import { renderStandalone } from './profile.js';
 import { renderSearch } from './screens/search.js';
+import { renderSavedSearches } from './screens/saved_searches.js';
 import { renderGrid, renderSwipeScreen } from './screens/discover.js';
 import { renderFavorites } from './screens/favorites.js';
 import { renderMessages, renderChat } from './screens/messaging.js';
@@ -14,6 +15,7 @@ export function renderApp(state) {
   const route=S.currentRoute(state);
   let body='';
   if(route.name==='search') body=renderSearch(state);
+  else if(route.name==='saved-searches') body=renderSavedSearches(state,route);
   else if(route.name==='swipe') body=renderSwipeScreen(state);
   else if(route.name==='grid') body=renderGrid(state);
   else if(route.name==='favorites') body=renderFavorites(state);
