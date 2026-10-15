@@ -2,7 +2,7 @@ import * as S from '../app/selectors.js';
 import { filterPayload } from '../data/adapters.js';
 import { renderStandalone } from './profile.js';
 import { renderSearch } from './screens/search.js';
-import { renderGrid, renderSwipeScreen } from './screens/discover.js';
+import { renderGrid, renderMapScreen, renderSwipeScreen } from './screens/discover.js';
 import { renderFavorites } from './screens/favorites.js';
 import { renderMessages, renderChat } from './screens/messaging.js';
 import { renderSettings } from './screens/settings.js';
@@ -16,6 +16,7 @@ export function renderApp(state) {
   if(route.name==='search') body=renderSearch(state);
   else if(route.name==='swipe') body=renderSwipeScreen(state);
   else if(route.name==='grid') body=renderGrid(state);
+  else if(route.name==='map') body=renderMapScreen(state);
   else if(route.name==='favorites') body=renderFavorites(state);
   else if(route.name==='messages') body=renderMessages(state);
   else if(route.name==='chat') body=renderChat(state);
