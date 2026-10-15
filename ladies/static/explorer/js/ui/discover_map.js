@@ -3,40 +3,25 @@ import { logClient } from '../api/client.js';
 import { escapeAttr as a, escapeHtml as e } from '../shared/html.js';
 import { icon } from '../shared/icons.js';
 
-const MAPLIBRE_JS='https://cdn.jsdelivr.net/npm/maplibre-gl@6.14.0/+esm';
-const MAPLIBRE_CSS='https://cdn.jsdelivr.net/npm/maplibre-gl@6.14.0/dist/maplibre-gl.css';
+const MAPLIBRE_JS='https://cdn.jsdelivr.net/npm/maplibre-gl@6.14.0/dist/maplibre-gl.mjs';
 const MAP_STYLE='https://tiles.openfreemap.org/styles/liberty';
 const SOURCE_ID='discover-locations';
+const CLUSTER_LAYER='discover-clusters';
+const CLUSTER_COUNT_LAYER='discover-cluster-count';
+const LOCATION_LAYER='discover-locations';
+const LOCATION_COUNT_LAYER='discover-location-count';
 const EMPTY=Object.freeze({type:'FeatureCollection',features:[]});
-
-export function createMapInitCoordinator(){
-  let generation=0;
-  let pending=null;
-  const invalidate=()=>{generation+=1;pending=null;};
-  const run=(target,task)=>{
-    if(pending?.target===target)return pending.promise;
-    const token=++generation;
-    const active=()=>generation===token&&target?.isConnected!==false;
-    const promise=(async()=>task(active))();
-    pending={target,token,promise};
-    const clear=()=>{if(pending?.token===token)pending=null;};
-    void promise.then(clear,clear);
-    return promise;
-  };
-  return Object.freeze({run,invalidate,pendingTarget:()=>pending?.target||null});
-}
+const MAP_LOAD_TIMEOUT_MS=15000;
 
 let maplibrePromise=null;
-let maplibre=null;
-let map=null;
-let container=null;
+let runtime=null;
+let runtimeGeneration=0;
 let latestData=EMPTY;
 let fittedSignature='';
 let selectedLocationKey=null;
 let closeListenerInstalled=false;
 let wasActive=false;
 const reportedMapErrors=new Set();
-const mapInit=createMapInitCoordinator();
 
 function listingRefs(feature){
   const raw=feature?.properties?.listing_refs_json;
@@ -44,18 +29,31 @@ function listingRefs(feature){
   try{return JSON.parse(String(raw||'[]'));}catch{return [];}
 }
 
-function rowMatchesRef(row,ref){
+function rowRefKey(row){
+  const listingId=Number(row?.listing_id||row?.listingId||0);
+  if(listingId)return `listing:${listingId}`;
+  const advertId=String(row?.advertId||row?.advert_id||'');
+  return advertId?`advert:${advertId}`:'';
+}
+
+function listingRefKey(ref){
   const listingId=Number(ref?.listing_id||0);
-  if(listingId)return Number(row?.listing_id||row?.listingId||0)===listingId;
+  if(listingId)return `listing:${listingId}`;
   const advertId=String(ref?.advert_id||'');
-  return Boolean(advertId&&String(row?.advertId||row?.advert_id||'')===advertId);
+  return advertId?`advert:${advertId}`:'';
+}
+
+function rowMatchesRef(row,ref){
+  const refKey=listingRefKey(ref);
+  return Boolean(refKey&&rowRefKey(row)===refKey);
 }
 
 export function filterMapFeatures(points,rows){
   if(!points?.features?.length||!rows?.length)return EMPTY;
+  const visibleKeys=new Set(rows.map(rowRefKey).filter(Boolean));
   const features=[];
   for(const feature of points.features){
-    const refs=listingRefs(feature).filter(ref=>rows.some(row=>rowMatchesRef(row,ref)));
+    const refs=listingRefs(feature).filter(ref=>visibleKeys.has(listingRefKey(ref)));
     if(!refs.length)continue;
     features.push({
       ...feature,
@@ -71,53 +69,48 @@ export function filterMapFeatures(points,rows){
 
 function rowForRef(rows,ref){return rows.find(row=>rowMatchesRef(row,ref))||null;}
 
-function ensureMapLibre(){
-  if(!document.querySelector('link[data-maplibre-css]')){
-    const link=document.createElement('link');
-    link.rel='stylesheet';
-    link.href=MAPLIBRE_CSS;
-    link.dataset.maplibreCss='1';
-    document.head.appendChild(link);
-  }
-  if(maplibre)return Promise.resolve(maplibre);
+function loadMapLibre(){
   if(!maplibrePromise){
-    maplibrePromise=import(MAPLIBRE_JS)
-      .then(module=>{maplibre=module;return module;})
-      .catch(error=>{
-        maplibrePromise=null;
-        maplibre=null;
-        document.querySelector('link[data-maplibre-css]')?.remove();
-        throw error;
-      });
+    maplibrePromise=import(MAPLIBRE_JS).catch(error=>{
+      maplibrePromise=null;
+      throw error;
+    });
   }
   return maplibrePromise;
 }
 
-function cleanup(){
-  mapInit.invalidate();
-  const active=map;
-  map=null;
-  container=null;
+function queueResize(instance,target){
+  if(!instance||!target?.isConnected)return;
+  requestAnimationFrame(()=>{
+    if(runtime?.map===instance&&runtime.container===target&&target.isConnected)instance.resize();
+  });
+}
+
+function destroyMap(){
+  runtimeGeneration+=1;
+  const active=runtime;
+  runtime=null;
   latestData=EMPTY;
   fittedSignature='';
   selectedLocationKey=null;
   reportedMapErrors.clear();
-  if(active){try{active.remove();}catch{}}
+  active?.resizeObserver?.disconnect();
+  if(active?.map){try{active.map.remove();}catch{}}
 }
 
 function fitData(instance,state,data){
-  if(!instance||!maplibre?.LngLatBounds||!data.features.length)return;
+  if(!instance||!runtime?.lib?.LngLatBounds||!data.features.length)return;
   const key=String(state.discover.map?.key||'');
   const signature=`${key}|${data.features.map(item=>item.properties?.location_key||'').sort().join(',')}`;
   if(signature===fittedSignature)return;
   fittedSignature=signature;
   if(data.features.length===1){
-    instance.easeTo({center:data.features[0].geometry.coordinates,zoom:12.5,duration:300});
+    instance.easeTo({center:data.features[0].geometry.coordinates,zoom:12.8,duration:280});
     return;
   }
-  const bounds=new maplibre.LngLatBounds();
+  const bounds=new runtime.lib.LngLatBounds();
   data.features.forEach(feature=>bounds.extend(feature.geometry.coordinates));
-  instance.fitBounds(bounds,{padding:42,maxZoom:13,duration:300});
+  instance.fitBounds(bounds,{padding:{top:42,right:42,bottom:42,left:42},maxZoom:13,duration:300});
 }
 
 function renderStatus(host,state,data){
@@ -133,17 +126,22 @@ function renderStatus(host,state,data){
   host.innerHTML='';
 }
 
+function precisionLabel(value){
+  if(value==='POSTAL')return 'PLZ-Gebiet';
+  if(value==='ADDRESS')return 'Adresse';
+  return 'Stadtgebiet';
+}
+
 function renderPreview(host,state){
   if(!host)return;
   if(!selectedLocationKey){host.innerHTML='';return;}
   const feature=latestData.features.find(item=>String(item.properties?.location_key||'')===selectedLocationKey);
   if(!feature){selectedLocationKey=null;host.innerHTML='';return;}
   const rows=S.visibleSearchRows(state);
-  const refs=listingRefs(feature);
-  const matched=refs.map(ref=>({ref,row:rowForRef(rows,ref)})).filter(item=>item.row);
+  const matched=listingRefs(feature).map(ref=>({ref,row:rowForRef(rows,ref)})).filter(item=>item.row);
   if(!matched.length){selectedLocationKey=null;host.innerHTML='';return;}
   const props=feature.properties||{};
-  const precision=props.precision==='POSTAL'?'PLZ-Gebiet':'Suchgebiet';
+  const precision=precisionLabel(String(props.precision||''));
   const close='<button type="button" class="discover-map-preview-close" data-map-preview-close aria-label="Vorschau schließen">×</button>';
 
   if(matched.length===1){
@@ -151,11 +149,12 @@ function renderPreview(host,state){
     const pid=Number(row.personId||ref.person_id||0)||'';
     const advert=String(row.advertId||ref.advert_id||'');
     const image=row.thumbnail||'';
-    host.innerHTML=`<article class="discover-map-preview">${close}<button type="button" class="discover-map-preview-main" data-action="open-profile" data-person-id="${a(pid)}" data-advert-id="${a(advert)}">${image?`<img src="${a(image)}" alt="${a(row.name)}">`:`<span class="discover-map-preview-image">${icon('user')}</span>`}<span class="discover-map-preview-copy"><b>${e(row.name)}${row.age?` <small>${e(row.age)}</small>`:''}</b><span>${icon('pin')}${e(props.location_label||row.city||'')}</span><small>${e(precision)} · Profil öffnen</small></span></button>${pid?`<button type="button" class="discover-map-preview-like ${row.preference==='LIKE'?'selected':''}" data-action="grid-like" data-person-id="${a(pid)}" data-advert-id="${a(advert)}" aria-label="Like">${icon('heart')}</button>`:''}</article>`;
+    const address=String(ref.address_label||props.location_label||row.city||'');
+    host.innerHTML=`<article class="discover-map-preview">${close}<button type="button" class="discover-map-preview-main" data-action="open-profile" data-person-id="${a(pid)}" data-advert-id="${a(advert)}">${image?`<img src="${a(image)}" alt="${a(row.name)}">`:`<span class="discover-map-preview-image">${icon('user')}</span>`}<span class="discover-map-preview-copy"><b>${e(row.name)}${row.age?` <small>${e(row.age)}</small>`:''}</b><span>${icon('pin')}${e(address)}</span><small>${e(precision)} · Profil öffnen</small></span></button>${pid?`<button type="button" class="discover-map-preview-like ${row.preference==='LIKE'?'selected':''}" data-action="grid-like" data-person-id="${a(pid)}" data-advert-id="${a(advert)}" aria-label="Like">${icon('heart')}</button>`:''}</article>`;
     return;
   }
 
-  host.innerHTML=`<section class="discover-map-location-sheet">${close}<header><b>${e(props.location_label||'Standort')}</b><small>${matched.length} Inserate · ${e(precision)}</small></header><div class="discover-map-location-list">${matched.map(({row,ref})=>{const pid=Number(row.personId||ref.person_id||0)||'';const advert=String(row.advertId||ref.advert_id||'');return `<button type="button" class="discover-map-location-row" data-action="open-profile" data-person-id="${a(pid)}" data-advert-id="${a(advert)}">${row.thumbnail?`<img src="${a(row.thumbnail)}" alt="${a(row.name)}">`:`<span>${icon('user')}</span>`}<b>${e(row.name)}${row.age?` <small>${e(row.age)}</small>`:''}</b>${icon('chevron-right')}</button>`;}).join('')}</div></section>`;
+  host.innerHTML=`<section class="discover-map-location-sheet">${close}<header><b>${e(props.location_label||'Standort')}</b><small>${matched.length} Inserate · ${e(precision)}</small></header><div class="discover-map-location-list">${matched.map(({row,ref})=>{const pid=Number(row.personId||ref.person_id||0)||'';const advert=String(row.advertId||ref.advert_id||'');const address=String(ref.address_label||props.location_label||row.city||'');return `<button type="button" class="discover-map-location-row" data-action="open-profile" data-person-id="${a(pid)}" data-advert-id="${a(advert)}">${row.thumbnail?`<img class="discover-map-location-thumb" src="${a(row.thumbnail)}" alt="${a(row.name)}">`:`<span class="discover-map-location-thumb">${icon('user')}</span>`}<span class="discover-map-location-row-copy"><b>${e(row.name)}${row.age?` <small>${e(row.age)}</small>`:''}</b><small>${icon('pin')}${e(address)}</small></span>${icon('chevron-right')}</button>`;}).join('')}</div></section>`;
 }
 
 function styleTextFont(instance){
@@ -177,8 +176,14 @@ function reportMapError(event){
   void logClient('error','map-runtime',message,{source_id:sourceId||null});
 }
 
+function clearSelection(target,getState){
+  if(!selectedLocationKey)return;
+  selectedLocationKey=null;
+  renderPreview(target.closest('.discover-map-shell')?.querySelector('.discover-map-preview-host'),getState());
+}
+
 function installLayers(instance,target,getState){
-  if(!instance||instance.getSource(SOURCE_ID))return;
+  if(instance.getSource(SOURCE_ID))return;
   const current=getState();
   latestData=filterMapFeatures(current.discover.map?.points,S.visibleSearchRows(current));
   instance.addSource(SOURCE_ID,{
@@ -189,57 +194,92 @@ function installLayers(instance,target,getState){
     clusterRadius:48,
     clusterProperties:{listing_total:['+',['get','listing_count']]}
   });
-  instance.addLayer({id:'discover-clusters',type:'circle',source:SOURCE_ID,filter:['has','point_count'],paint:{'circle-color':'#cc2d7c','circle-radius':['step',['get','listing_total'],18,10,22,30,27,75,32],'circle-stroke-color':'#ffffff','circle-stroke-width':2,'circle-opacity':.92}});
-  instance.addLayer({id:'discover-locations',type:'circle',source:SOURCE_ID,filter:['!', ['has','point_count']],paint:{'circle-color':'#cc2d7c','circle-radius':['case',['>', ['get','listing_count'],1],13,8],'circle-stroke-color':'#ffffff','circle-stroke-width':3}});
+  instance.addLayer({id:CLUSTER_LAYER,type:'circle',source:SOURCE_ID,filter:['has','point_count'],paint:{'circle-color':'#cc2d7c','circle-radius':['step',['get','listing_total'],18,10,22,30,27,75,32],'circle-stroke-color':'#ffffff','circle-stroke-width':2,'circle-opacity':.92}});
+  instance.addLayer({id:LOCATION_LAYER,type:'circle',source:SOURCE_ID,filter:['!', ['has','point_count']],paint:{'circle-color':'#cc2d7c','circle-radius':['case',['>', ['get','listing_count'],1],13,8],'circle-stroke-color':'#ffffff','circle-stroke-width':3}});
+
   const textFont=styleTextFont(instance);
   if(textFont){
-    instance.addLayer({id:'discover-cluster-count',type:'symbol',source:SOURCE_ID,filter:['has','point_count'],layout:{'text-field':['to-string',['get','listing_total']],'text-size':12,'text-font':textFont},paint:{'text-color':'#ffffff'}});
-    instance.addLayer({id:'discover-location-count',type:'symbol',source:SOURCE_ID,filter:['all',['!', ['has','point_count']],['>', ['get','listing_count'],1]],layout:{'text-field':['to-string',['get','listing_count']],'text-size':10,'text-font':textFont},paint:{'text-color':'#ffffff'}});
+    instance.addLayer({id:CLUSTER_COUNT_LAYER,type:'symbol',source:SOURCE_ID,filter:['has','point_count'],layout:{'text-field':['to-string',['get','listing_total']],'text-size':12,'text-font':textFont},paint:{'text-color':'#ffffff'}});
+    instance.addLayer({id:LOCATION_COUNT_LAYER,type:'symbol',source:SOURCE_ID,filter:['all',['!', ['has','point_count']],['>', ['get','listing_count'],1]],layout:{'text-field':['to-string',['get','listing_count']],'text-size':10,'text-font':textFont},paint:{'text-color':'#ffffff'}});
   }
 
-  instance.on('click','discover-clusters',async event=>{
-    const feature=instance.queryRenderedFeatures(event.point,{layers:['discover-clusters']})[0];
-    const clusterId=feature?.properties?.cluster_id;
-    if(clusterId==null)return;
+  instance.on('click',CLUSTER_LAYER,async event=>{
+    const feature=event.features?.[0]||instance.queryRenderedFeatures(event.point,{layers:[CLUSTER_LAYER]})[0];
+    const clusterId=Number(feature?.properties?.cluster_id);
+    if(!Number.isFinite(clusterId))return;
     try{
-      const zoom=await instance.getSource(SOURCE_ID).getClusterExpansionZoom(clusterId);
+      const source=instance.getSource(SOURCE_ID);
+      const zoom=await source.getClusterExpansionZoom(clusterId);
       instance.easeTo({center:feature.geometry.coordinates,zoom,duration:280});
-    }catch{}
+      clearSelection(target,getState);
+    }catch(error){
+      void logClient('warning','map-cluster',error?.message||String(error),{cluster_id:clusterId});
+    }
   });
-  instance.on('click','discover-locations',event=>{
-    const feature=instance.queryRenderedFeatures(event.point,{layers:['discover-locations']})[0];
+  instance.on('click',LOCATION_LAYER,event=>{
+    const feature=event.features?.[0]||instance.queryRenderedFeatures(event.point,{layers:[LOCATION_LAYER]})[0];
     if(!feature)return;
     selectedLocationKey=String(feature.properties?.location_key||'');
-    const host=target.closest('.discover-map-shell')?.querySelector('.discover-map-preview-host');
-    renderPreview(host,getState());
+    renderPreview(target.closest('.discover-map-shell')?.querySelector('.discover-map-preview-host'),getState());
   });
-  for(const layer of ['discover-clusters','discover-locations']){
+  for(const layer of [CLUSTER_LAYER,LOCATION_LAYER]){
     instance.on('mouseenter',layer,()=>{instance.getCanvas().style.cursor='pointer';});
     instance.on('mouseleave',layer,()=>{instance.getCanvas().style.cursor='';});
   }
   fitData(instance,current,latestData);
 }
 
-function ensureMap(target,state,getState){
-  if(map&&container===target)return Promise.resolve(map);
-  if(mapInit.pendingTarget()===target)return mapInit.run(target,()=>null);
-  if(map||container||mapInit.pendingTarget())cleanup();
-  return mapInit.run(target,async active=>{
-    const lib=await ensureMapLibre();
-    if(!active())return null;
-    latestData=filterMapFeatures(state.discover.map?.points,S.visibleSearchRows(state));
-    const instance=new lib.Map({container:target,style:MAP_STYLE,center:[12.3731,51.3397],zoom:10.5,attributionControl:true});
+function waitUntilLoaded(instance,token,target,getState){
+  return new Promise((resolve,reject)=>{
+    const timeout=setTimeout(()=>reject(new Error('Die Kartenbasis konnte nicht rechtzeitig geladen werden.')),MAP_LOAD_TIMEOUT_MS);
+    instance.once('load',()=>{
+      clearTimeout(timeout);
+      if(token!==runtimeGeneration||runtime?.map!==instance||runtime.container!==target||!target.isConnected){resolve(null);return;}
+      installLayers(instance,target,getState);
+      runtime.loaded=true;
+      queueResize(instance,target);
+      resolve(instance);
+    });
+  });
+}
+
+async function ensureMap(target,getState){
+  if(runtime?.container===target)return runtime.promise;
+  if(runtime)destroyMap();
+
+  const token=++runtimeGeneration;
+  const current={container:target,map:null,lib:null,loaded:false,resizeObserver:null,promise:null};
+  runtime=current;
+  current.promise=(async()=>{
+    const lib=await loadMapLibre();
+    if(token!==runtimeGeneration||runtime!==current||!target.isConnected)return null;
+    current.lib=lib;
+    const instance=new lib.Map({
+      container:target,
+      style:MAP_STYLE,
+      center:[12.3731,51.3397],
+      zoom:10.5,
+      attributionControl:true,
+      fadeDuration:0
+    });
+    current.map=instance;
     instance.on('error',reportMapError);
     instance.addControl(new lib.NavigationControl({showCompass:false}),'bottom-right');
-    if(!active()){try{instance.remove();}catch{}return null;}
-    container=target;
-    map=instance;
-    instance.once('load',()=>{
-      if(map!==instance||container!==target||!target.isConnected)return;
-      installLayers(instance,target,getState);
-    });
-    return instance;
-  });
+    if(typeof ResizeObserver==='function'){
+      current.resizeObserver=new ResizeObserver(()=>{
+        if(runtime===current&&current.map===instance&&target.isConnected)instance.resize();
+      });
+      current.resizeObserver.observe(target);
+    }
+    queueResize(instance,target);
+    try{
+      return await waitUntilLoaded(instance,token,target,getState);
+    }catch(error){
+      if(runtime===current)destroyMap();
+      throw error;
+    }
+  })();
+  return current.promise;
 }
 
 function installCloseListener(){
@@ -262,13 +302,14 @@ export function syncDiscoverMap({host,state,store,effects}){
   if(!active){
     if(wasActive)effects.cancelMapRequest();
     wasActive=false;
-    if(map||mapInit.pendingTarget())cleanup();
+    if(runtime)destroyMap();
     return;
   }
   wasActive=true;
 
   const target=host.querySelector('#discoverMap');
   if(!target)return;
+  if(runtime&&runtime.container!==target)destroyMap();
   const shell=target.closest('.discover-map-shell');
   latestData=filterMapFeatures(state.discover.map?.points,S.visibleSearchRows(state));
   renderStatus(shell?.querySelector('.discover-map-state-host'),state,latestData);
@@ -276,14 +317,20 @@ export function syncDiscoverMap({host,state,store,effects}){
 
   if(!state.discover.map?.points&&!state.discover.map?.loading)queueMicrotask(()=>effects.loadMapPoints({quiet:true}));
 
-  void ensureMap(target,state,()=>store.getState()).then(instance=>{
-    if(!instance||map!==instance||container!==target)return;
+  void ensureMap(target,()=>store.getState()).then(instance=>{
+    if(!instance||runtime?.map!==instance||runtime.container!==target)return;
     const current=store.getState();
     latestData=filterMapFeatures(current.discover.map?.points,S.visibleSearchRows(current));
     const source=instance.getSource(SOURCE_ID);
-    if(source){source.setData(latestData);fitData(instance,current,latestData);}
+    if(source){
+      source.setData(latestData);
+      fitData(instance,current,latestData);
+    }
+    renderPreview(shell?.querySelector('.discover-map-preview-host'),current);
+    queueResize(instance,target);
   }).catch(error=>{
     const status=shell?.querySelector('.discover-map-state-host');
     if(status)status.innerHTML=`<div class="discover-map-state">${icon('info')}<span>${e(error?.message||'Karte konnte nicht geladen werden.')}</span></div>`;
+    void logClient('error','map-init',error?.message||String(error));
   });
 }
