@@ -3,23 +3,31 @@ import { api } from '../api/client.js';
 const MAX_REFRESHES=8;
 const REFRESH_DELAY_MS=1400;
 
-function uniqueListingIds(results=[]){
-  const ids=[];
-  const seen=new Set();
+function activeMapItems(results=[]){
+  const items=[];
+  const indexByListing=new Map();
   for(const row of results||[]){
-    const value=Number(row?.listing_id??row?.listingId??0);
-    if(value>0&&!seen.has(value)){seen.add(value);ids.push(value);}
+    const listingId=Number(row?.listing_id??row?.listingId??0);
+    if(listingId<=0)continue;
+    const city=String(row?.city||'').trim();
+    const existing=indexByListing.get(listingId);
+    if(existing===undefined){
+      indexByListing.set(listingId,items.length);
+      items.push({listing_id:listingId,city});
+    }else if(city&&!items[existing].city){
+      items[existing].city=city;
+    }
   }
-  return ids;
+  return items;
 }
 
 export function mapRequestDescriptor(state){
-  const listingIds=uniqueListingIds(state?.search?.results);
-  const city=String(state?.search?.filters?.city||'').trim();
-  return {listingIds,city,key:`${city.toLocaleLowerCase('de-DE')}|${listingIds.join(',')}`};
+  const items=activeMapItems(state?.search?.results);
+  const identity=items.map(item=>[item.listing_id,item.city.toLocaleLowerCase('de-DE')]);
+  return {items,key:JSON.stringify(identity)};
 }
 
-export function createMapEffects({store}) {
+export function createMapEffects({store,mapPoints=api.mapPoints}) {
   let generation=0;
   let timer=null;
   let refreshes=0;
@@ -34,7 +42,7 @@ export function createMapEffects({store}) {
   async function loadMapPoints({force=false,quiet=true}={}) {
     const requested=mapRequestDescriptor(store.getState());
     const current=store.getState().discover.map||{};
-    if(!requested.listingIds.length){
+    if(!requested.items.length){
       cancel();
       if(current.key||current.points||current.loading||current.error)store.dispatch({type:'DISCOVER_MAP_CLEAR'});
       return null;
@@ -49,7 +57,7 @@ export function createMapEffects({store}) {
     store.dispatch({type:'DISCOVER_MAP_LOADING',key:requested.key,value:true});
 
     try{
-      const points=await api.mapPoints({listing_ids:requested.listingIds,fallback_city:requested.city});
+      const points=await mapPoints({items:requested.items});
       const latest=mapRequestDescriptor(store.getState());
       if(sequence!==generation||latest.key!==requested.key)return null;
 
