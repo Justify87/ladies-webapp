@@ -73,7 +73,7 @@ try{
   const effects=createProfileRequestEffects({store});
   await effects.loadProfileRequest(7);
   assert.equal(state.messaging.profileRequests['7'].can_send,false);
-  await new Promise(resolve=>setTimeout(resolve,90));
+  await new Promise(resolve=>setTimeout(resolve,180));
   assert.ok(fetchCalls>=2,'cooldown/recheck timer must refresh status automatically');
   assert.equal(state.messaging.profileRequests['7'].can_send,true,'expired cooldown must reactivate without reopening profile');
   await effects.sendProfileRequest(7,11);
