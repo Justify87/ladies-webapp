@@ -90,6 +90,8 @@ assert.equal(invalidatesProfilePricing('PROFILE_TAB'),false);
 
 // Focused guards for the Explorer follow-up fixes.
 const discoverSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/discover.js',import.meta.url),'utf8');
+const profileSource=readFileSync(new URL('../ladies/static/explorer/js/ui/profile.js',import.meta.url),'utf8');
+const prototypeSource=readFileSync(new URL('../ladies/static/explorer/css/prototype.css',import.meta.url),'utf8');
 const chromeSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/chrome.js',import.meta.url),'utf8');
 const clientSource=readFileSync(new URL('../ladies/static/explorer/js/api/client.js',import.meta.url),'utf8');
 const encounterSource=readFileSync(new URL('../ladies/static/explorer/js/effects/encounters.js',import.meta.url),'utf8');
@@ -104,9 +106,12 @@ assert.match(clientSource,/threads:\s*\(\)\s*=>\s*request\('\/api\/messaging\/th
 assert.match(encounterSource,/querySelector\('\[name="base_price_eur"\]'\)\)payload\.base_price_eur=/,'hidden base price must only be sent when present');
 assert.match(encounterSource,/querySelector\('\[name="note"\]'\)\)payload\.note=/,'hidden note must only be sent when present');
 assert.match(encounterSource,/querySelector\('\[data-encounter-service-row\]'\)\)payload\.services=/,'hidden services must only be sent when present');
-assert.match(requestedSource,/mode==='NOW'\?'Jetzt laut Anzeige':mode==='TODAY'\?'Heute laut Anzeige':'Heute verfügbar'/,'availability label must respect the quick filter mode');
-assert.match(requestedSource,/panel\.appendChild\(identity\)/,'Swipe identity must be anchored inside the image panel');
-assert.match(requestedSource,/panel\.appendChild\(pill\)/,'availability badge must be anchored in the opposite image corner');
+assert.match(profileSource,/function renderProfileBody\(/,'standalone and swipe profiles must share one profile body renderer');
+assert.match(profileSource,/screen-view standalone-profile swipe-profile/,'Swipe must use the canonical standalone profile surface');
+assert.doesNotMatch(profileSource,/swipe-details/,'retired Swipe-only detail markup must not return');
+assert.doesNotMatch(requestedSource,/cleanSwipe|requested-swipe-identity|requested-profile-availability|availabilityMode/,'legacy Swipe DOM rewriting must stay removed');
+assert.match(prototypeSource,/\.swipe-profile \.screen-scroll/,'Swipe keeps its media-sized scroll surface through the canonical Swipe profile class');
+assert.doesNotMatch(prototypeSource,/swipe-details|profile-media::after/,'legacy Swipe detail styling and dark media overlay must stay removed');
 assert.match(requestedSource,/requested-new-encounter"><summary/,'new encounter capture must start collapsed');
 assert.doesNotMatch(requestedSource,/requested-new-encounter"\s+open/,'new encounter capture must never render open by default');
 assert.match(requestedSource,/dataset\.requestedPriceHistory='1'/,'profile must provide a dedicated price history tab');
