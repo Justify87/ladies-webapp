@@ -4,6 +4,7 @@ import makeWASocket, {
   downloadMediaMessage,
   extractMessageContent,
   fetchLatestBaileysVersion,
+  fetchLatestWaWebVersion,
   makeCacheableSignalKeyStore,
   proto,
   useMultiFileAuthState,
@@ -34,6 +35,7 @@ for (const directory of [mediaDir, viewOnceDir, messageCacheDir]) {
 
 const logger = pino({ level: process.env.LADIES_BAILEYS_LOG_LEVEL || 'warn' }, pino.destination(2))
 const reconnectDelays = [1000, 2000, 5000, 10000, 30000]
+const WA_VERSION_CACHE_MS = 5 * 60 * 1000
 const MAX_INCOMING_MEDIA = 96 * 1024 * 1024
 const MAX_FETCH_HISTORY_MESSAGES = 100
 const MAX_RAW_MESSAGE_CACHE = 4000
@@ -51,6 +53,9 @@ let connecting = null
 let localSendsInFlight = 0
 let commandChain = Promise.resolve()
 let rawCacheWrites = 0
+let cachedWaVersion = null
+let cachedWaVersionAt = 0
+const socketContexts = new WeakMap()
 const locallySentIds = new Map()
 const localMessageIds = new Map()
 const pendingOwnMessages = new Map()
@@ -86,6 +91,32 @@ function statusCode(error) {
 
 function errorText(error) {
   return error?.message || String(error || 'unknown error')
+}
+
+function validWaVersion(value) {
+  return Array.isArray(value) && value.length === 3 && value.every(part => Number.isInteger(part) && part >= 0)
+}
+
+async function resolveWaVersion() {
+  const now = Date.now()
+  if (cachedWaVersion && now - cachedWaVersionAt < WA_VERSION_CACHE_MS) return cachedWaVersion
+  try {
+    const live = await fetchLatestWaWebVersion()
+    if (validWaVersion(live?.version) && !live?.error) {
+      cachedWaVersion = live.version
+      cachedWaVersionAt = now
+      logger.debug({ version: live.version.join('.') }, 'using live WhatsApp Web version')
+      return cachedWaVersion
+    }
+    throw new Error(live?.error?.message || 'invalid live WhatsApp Web version')
+  } catch (error) {
+    logger.warn({ err: errorText(error) }, 'live WhatsApp Web version unavailable; falling back to Baileys version')
+    const fallback = await fetchLatestBaileysVersion()
+    if (!validWaVersion(fallback?.version)) throw new Error('WhatsApp Web version konnte nicht ermittelt werden')
+    cachedWaVersion = fallback.version
+    cachedWaVersionAt = now
+    return cachedWaVersion
+  }
 }
 
 function asProviderKey(value) {
@@ -603,7 +634,11 @@ function mediaContent(command) {
 
 async function handleConnectionUpdate(current, update) {
   if (current !== sock || !update) return
-  if (update.qr) emit({ type: 'qr', value: update.qr })
+  const context = socketContexts.get(current) || { registeredAtStart: false, qrSeen: false }
+  if (update.qr) {
+    context.qrSeen = true
+    emit({ type: 'qr', value: update.qr })
+  }
   if (update.receivedPendingNotifications === true) {
     emit({ type: 'sync', state: 'READY', progress: 100, is_latest: true })
   }
@@ -616,6 +651,8 @@ async function handleConnectionUpdate(current, update) {
 
   const code = statusCode(update.lastDisconnect?.error)
   const reason = errorText(update.lastDisconnect?.error)
+  if (current === sock) sock = null
+  connecting = null
   if (code === DisconnectReason.loggedOut) {
     logger.warn({ code, reason }, 'WhatsApp session logged out')
     emit({ type: 'connection', state: 'LOGGED_OUT', detail: `code_${code || 'unknown'}` })
@@ -625,12 +662,24 @@ async function handleConnectionUpdate(current, update) {
     emit({ type: 'connection', state: 'DISCONNECTED' })
     return
   }
+  if (code === DisconnectReason.restartRequired) {
+    reconnectAttempt = 0
+    logger.info({ code }, 'WhatsApp pairing requires socket restart')
+    emit({ type: 'connection', state: 'CONNECTING', detail: 'pairing_restart' })
+    void connect().catch(err => emit({ type: 'error', code: 'RESTART_FAILED', message: errorText(err) }))
+    return
+  }
+  if (!context.registeredAtStart) {
+    reconnectAttempt = 0
+    logger.warn({ code, reason, qr_seen: context.qrSeen }, 'WhatsApp pairing socket closed before registration')
+    emit({ type: 'connection', state: 'ERROR', detail: `pairing_failed_code_${code || 'unknown'}` })
+    return
+  }
   const delay = reconnectDelays[Math.min(reconnectAttempt, reconnectDelays.length - 1)]
   reconnectAttempt += 1
   logger.warn({ code, reason, retry_ms: delay }, 'WhatsApp connection closed; reconnecting')
   emit({ type: 'connection', state: 'RECONNECTING', detail: `code_${code || 'unknown'};retry_in_${delay}ms` })
   setTimeout(() => {
-    if (current === sock) sock = null
     connecting = null
     connect().catch(err => emit({ type: 'error', code: 'RECONNECT_FAILED', message: errorText(err) }))
   }, delay)
@@ -732,7 +781,7 @@ async function connect() {
   connecting = (async () => {
     emit({ type: 'connection', state: 'CONNECTING' })
     const { state, saveCreds } = await useMultiFileAuthState(authDir)
-    const { version } = await fetchLatestBaileysVersion()
+    const version = await resolveWaVersion()
     const current = makeWASocket({
       version,
       logger,
@@ -740,7 +789,7 @@ async function connect() {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, logger),
       },
-      browser: Browsers.macOS('Desktop'),
+      browser: Browsers.ubuntu('Chrome'),
       printQRInTerminal: false,
       markOnlineOnConnect: false,
       syncFullHistory: true,
@@ -751,6 +800,7 @@ async function connect() {
       generateHighQualityLinkPreview: false,
     })
     sock = current
+    socketContexts.set(current, { registeredAtStart: Boolean(state.creds?.registered), qrSeen: false })
     current.ev.process(async events => {
       try {
         await processEvents(current, events, saveCreds)
@@ -917,4 +967,3 @@ process.on('SIGINT', () => {
 })
 
 emit({ type: 'ready' })
-connect().catch(() => {})
