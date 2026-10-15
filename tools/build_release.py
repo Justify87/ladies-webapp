@@ -15,15 +15,7 @@ INCLUDE_PREFIXES = ("ladies/", "tools/", "packaging/")
 EXCLUDED_PARTS = {"__pycache__", "node_modules", ".venv", ".runtime", "dist", "tests"}
 FORBIDDEN_PREFIXES = ("ladies_data/", "logs/", ".git/", ".github/")
 FORBIDDEN_NAMES = {"ladies.sqlite3", "ladies.sqlite3-wal", "ladies.sqlite3-shm"}
-V13_RUNTIME_FILES = {
-    "ladies/templates/index.html",
-    "ladies/static/explorer/css/tokens.css",
-    "ladies/static/explorer/css/base.css",
-    "ladies/static/explorer/css/shell.css",
-    "ladies/static/explorer/css/components.css",
-    "ladies/static/explorer/css/screens.css",
-    "ladies/static/explorer/js/bootstrap.js",
-}
+EXPLORER_ASSET_RE = re.compile(r'(?:href|src)="(/static/explorer/[^"?]+)"')
 
 
 def _project_version(root: Path) -> str:
@@ -46,6 +38,16 @@ def _commit(root: Path) -> str:
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
 
 
+def _explorer_runtime_files(root: Path) -> set[str]:
+    index_path = root / "ladies" / "templates" / "index.html"
+    index = index_path.read_text(encoding="utf-8")
+    runtime_files = {"ladies/templates/index.html"}
+    runtime_files.update(f"ladies{match.group(1)}" for match in EXPLORER_ASSET_RE.finditer(index))
+    if len(runtime_files) == 1:
+        raise RuntimeError("Keine Explorer-Runtime-Assets in index.html gefunden")
+    return runtime_files
+
+
 def _tracked_files(root: Path) -> list[Path]:
     output = subprocess.check_output(["git", "ls-files"], cwd=root, text=True)
     result: list[Path] = []
@@ -61,7 +63,7 @@ def _tracked_files(root: Path) -> list[Path]:
     return sorted(result, key=lambda item: item.as_posix())
 
 
-def _validate_file_set(files: list[Path]) -> None:
+def _validate_file_set(files: list[Path], runtime_files: set[str]) -> None:
     names = {path.as_posix() for path in files}
     required = {
         "ladies_explorer.py",
@@ -78,7 +80,7 @@ def _validate_file_set(files: list[Path]) -> None:
         "packaging/install.cmd",
         "packaging/start.cmd",
         "packaging/update.cmd",
-        *V13_RUNTIME_FILES,
+        *runtime_files,
     }
     missing = sorted(required - names)
     if missing:
@@ -93,7 +95,7 @@ def _validate_file_set(files: list[Path]) -> None:
         raise RuntimeError("Persistente Dateien im Release-Paket: " + ", ".join(sorted(forbidden)))
 
 
-def _validate_archive(archive: Path, files: list[Path]) -> None:
+def _validate_archive(archive: Path, files: list[Path], runtime_files: set[str]) -> None:
     expected = {path.as_posix() for path in files} | {"release-manifest.json"}
     with zipfile.ZipFile(archive) as bundle:
         names = set(bundle.namelist())
@@ -105,21 +107,21 @@ def _validate_archive(archive: Path, files: list[Path]) -> None:
     if unexpected:
         raise RuntimeError("Unerwartete Dateien im Release-Archiv: " + ", ".join(unexpected))
 
-    missing_v13 = sorted(V13_RUNTIME_FILES - names)
-    if missing_v13:
-        raise RuntimeError("V13-Runtime fehlt im Release-Archiv: " + ", ".join(missing_v13))
+    missing_runtime = sorted(runtime_files - names)
+    if missing_runtime:
+        raise RuntimeError("Explorer-Runtime fehlt im Release-Archiv: " + ", ".join(missing_runtime))
 
-    tracked_v13 = {path.as_posix() for path in files if path.as_posix().startswith("ladies/static/explorer/")}
-    archived_v13 = {name for name in names if name.startswith("ladies/static/explorer/")}
-    if tracked_v13 != archived_v13:
-        missing_nested = sorted(tracked_v13 - archived_v13)
-        extra_nested = sorted(archived_v13 - tracked_v13)
+    tracked_explorer = {path.as_posix() for path in files if path.as_posix().startswith("ladies/static/explorer/")}
+    archived_explorer = {name for name in names if name.startswith("ladies/static/explorer/")}
+    if tracked_explorer != archived_explorer:
+        missing_nested = sorted(tracked_explorer - archived_explorer)
+        extra_nested = sorted(archived_explorer - tracked_explorer)
         details: list[str] = []
         if missing_nested:
             details.append("fehlend: " + ", ".join(missing_nested))
         if extra_nested:
             details.append("unerwartet: " + ", ".join(extra_nested))
-        raise RuntimeError("V13-Asset-Set im Release-Archiv stimmt nicht: " + "; ".join(details))
+        raise RuntimeError("Explorer-Asset-Set im Release-Archiv stimmt nicht: " + "; ".join(details))
 
 
 def build(output_dir: Path, *, commit: str | None = None, root: Path = ROOT) -> Path:
@@ -129,7 +131,8 @@ def build(output_dir: Path, *, commit: str | None = None, root: Path = ROOT) -> 
     version = _project_version(root)
     tag = f"v{version}"
     files = _tracked_files(root)
-    _validate_file_set(files)
+    runtime_files = _explorer_runtime_files(root)
+    _validate_file_set(files, runtime_files)
     manifest = {
         "format_version": 1,
         "app_version": version,
@@ -146,7 +149,7 @@ def build(output_dir: Path, *, commit: str | None = None, root: Path = ROOT) -> 
             "release-manifest.json",
             json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         )
-    _validate_archive(archive, files)
+    _validate_archive(archive, files, runtime_files)
     return archive
 
 
