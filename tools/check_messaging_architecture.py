@@ -142,7 +142,7 @@ def check_frontend() -> None:
     settings = source("ladies/static/explorer/js/ui/screens/settings.js")
     require('data-action="wa-reset"' in settings, "settings reset action")
     require("Verbindungsdaten vollständig löschen" in settings, "settings exposes explicit full connection-data reset")
-    require('actions.push(`<button class="danger" data-action="wa-reset">Verbindungsdaten vollständig löschen</button>`)'' in settings, "reset action is unconditional across connection states")
+    require("actions.push(`<button class=\"danger\" data-action=\"wa-reset\">Verbindungsdaten vollständig löschen</button>`)", "reset action is unconditional across connection states")
     require('data-action="wa-qr"' not in settings, "settings QR button removed")
     require('data-action="wa-logout"' not in settings, "settings logout action removed")
     require("wa?.pairing_requested" in settings, "settings pair intent rendering")
