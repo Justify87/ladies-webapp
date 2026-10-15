@@ -129,11 +129,18 @@ export function renderIdentity(vm) {
   return `<div class="profile-identity"><div class="profile-name-row"><h1>${e(vm.name)}${vm.age?`, ${e(String(vm.age).replace(/\s*Jahre?.*/i,''))}`:''}</h1>${vm.activeToday?'<span class="online-pill">Heute online</span>':''}</div><div class="profile-meta-place">${icon('pin')}${e(vm.city || 'Ort unbekannt')}</div><div class="badge-row">${vm.listingCount>1?`<span class="badge purple">${icon('users')}Person bekannt · ${vm.listingCount} Anzeigen</span>`:personNew?`<span class="badge blue">${icon('user')}Person neu erkannt</span>`:''}${listingNew?`<span class="badge blue">${icon('sparkles')}Anzeige neu</span>`:''}<span class="badge">${icon('shield')}${e(statusText)}</span>${vm.hasVideo?`<span class="badge blue">${icon('play')}Video</span>`:''}</div></div>`;
 }
 
+function renderProfileBody(vm,detail,{activeTab='info',filters={selected:{}},showDescriptionChanges=false}={}) {
+  const content=detail
+    ? renderTabs(detail,activeTab,filters,{showDescriptionChanges})
+    : `<section class="profile-card loading-card"><span class="spinner"></span><span>Profildetails werden geladen …</span></section>`;
+  return `<section class="standalone-profile-body">${renderIdentity(vm)}${renderActionRail(vm)}${content}</section>`;
+}
+
 export function renderStandalone(detail,{activeTab='info',mediaIndex=0,filters={selected:{}},autoplay=false,showDescriptionChanges=false}={}) {
-  return `<div class="screen-view standalone-profile"><div class="screen-scroll" data-scroll-root><section class="standalone-media-wrap"><button class="profile-back-button" data-action="back" aria-label="Zurück">${icon('back')}</button><button class="profile-more-button" data-action="profile-more" data-person-id="${a(detail.personId)}">${icon('more')}</button>${renderMedia(detail,mediaIndex,{standalone:true,autoplay})}</section><section class="standalone-profile-body">${renderIdentity(detail)}${renderActionRail(detail)}${renderTabs(detail,activeTab,filters,{showDescriptionChanges})}</section></div></div>`;
+  return `<div class="screen-view standalone-profile"><div class="screen-scroll" data-scroll-root><section class="standalone-media-wrap"><button class="profile-back-button" data-action="back" aria-label="Zurück">${icon('back')}</button><button class="profile-more-button" data-action="profile-more" data-person-id="${a(detail.personId)}">${icon('more')}</button>${renderMedia(detail,mediaIndex,{standalone:true,autoplay})}</section>${renderProfileBody(detail,detail,{activeTab,filters,showDescriptionChanges})}</div></div>`;
 }
 
 export function renderSwipe(bundle,detail,{activeTab='info',mediaIndex=0,filters={selected:{}},autoplay=false,showDescriptionChanges=false}={}) {
   const vm=detail || bundle;
-  return `<div class="screen-view swipe-screen"><div class="screen-scroll" data-scroll-root data-swipe-scroll><section class="swipe-media-panel">${renderMedia(vm,mediaIndex,{autoplay})}</section><section class="swipe-details">${renderIdentity(vm)}${renderActionRail(vm)}${detail?renderTabs(detail,activeTab,filters,{showDescriptionChanges}):`<section class="profile-card loading-card"><span class="spinner"></span><span>Profildetails werden geladen …</span></section>`}</section></div></div>`;
+  return `<div class="screen-view standalone-profile swipe-profile"><div class="screen-scroll" data-scroll-root data-swipe-scroll><section class="swipe-media-panel">${renderMedia(vm,mediaIndex,{standalone:true,autoplay})}</section>${renderProfileBody(vm,detail,{activeTab,filters,showDescriptionChanges})}</div></div>`;
 }
