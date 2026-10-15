@@ -12,6 +12,7 @@ from .background import BackgroundTasks
 from .config import frontend_config
 from .encounter_metadata import install_encounter_metadata
 from .lan_access import LanAccessManager
+from .map_view import install_map_view
 from .messaging import install_messaging
 from .messaging.integration import merge_messaging_person, reconcile_identity_events as reconcile_messaging_identity_events
 from .messaging.scope import hydrate_ladies_history, reconcile_ladies_endpoints
@@ -24,7 +25,10 @@ from .web import create_app as create_core_app
 LOGGER = logging.getLogger("ladies_explorer.messaging.integration")
 REQUEST_LOGGER = logging.getLogger("ladies_explorer")
 LAN_COOKIE = "ladies_access"
-BROWSER_CSP = "frame-ancestors 'self'; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com"
+BROWSER_CSP = (
+    "frame-ancestors 'self'; "
+    "connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com https://tiles.openfreemap.org"
+)
 
 
 class _ExpectedStreamDisconnectFilter(logging.Filter):
@@ -148,6 +152,8 @@ def create_app(
     app.config["LAN_ACCESS_TOKEN"] = access.pairing_token
     app.extensions["background_tasks"] = background
     atexit.register(background.shutdown)
+
+    install_map_view(app, background=background, data_dir=data_dir)
 
     @app.before_request
     def protect_remote_local_data():
