@@ -36,6 +36,28 @@ class ContactEndpoint(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class ProviderPeerState(Base):
+    """Provider-owned contact/chat metadata kept outside canonical conversations.
+
+    A provider peer may exist before a ContactEndpoint is resolved. Conversely, a
+    local conversation must remain valid after the provider deletes its chat row.
+    Keeping this state separate makes that ownership boundary explicit.
+    """
+
+    __tablename__ = "provider_peer_state"
+    __table_args__ = (
+        Index("idx_provider_peer_phone", "provider", "phone_address"),
+    )
+    provider: Mapped[str] = mapped_column(String(24), primary_key=True)
+    provider_address: Mapped[str] = mapped_column(String(256), primary_key=True)
+    phone_address: Mapped[Optional[str]] = mapped_column(String(256))
+    display_name: Mapped[Optional[str]] = mapped_column(String(256))
+    unread_count: Mapped[Optional[int]] = mapped_column(Integer)
+    chat_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    state_json: Mapped[Optional[str]] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class ChatThread(Base):
     __tablename__ = "chat_threads"
     __table_args__ = (
