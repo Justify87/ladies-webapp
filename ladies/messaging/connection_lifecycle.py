@@ -27,7 +27,9 @@ class WhatsAppConnectionLifecycle:
         # MessagingService historically starts the worker whenever creds.json
         # merely exists. Baileys creates that file before a device is paired,
         # so an interrupted first pairing must not become an implicit startup
-        # connection on the next app launch.
+        # connection on the next app launch. Dependency failures remain visible.
+        if self.service.gateway.state == "DEPENDENCY_MISSING":
+            return
         if self.has_saved_session():
             threading.Thread(
                 target=self._resume_saved_session,
