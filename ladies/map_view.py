@@ -20,24 +20,31 @@ def install_map_view(app: Flask, *, background, data_dir) -> MapService:
     @app.post("/api/map-points")
     def api_map_points():
         payload = request.get_json(silent=True) or {}
-        raw_ids = payload.get("listing_ids") or []
-        if not isinstance(raw_ids, list):
-            raise ValidationError("listing_ids muss eine Liste sein")
-        if len(raw_ids) > MAX_MAP_LISTINGS:
+        raw_items = payload.get("items") or []
+        if not isinstance(raw_items, list):
+            raise ValidationError("items muss eine Liste sein")
+        if len(raw_items) > MAX_MAP_LISTINGS:
             raise ValidationError("Zu viele Treffer für die Kartenansicht")
 
-        listing_ids: list[int] = []
-        seen: set[int] = set()
-        for raw in raw_ids:
+        active_items: list[dict] = []
+        index_by_listing: dict[int, int] = {}
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                continue
             try:
-                listing_id = int(raw)
+                listing_id = int(raw.get("listing_id"))
             except (TypeError, ValueError):
                 continue
-            if listing_id > 0 and listing_id not in seen:
-                seen.add(listing_id)
-                listing_ids.append(listing_id)
+            if listing_id <= 0:
+                continue
+            city = str(raw.get("city") or "").strip()[:160]
+            existing_index = index_by_listing.get(listing_id)
+            if existing_index is None:
+                index_by_listing[listing_id] = len(active_items)
+                active_items.append({"listing_id": listing_id, "city": city})
+            elif city and not active_items[existing_index]["city"]:
+                active_items[existing_index]["city"] = city
 
-        fallback_city = str(payload.get("fallback_city") or "").strip()[:160]
-        return jsonify(service.feature_collection(listing_ids, fallback_city=fallback_city))
+        return jsonify(service.feature_collection(active_items))
 
     return service
