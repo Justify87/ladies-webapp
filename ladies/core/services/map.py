@@ -47,10 +47,10 @@ def _postal_key(postal_code: str) -> str:
 class MapService:
     """Build cached, privacy-conscious map data for the current active results.
 
-    The request path only reads local canonical data and the local geocode cache.
-    Missing postal/city centroids are resolved in the existing background executor.
-    Hidden addresses never leave the process; only a five-digit postcode or city name
-    may be sent to a geocoding provider.
+    The request path reads canonical local profile data plus the current search-row
+    city fallback. Missing centroids are resolved only by the dedicated map
+    background executor. Hidden addresses never leave the process; only a five-digit
+    postcode or, when no usable postcode exists, a city name may reach a provider.
     """
 
     def __init__(self, repository, *, data_dir: str | Path, background):
@@ -78,18 +78,18 @@ class MapService:
     def _save_cache(self) -> None:
         with self._lock:
             payload = orjson.dumps(self._cache, option=orjson.OPT_SORT_KEYS)
-        tmp = self.cache_path.with_suffix(".tmp")
-        tmp.write_bytes(payload)
-        tmp.replace(self.cache_path)
+            tmp = self.cache_path.with_suffix(".tmp")
+            tmp.write_bytes(payload)
+            tmp.replace(self.cache_path)
 
-    def _cached_record(self, key: str) -> dict[str, Any] | None:
+    def _cached_record(self, key: str | None) -> dict[str, Any] | None:
+        if not key:
+            return None
         with self._lock:
             value = self._cache.get(key)
             return dict(value) if isinstance(value, dict) else None
 
     def _resolved_location(self, key: str | None) -> dict[str, Any] | None:
-        if not key:
-            return None
         value = self._cached_record(key)
         if not value or value.get("status") != "RESOLVED":
             return None
@@ -174,7 +174,7 @@ class MapService:
     def _resolve_missing(self, specs: list[dict[str, str]]) -> None:
         keys = [spec["key"] for spec in specs]
         try:
-            ordered = sorted(specs, key=lambda spec: 0 if spec["kind"] == "city" else 1)
+            ordered = sorted(specs, key=lambda spec: 0 if spec["kind"] == "postal" else 1)
             for spec in ordered:
                 if self._cached_record(spec["key"]) is not None:
                     continue
@@ -209,30 +209,68 @@ class MapService:
         with self._lock:
             return sum(1 for key in specs if key not in self._cache or key in self._resolving)
 
-    def feature_collection(self, listing_ids: list[int], *, fallback_city: str = "") -> dict[str, Any]:
-        items = self.repository.map_items(listing_ids)
-        fallback_city = str(fallback_city or "").strip()
+    def _resolution_specs(self, prepared: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
         specs: dict[str, dict[str, str]] = {}
-        prepared: list[dict[str, Any]] = []
+        for item in prepared:
+            postal_key = item["postal_key"]
+            city_key = item["city_key"]
+            if postal_key:
+                postal_record = self._cached_record(postal_key)
+                if postal_record is None:
+                    specs[postal_key] = {
+                        "key": postal_key,
+                        "kind": "postal",
+                        "value": item["postal"],
+                    }
+                elif postal_record.get("status") == "NOT_FOUND" and city_key and self._cached_record(city_key) is None:
+                    specs[city_key] = {
+                        "key": city_key,
+                        "kind": "city",
+                        "value": item["city"],
+                    }
+            elif city_key and self._cached_record(city_key) is None:
+                specs[city_key] = {
+                    "key": city_key,
+                    "kind": "city",
+                    "value": item["city"],
+                }
+        return specs
 
+    def feature_collection(self, active_items: list[dict[str, Any]]) -> dict[str, Any]:
+        listing_ids: list[int] = []
+        active_city_by_listing: dict[int, str] = {}
+        seen: set[int] = set()
+        for raw in active_items:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                listing_id = int(raw.get("listing_id"))
+            except (TypeError, ValueError):
+                continue
+            if listing_id <= 0:
+                continue
+            city = str(raw.get("city") or "").strip()[:160]
+            if listing_id not in seen:
+                seen.add(listing_id)
+                listing_ids.append(listing_id)
+                active_city_by_listing[listing_id] = city
+            elif city and not active_city_by_listing.get(listing_id):
+                active_city_by_listing[listing_id] = city
+
+        items = self.repository.map_items(listing_ids)
+        prepared: list[dict[str, Any]] = []
         for item in items:
             postal = _postal_code(item)
-            city = str(item.get("city") or fallback_city or "").strip()
-            postal_key = _postal_key(postal) if postal else None
-            city_key = _city_key(city) if city else None
-            if postal_key:
-                specs[postal_key] = {"key": postal_key, "kind": "postal", "value": postal}
-            if city_key:
-                specs[city_key] = {"key": city_key, "kind": "city", "value": city}
+            city = str(item.get("city") or active_city_by_listing.get(int(item["listing_id"])) or "").strip()
             prepared.append({
                 **item,
                 "postal": postal,
                 "city": city,
-                "postal_key": postal_key,
-                "city_key": city_key,
+                "postal_key": _postal_key(postal) if postal else None,
+                "city_key": _city_key(city) if city else None,
             })
 
-        pending_count = self._schedule_missing(specs)
+        pending_count = self._schedule_missing(self._resolution_specs(prepared))
         groups: dict[str, dict[str, Any]] = {}
         unresolved = 0
 
@@ -240,10 +278,17 @@ class MapService:
             location = self._resolved_location(item["postal_key"])
             location_key = item["postal_key"]
             precision = "POSTAL"
-            if location is None:
+            if location is None and item["postal_key"]:
+                postal_record = self._cached_record(item["postal_key"])
+                if postal_record and postal_record.get("status") == "NOT_FOUND":
+                    location = self._resolved_location(item["city_key"])
+                    location_key = item["city_key"]
+                    precision = "SEARCH_AREA"
+            elif location is None:
                 location = self._resolved_location(item["city_key"])
                 location_key = item["city_key"]
                 precision = "SEARCH_AREA"
+
             if location is None or not location_key:
                 unresolved += 1
                 continue
