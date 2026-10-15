@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createMapInitCoordinator, filterMapFeatures } from '../ladies/static/explorer/js/ui/discover_map.js';
+import { filterMapFeatures } from '../ladies/static/explorer/js/ui/discover_map.js';
 import { pricingExtractionAvailable, pricingManualAvailable } from '../ladies/static/explorer/js/app/selectors.js';
 
 const mapSource=readFileSync(new URL('../ladies/static/explorer/js/ui/discover_map.js',import.meta.url),'utf8');
@@ -14,32 +14,20 @@ const chromeSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens
 const configSource=readFileSync(new URL('../ladies/config.py',import.meta.url),'utf8');
 const indexSource=readFileSync(new URL('../ladies/templates/index.html',import.meta.url),'utf8');
 
-// Map initialization is genuinely single-flight. Invalidating a pending generation
-// makes its late result stale instead of letting it take ownership of the container.
-const coordinator=createMapInitCoordinator();
-const target={isConnected:true};
-let constructions=0;
-let releaseFirst;
-const firstGate=new Promise(resolve=>{releaseFirst=resolve;});
-const first=coordinator.run(target,async active=>{constructions+=1;await firstGate;return active()?'map':'stale';});
-const duplicate=coordinator.run(target,async()=>{constructions+=1;return 'duplicate';});
-assert.equal(first,duplicate,'same container must share one in-flight initialization');
-assert.equal(constructions,1,'shared initialization must construct only once');
-releaseFirst();
-assert.equal(await first,'map');
-
-const staleTarget={isConnected:true};
-let releaseStale;
-const staleGate=new Promise(resolve=>{releaseStale=resolve;});
-const stale=coordinator.run(staleTarget,async active=>{await staleGate;return active()?'active':'discarded';});
-coordinator.invalidate();
-releaseStale();
-assert.equal(await stale,'discarded','invalidated initialization must not become active later');
-
-assert.match(mapSource,/instance\.on\('error',reportMapError\)/);
-assert.match(mapSource,/'text-font':textFont/);
-assert.match(mapSource,/\.catch\(error=>\{\s*maplibrePromise=null;/s,'failed MapLibre imports must be retryable');
-assert.doesNotMatch(mapSource,/promise\.finally\(/,'map init cleanup must not create an unhandled rejection branch');
+// MapLibre is loaded from its reviewed ESM distribution, not a CDN transform. Its
+// required stylesheet is part of initial document loading, and the mounted map owns
+// one simple lifecycle with explicit resize and cleanup behavior.
+assert.match(mapSource,/maplibre-gl@6\.14\.0\/dist\/maplibre-gl\.mjs/,'MapLibre must use the native v6 ESM distribution');
+assert.doesNotMatch(mapSource,/\+esm/,'MapLibre must not use a CDN ESM transform');
+assert.match(indexSource,/maplibre-gl@6\.14\.0\/dist\/maplibre-gl\.css/,'MapLibre CSS must load with the app shell');
+assert.match(mapSource,/new ResizeObserver/,'map must react when its mounted container changes size');
+assert.match(mapSource,/instance\.resize\(\)/,'map must resize after mount/layout changes');
+assert.match(mapSource,/active\?\.resizeObserver\?\.disconnect\(\)/,'map cleanup must disconnect its observer');
+assert.match(mapSource,/active\.map\.remove\(\)/,'map cleanup must remove the MapLibre instance');
+assert.match(mapSource,/source\.setData\(latestData\)/,'map data changes must update the existing GeoJSON source');
+assert.match(mapSource,/getClusterExpansionZoom\(clusterId\)/,'cluster taps must expand through the source API');
+assert.match(mapSource,/instance\.on\('error',reportMapError\)/,'MapLibre runtime errors must remain observable');
+assert.match(mapSource,/maplibrePromise=null/,'failed MapLibre imports must remain retryable');
 
 // Map identity is listing-based end-to-end. Two listings belonging to one person
 // must never bind through person_id alone.
@@ -47,8 +35,8 @@ const samePersonPoint={type:'FeatureCollection',features:[{
   type:'Feature',geometry:{type:'Point',coordinates:[12.3,51.3]},properties:{
     location_key:'city:DE:leipzig',listing_count:2,
     listing_refs_json:JSON.stringify([
-      {person_id:7,listing_id:101,advert_id:'a'},
-      {person_id:7,listing_id:202,advert_id:'b'}
+      {person_id:7,listing_id:101,advert_id:'a',address_label:'04109 Leipzig'},
+      {person_id:7,listing_id:202,advert_id:'b',address_label:'04107 Leipzig'}
     ])
   }
 }]};
@@ -57,12 +45,15 @@ assert.equal(filtered.features.length,1);
 assert.equal(filtered.features[0].properties.listing_count,1);
 const refs=JSON.parse(filtered.features[0].properties.listing_refs_json);
 assert.deepEqual(refs.map(item=>item.listing_id),[202]);
+assert.equal(refs[0].address_label,'04107 Leipzig','map filtering must preserve the selected listing address label');
 const personOnly={...samePersonPoint,features:samePersonPoint.features.map(feature=>({...feature,properties:{...feature.properties,listing_refs_json:JSON.stringify([{person_id:7}])}}))};
 assert.equal(filterMapFeatures(personOnly,[{personId:7,listing_id:202,advertId:'b'}]).features.length,0,'person identity alone must never bind a map listing');
 assert.doesNotMatch(mapRepository,/seen_people/,'map repository must keep every active listing');
 assert.match(mapService,/"listing_count": len\(listings\)/);
 assert.match(mapService,/"listing_refs_json":/);
+assert.match(mapService,/"address_label": item\["address_label"\]/,'map refs must expose the locally known listing address label');
 assert.doesNotMatch(mapService,/"profile_count"|"profiles_json"/,'map API must not expose person-labelled listing counters');
+assert.doesNotMatch(mapService,/params=\{[^}]*hidden_location/s,'hidden address text must never be sent to the geocoding provider');
 
 // The backend is the sole source of truth for thread order. The browser preserves
 // the canonical newest-first order instead of applying a second business rule.
