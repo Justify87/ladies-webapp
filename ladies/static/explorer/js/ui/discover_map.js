@@ -16,6 +16,7 @@ let latestData=EMPTY;
 let fittedSignature='';
 let selectedLocationKey=null;
 let closeListenerInstalled=false;
+let wasActive=false;
 
 function profileRefs(feature){
   const raw=feature?.properties?.profiles_json;
@@ -196,7 +197,13 @@ export function syncDiscoverMap({host,state,store,effects}){
   installCloseListener();
   const route=S.currentRoute(state);
   const active=route.name==='discover'&&state.discover.mode==='map';
-  if(!active){if(map)cleanup();return;}
+  if(!active){
+    if(wasActive)effects.cancelMapRequest();
+    wasActive=false;
+    if(map)cleanup();
+    return;
+  }
+  wasActive=true;
 
   const target=host.querySelector('#discoverMap');
   if(!target)return;
