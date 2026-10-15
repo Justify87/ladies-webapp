@@ -9,21 +9,37 @@ const MAP_STYLE='https://tiles.openfreemap.org/styles/liberty';
 const SOURCE_ID='discover-locations';
 const EMPTY=Object.freeze({type:'FeatureCollection',features:[]});
 
+export function createMapInitCoordinator(){
+  let generation=0;
+  let pending=null;
+  const invalidate=()=>{generation+=1;pending=null;};
+  const run=(target,task)=>{
+    if(pending?.target===target)return pending.promise;
+    const token=++generation;
+    const active=()=>generation===token&&target?.isConnected!==false;
+    const promise=(async()=>task(active))();
+    pending={target,token,promise};
+    const clear=()=>{if(pending?.token===token)pending=null;};
+    void promise.then(clear,clear);
+    return promise;
+  };
+  return Object.freeze({run,invalidate,pendingTarget:()=>pending?.target||null});
+}
+
 let maplibrePromise=null;
 let maplibre=null;
 let map=null;
-let mapInit=null;
 let container=null;
-let lifecycleGeneration=0;
 let latestData=EMPTY;
 let fittedSignature='';
 let selectedLocationKey=null;
 let closeListenerInstalled=false;
 let wasActive=false;
 const reportedMapErrors=new Set();
+const mapInit=createMapInitCoordinator();
 
-function profileRefs(feature){
-  const raw=feature?.properties?.profiles_json;
+function listingRefs(feature){
+  const raw=feature?.properties?.listing_refs_json;
   if(Array.isArray(raw))return raw;
   try{return JSON.parse(String(raw||'[]'));}catch{return [];}
 }
@@ -32,23 +48,21 @@ function rowMatchesRef(row,ref){
   const listingId=Number(ref?.listing_id||0);
   if(listingId)return Number(row?.listing_id||row?.listingId||0)===listingId;
   const advertId=String(ref?.advert_id||'');
-  if(advertId)return String(row?.advertId||row?.advert_id||'')===advertId;
-  const personId=Number(ref?.person_id||0);
-  return Boolean(personId&&Number(row?.personId||row?.person_id||0)===personId);
+  return Boolean(advertId&&String(row?.advertId||row?.advert_id||'')===advertId);
 }
 
 export function filterMapFeatures(points,rows){
   if(!points?.features?.length||!rows?.length)return EMPTY;
   const features=[];
   for(const feature of points.features){
-    const refs=profileRefs(feature).filter(ref=>rows.some(row=>rowMatchesRef(row,ref)));
+    const refs=listingRefs(feature).filter(ref=>rows.some(row=>rowMatchesRef(row,ref)));
     if(!refs.length)continue;
     features.push({
       ...feature,
       properties:{
         ...(feature.properties||{}),
-        profile_count:refs.length,
-        profiles_json:JSON.stringify(refs),
+        listing_count:refs.length,
+        listing_refs_json:JSON.stringify(refs),
       }
     });
   }
@@ -65,15 +79,24 @@ function ensureMapLibre(){
     link.dataset.maplibreCss='1';
     document.head.appendChild(link);
   }
-  maplibrePromise ||= import(MAPLIBRE_JS).then(module=>{maplibre=module;return module;});
+  if(maplibre)return Promise.resolve(maplibre);
+  if(!maplibrePromise){
+    maplibrePromise=import(MAPLIBRE_JS)
+      .then(module=>{maplibre=module;return module;})
+      .catch(error=>{
+        maplibrePromise=null;
+        maplibre=null;
+        document.querySelector('link[data-maplibre-css]')?.remove();
+        throw error;
+      });
+  }
   return maplibrePromise;
 }
 
 function cleanup(){
-  lifecycleGeneration+=1;
+  mapInit.invalidate();
   const active=map;
   map=null;
-  mapInit=null;
   container=null;
   latestData=EMPTY;
   fittedSignature='';
@@ -116,7 +139,7 @@ function renderPreview(host,state){
   const feature=latestData.features.find(item=>String(item.properties?.location_key||'')===selectedLocationKey);
   if(!feature){selectedLocationKey=null;host.innerHTML='';return;}
   const rows=S.visibleSearchRows(state);
-  const refs=profileRefs(feature);
+  const refs=listingRefs(feature);
   const matched=refs.map(ref=>({ref,row:rowForRef(rows,ref)})).filter(item=>item.row);
   if(!matched.length){selectedLocationKey=null;host.innerHTML='';return;}
   const props=feature.properties||{};
@@ -132,7 +155,7 @@ function renderPreview(host,state){
     return;
   }
 
-  host.innerHTML=`<section class="discover-map-location-sheet">${close}<header><b>${e(props.location_label||'Standort')}</b><small>${matched.length} Profile · ${e(precision)}</small></header><div class="discover-map-location-list">${matched.map(({row,ref})=>{const pid=Number(row.personId||ref.person_id||0)||'';const advert=String(row.advertId||ref.advert_id||'');return `<button type="button" class="discover-map-location-row" data-action="open-profile" data-person-id="${a(pid)}" data-advert-id="${a(advert)}">${row.thumbnail?`<img src="${a(row.thumbnail)}" alt="${a(row.name)}">`:`<span>${icon('user')}</span>`}<b>${e(row.name)}${row.age?` <small>${e(row.age)}</small>`:''}</b>${icon('chevron-right')}</button>`;}).join('')}</div></section>`;
+  host.innerHTML=`<section class="discover-map-location-sheet">${close}<header><b>${e(props.location_label||'Standort')}</b><small>${matched.length} Inserate · ${e(precision)}</small></header><div class="discover-map-location-list">${matched.map(({row,ref})=>{const pid=Number(row.personId||ref.person_id||0)||'';const advert=String(row.advertId||ref.advert_id||'');return `<button type="button" class="discover-map-location-row" data-action="open-profile" data-person-id="${a(pid)}" data-advert-id="${a(advert)}">${row.thumbnail?`<img src="${a(row.thumbnail)}" alt="${a(row.name)}">`:`<span>${icon('user')}</span>`}<b>${e(row.name)}${row.age?` <small>${e(row.age)}</small>`:''}</b>${icon('chevron-right')}</button>`;}).join('')}</div></section>`;
 }
 
 function styleTextFont(instance){
@@ -164,14 +187,14 @@ function installLayers(instance,target,getState){
     cluster:true,
     clusterMaxZoom:13,
     clusterRadius:48,
-    clusterProperties:{profile_total:['+',['get','profile_count']]}
+    clusterProperties:{listing_total:['+',['get','listing_count']]}
   });
-  instance.addLayer({id:'discover-clusters',type:'circle',source:SOURCE_ID,filter:['has','point_count'],paint:{'circle-color':'#cc2d7c','circle-radius':['step',['get','profile_total'],18,10,22,30,27,75,32],'circle-stroke-color':'#ffffff','circle-stroke-width':2,'circle-opacity':.92}});
-  instance.addLayer({id:'discover-locations',type:'circle',source:SOURCE_ID,filter:['!', ['has','point_count']],paint:{'circle-color':'#cc2d7c','circle-radius':['case',['>', ['get','profile_count'],1],13,8],'circle-stroke-color':'#ffffff','circle-stroke-width':3}});
+  instance.addLayer({id:'discover-clusters',type:'circle',source:SOURCE_ID,filter:['has','point_count'],paint:{'circle-color':'#cc2d7c','circle-radius':['step',['get','listing_total'],18,10,22,30,27,75,32],'circle-stroke-color':'#ffffff','circle-stroke-width':2,'circle-opacity':.92}});
+  instance.addLayer({id:'discover-locations',type:'circle',source:SOURCE_ID,filter:['!', ['has','point_count']],paint:{'circle-color':'#cc2d7c','circle-radius':['case',['>', ['get','listing_count'],1],13,8],'circle-stroke-color':'#ffffff','circle-stroke-width':3}});
   const textFont=styleTextFont(instance);
   if(textFont){
-    instance.addLayer({id:'discover-cluster-count',type:'symbol',source:SOURCE_ID,filter:['has','point_count'],layout:{'text-field':['to-string',['get','profile_total']],'text-size':12,'text-font':textFont},paint:{'text-color':'#ffffff'}});
-    instance.addLayer({id:'discover-location-count',type:'symbol',source:SOURCE_ID,filter:['all',['!', ['has','point_count']],['>', ['get','profile_count'],1]],layout:{'text-field':['to-string',['get','profile_count']],'text-size':10,'text-font':textFont},paint:{'text-color':'#ffffff'}});
+    instance.addLayer({id:'discover-cluster-count',type:'symbol',source:SOURCE_ID,filter:['has','point_count'],layout:{'text-field':['to-string',['get','listing_total']],'text-size':12,'text-font':textFont},paint:{'text-color':'#ffffff'}});
+    instance.addLayer({id:'discover-location-count',type:'symbol',source:SOURCE_ID,filter:['all',['!', ['has','point_count']],['>', ['get','listing_count'],1]],layout:{'text-field':['to-string',['get','listing_count']],'text-size':10,'text-font':textFont},paint:{'text-color':'#ffffff'}});
   }
 
   instance.on('click','discover-clusters',async event=>{
@@ -199,17 +222,16 @@ function installLayers(instance,target,getState){
 
 function ensureMap(target,state,getState){
   if(map&&container===target)return Promise.resolve(map);
-  if(mapInit?.target===target)return mapInit.promise;
-  cleanup();
-  const generation=lifecycleGeneration;
-  const promise=(async()=>{
+  if(mapInit.pendingTarget()===target)return mapInit.run(target,()=>null);
+  if(map||container||mapInit.pendingTarget())cleanup();
+  return mapInit.run(target,async active=>{
     const lib=await ensureMapLibre();
-    if(generation!==lifecycleGeneration||!target.isConnected)return null;
+    if(!active())return null;
     latestData=filterMapFeatures(state.discover.map?.points,S.visibleSearchRows(state));
     const instance=new lib.Map({container:target,style:MAP_STYLE,center:[12.3731,51.3397],zoom:10.5,attributionControl:true});
     instance.on('error',reportMapError);
     instance.addControl(new lib.NavigationControl({showCompass:false}),'bottom-right');
-    if(generation!==lifecycleGeneration||!target.isConnected){try{instance.remove();}catch{}return null;}
+    if(!active()){try{instance.remove();}catch{}return null;}
     container=target;
     map=instance;
     instance.once('load',()=>{
@@ -217,11 +239,7 @@ function ensureMap(target,state,getState){
       installLayers(instance,target,getState);
     });
     return instance;
-  })();
-  mapInit={target,generation,promise};
-  const clearInit=()=>{if(mapInit?.generation===generation)mapInit=null;};
-  void promise.then(clearInit,clearInit);
-  return promise;
+  });
 }
 
 function installCloseListener(){
@@ -244,7 +262,7 @@ export function syncDiscoverMap({host,state,store,effects}){
   if(!active){
     if(wasActive)effects.cancelMapRequest();
     wasActive=false;
-    if(map||mapInit)cleanup();
+    if(map||mapInit.pendingTarget())cleanup();
     return;
   }
   wasActive=true;
