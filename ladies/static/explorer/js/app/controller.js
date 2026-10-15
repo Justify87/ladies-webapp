@@ -29,6 +29,7 @@ export function createController({store,router,effects,commands}) {
   let lastOverlayHtml=null;
   let lastSheetKey=null;
   let lastSwipeAnalysisKey=null;
+  let autoFocusedChatKey=null;
   const chatScrollMemory=new Map();
   const screenScrollMemory=new Map();
 
@@ -39,6 +40,46 @@ export function createController({store,router,effects,commands}) {
     screenScrollMemory.delete(routeKey);
     screenScrollMemory.set(routeKey,snapshot);
     while(screenScrollMemory.size>40)screenScrollMemory.delete(screenScrollMemory.keys().next().value);
+  }
+
+  function captureManagedFocus(){
+    const active=document.activeElement;
+    if(!active||!host.contains(active))return null;
+    let selector=null;
+    if(active.matches?.('[data-message-search]'))selector='[data-message-search]';
+    else if(active.matches?.('[data-chat-form] textarea[name="text"]'))selector='[data-chat-form] textarea[name="text"]';
+    if(!selector)return null;
+    return {
+      selector,
+      value:'value' in active?active.value:null,
+      selectionStart:typeof active.selectionStart==='number'?active.selectionStart:null,
+      selectionEnd:typeof active.selectionEnd==='number'?active.selectionEnd:null,
+      selectionDirection:active.selectionDirection||'none'
+    };
+  }
+
+  function restoreManagedFocus(snapshot){
+    if(!snapshot)return false;
+    const target=host.querySelector(snapshot.selector);
+    if(!target)return false;
+    if(snapshot.value!==null&&'value' in target)target.value=snapshot.value;
+    try{target.focus({preventScroll:true});}catch{target.focus();}
+    if(snapshot.selectionStart!==null&&typeof target.setSelectionRange==='function'){
+      const max=String(target.value||'').length;
+      const start=Math.max(0,Math.min(max,snapshot.selectionStart));
+      const end=Math.max(start,Math.min(max,snapshot.selectionEnd??start));
+      try{target.setSelectionRange(start,end,snapshot.selectionDirection||'none');}catch{}
+    }
+    return document.activeElement===target;
+  }
+
+  function focusChatComposer(){
+    const textarea=host.querySelector('[data-chat-form] textarea[name="text"]');
+    if(!textarea)return false;
+    try{textarea.focus({preventScroll:true});}catch{textarea.focus();}
+    const end=String(textarea.value||'').length;
+    try{textarea.setSelectionRange(end,end);}catch{}
+    return document.activeElement===textarea;
   }
 
   function bindSwipeGesture(){
@@ -147,6 +188,7 @@ export function createController({store,router,effects,commands}) {
   function render(){
     rememberChatScroll();
     rememberScreenScroll(lastRouteKey);
+    const focusSnapshot=captureManagedFocus();
 
     const state=store.getState();
     const route=S.currentRoute(state);
@@ -195,7 +237,12 @@ export function createController({store,router,effects,commands}) {
     if(screenUpdate.replaced)bindSwipeGesture();
     syncDiscoverMap({host,state,store,effects});
     maybeAutoAnalyzeSwipe(state);
+    if(screenUpdate.replaced&&!routeChanged)restoreManagedFocus(focusSnapshot);
     if(route.name==='chat'&&screenUpdate.replaced)restoreChatScroll(Number(route.params?.threadId||S.currentThread(state)?.threadId||0));
+    if(route.name==='chat'){
+      const chatFocusKey=`${route.key}:${Number(route.params?.threadId||S.currentThread(state)?.threadId||0)}`;
+      if(autoFocusedChatKey!==chatFocusKey&&focusChatComposer())autoFocusedChatKey=chatFocusKey;
+    }else autoFocusedChatKey=null;
   }
 
   document.addEventListener('click',async ev=>{
