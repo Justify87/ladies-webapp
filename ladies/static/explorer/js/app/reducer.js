@@ -29,8 +29,13 @@ export function reducer(state=initialState, action={}) {
     case 'SEARCH_RESULTS':
       return {
         ...state,
-        search: {...state.search, results: action.results || [], meta: action.meta || null},
-        discover: {...state.discover, index: 0, history: []},
+        search: {...state.search, results: action.results || [], meta: action.meta || null, runId:Number(action.runId || 0) || null},
+        discover: {
+          ...state.discover,
+          index: 0,
+          history: [],
+          map: {...state.discover.map, points:null, runId:null, loading:false, error:null, selected:null},
+        },
       };
     case 'SEARCH_RESULT_PATCH': {
       const advertId=String(action.advertId||'');
@@ -48,8 +53,10 @@ export function reducer(state=initialState, action={}) {
 
     case 'DISCOVER_INDEX':
       return updateSlice(state, 'discover', {index: Math.max(0, action.index)});
-    case 'DISCOVER_MODE':
-      return updateSlice(state, 'discover', {mode: action.mode});
+    case 'DISCOVER_MODE': {
+      const mode=['swipe','grid','map'].includes(action.mode)?action.mode:'swipe';
+      return updateSlice(state, 'discover', {mode});
+    }
     case 'DISCOVER_MEDIA':
       return updateMappedSlice(state, 'discover', 'mediaIndex', {
         [String(action.advertId)]: Number(action.index || 0),
@@ -58,6 +65,12 @@ export function reducer(state=initialState, action={}) {
       return updateSlice(state, 'discover', {history: [...state.discover.history, action.entry]});
     case 'DISCOVER_HISTORY_POP':
       return updateSlice(state, 'discover', {history: state.discover.history.slice(0, -1)});
+    case 'DISCOVER_MAP_LOADING':
+      return updateSlice(state, 'discover', {map:{...state.discover.map,loading:Boolean(action.value),error:action.error||null}});
+    case 'DISCOVER_MAP_POINTS':
+      return updateSlice(state, 'discover', {map:{...state.discover.map,points:action.points||null,runId:Number(action.runId||0)||null,loading:false,error:null,selected:null}});
+    case 'DISCOVER_MAP_SELECT':
+      return updateSlice(state, 'discover', {map:{...state.discover.map,selected:action.value||null}});
 
     case 'PROFILE_BUNDLE':
       return updateMappedSlice(state, 'profiles', 'bundles', {[String(action.advertId)]: action.bundle});
