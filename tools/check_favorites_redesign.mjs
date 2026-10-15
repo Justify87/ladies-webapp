@@ -60,6 +60,10 @@ assert.match(html,/vor 1 Std\.|vor 2 Std\./,'rows must keep a compact relative a
 const selectors=readFileSync(new URL('../ladies/static/explorer/js/app/selectors.js',import.meta.url),'utf8');
 assert.doesNotMatch(selectors,/sort==='DISTANCE'/,'dead distance sorting code must be removed with the unsupported control');
 
+const core=readFileSync(new URL('../ladies/static/explorer/js/effects/core.js',import.meta.url),'utf8');
+assert.match(core,/listSeq=0/,'list requests need an explicit sequence guard');
+assert.match(core,/sequence!==listSeq\|\|target!==state\(\)\.lists\.tab/,'late responses from an older tab must be ignored');
+
 for(const path of [
   '../ladies/static/explorer/css/prototype.css',
   '../ladies/static/explorer/css/components/02.css',
