@@ -4,53 +4,37 @@ import { searchTransient } from './api/search_runtime.js';
 
 const payloadKey=filters=>JSON.stringify(filterPayload(filters||{}));
 
-export function installActiveSearchSync({store,effects}) {
+export function installActiveSearchSync({store,effects,search=searchTransient}) {
   let abort=null;
   let generation=0;
   let inFlightKey=null;
   let hydratedKey=null;
-  let suppressedKey=null;
-  let lastLoading=false;
+  let manualKey=null;
   let queued=false;
+
+  function cancelAutomatic(){
+    generation+=1;
+    abort?.abort();
+    abort=null;
+    inFlightKey=null;
+  }
 
   async function sync(){
     queued=false;
     const state=store.getState();
     const key=payloadKey(state.search.filters);
 
-    if(inFlightKey&&inFlightKey!==key){
-      generation+=1;
-      abort?.abort();
-      abort=null;
-      inFlightKey=null;
-    }
-
-    if(state.search.loading){
-      if(!lastLoading){
-        generation+=1;
-        abort?.abort();
-        abort=null;
-        inFlightKey=null;
-        suppressedKey=key;
-      }
-      lastLoading=true;
-      return;
-    }
-
-    if(lastLoading){
-      lastLoading=false;
-      if(state.search.error)suppressedKey=null;
-    }
-
+    if(inFlightKey&&inFlightKey!==key)cancelAutomatic();
+    if(state.search.loading)return;
     if(state.search.preview?.status!=='ready')return;
-    if(key===hydratedKey||key===suppressedKey||key===inFlightKey)return;
+    if(key===hydratedKey||key===inFlightKey)return;
 
     const sequence=++generation;
     inFlightKey=key;
     abort?.abort();
     abort=new AbortController();
     try{
-      const data=await searchTransient(filterPayload(state.search.filters),{signal:abort.signal});
+      const data=await search(filterPayload(state.search.filters),{signal:abort.signal});
       const latest=store.getState();
       if(sequence!==generation||payloadKey(latest.search.filters)!==key||latest.search.loading)return;
       hydratedKey=key;
@@ -70,6 +54,17 @@ export function installActiveSearchSync({store,effects}) {
     queueMicrotask(sync);
   }
 
-  store.subscribe(schedule);
+  store.subscribe((state,action)=>{
+    if(action?.type==='SEARCH_LOADING'&&action.value===true){
+      manualKey=payloadKey(state.search.filters);
+      cancelAutomatic();
+    }else if(action?.type==='SEARCH_RESULTS'&&!action.meta?.automatic){
+      const key=payloadKey(state.search.filters);
+      if(!manualKey||manualKey===key)hydratedKey=key;
+    }else if(action?.type==='SEARCH_LOADING'&&action.value===false){
+      manualKey=null;
+    }
+    schedule();
+  });
   schedule();
 }
