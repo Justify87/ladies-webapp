@@ -42,7 +42,6 @@ export const api = Object.freeze({
   dashboard: () => request('/api/dashboard'),
   historyRelistings: (limit=100) => request(`/api/history/relistings?limit=${encodeURIComponent(limit)}`),
   historyChanges: (limit=100) => request(`/api/history/changes?limit=${encodeURIComponent(limit)}`),
-  recentSearches: (limit=8) => request(`/api/recent-searches?limit=${encodeURIComponent(limit)}`),
   savedSearches: () => request('/api/saved-searches'),
   createSavedSearch: payload => request('/api/saved-searches',{method:'POST',body:payload}),
   updateSavedSearch: (id,payload) => request(`/api/saved-searches/${encodeURIComponent(id)}`,{method:'PUT',body:payload}),

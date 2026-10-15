@@ -72,6 +72,14 @@ const pricing=sources.get('features/pricing.css');
 const messaging=sources.get('features/messaging.css');
 const settings=sources.get('features/settings.css');
 const history=sources.get('features/history.css');
+const apiClient=readFileSync(new URL('../ladies/static/explorer/js/api/client.js',import.meta.url),'utf8');
+const appEffects=readFileSync(new URL('../ladies/static/explorer/js/app/effects.js',import.meta.url),'utf8');
+const coreEffects=readFileSync(new URL('../ladies/static/explorer/js/effects/core.js',import.meta.url),'utf8');
+const appState=readFileSync(new URL('../ladies/static/explorer/js/app/state.js',import.meta.url),'utf8');
+const reducer=readFileSync(new URL('../ladies/static/explorer/js/app/reducer.js',import.meta.url),'utf8');
+const savedSearchScreen=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/saved_searches.js',import.meta.url),'utf8');
+const webSource=readFileSync(new URL('../ladies/web.py',import.meta.url),'utf8');
+const searchRepository=readFileSync(new URL('../ladies/core/repositories/search.py',import.meta.url),'utf8');
 
 assert.equal((allCss.match(/:root\s*\{/g)||[]).length,1,'design tokens must have exactly one :root owner');
 assert.match(tokens,/:root\s*\{/,'foundation/tokens.css must own the design tokens');
@@ -97,7 +105,20 @@ for(const [path,css] of sources){
 assert.doesNotMatch(discover,/swipe-details|profile-media::after/,'retired Swipe-only presentation must not return');
 assert.doesNotMatch(profile,/profile-rail-action|profile-ui-card|keyfacts-grid|analysis-summary|seg-choice/,'retired profile prototype components must not return');
 assert.doesNotMatch(messaging,/\.message-tabs\b|\.price-detection\b|\.read-receipts\b|\.messages-heading\b/,'retired messaging generations must not return');
-assert.doesNotMatch(search,/\.search-heading\b|\.filter-search-box\b|\.home-recent|\.range-labels\b/,'retired Search presentation must not return');
+assert.doesNotMatch(search,/\.search-heading\b|\.filter-search-box\b|\.home-recent|\.range-labels\b|\.recent-searches\b|\.recent-chips\b/,'retired Search presentation must not return');
+assert.doesNotMatch(filters,/\.filter-title-copy p\b/,'removed filter subtitles must not keep dead presentation rules');
+
+assert.doesNotMatch(apiClient,/recentSearches|\/api\/recent-searches/,'retired recent-search API client must not return');
+assert.doesNotMatch(appEffects,/loadRecentSearches/,'app boot must not reload retired recent searches');
+assert.doesNotMatch(coreEffects,/loadRecentSearches|RECENT_SEARCHES|recentSearches/,'core search effects must not retain retired recent-search work');
+assert.doesNotMatch(appState,/\brecent:\s*\[\s*\]/,'search state must not retain retired recent-search data');
+assert.doesNotMatch(reducer,/RECENT_SEARCHES/,'reducer must not retain the retired recent-search action');
+assert.doesNotMatch(webSource,/\/api\/recent-searches|api_recent_searches|recent_searches/,'web API must not expose the retired recent-search endpoint');
+assert.doesNotMatch(searchRepository,/def recent_searches\b/,'search repository must not retain the retired recent-search query');
+
+assert.doesNotMatch(savedSearchScreen,/saved-searches-card|saved-search-results-summary/,'saved-search routes must not duplicate their chrome title inside content cards');
+assert.ok(savedSearchScreen.includes('saved-search-results-meta'),'saved-search results must keep a compact context row');
+assert.ok(savedSearchScreen.includes('const summary=item?`${meta(item)} · ${count} Treffer`:`${rows.length} Treffer`;'),'saved-search result context must preserve location, radius, availability and result count');
 
 assert.match(forms,/\.message-search\s*\{/,'shared search control belongs to components/forms.css');
 assert.doesNotMatch(messaging,/\.message-search\s*\{/,'messaging.css must not own the shared search control');
@@ -106,10 +127,24 @@ assert.doesNotMatch(settings,/(?:^|\n)\.settings-primary\s*\{/,'settings.css mus
 
 assert.match(filters,/\.filter-card\s*\{/,'shared filter surface belongs to components/filters.css');
 assert.match(filters,/\.location-fields\s*\{/,'shared location fields belong to components/filters.css');
-assert.match(filters,/\.availability-note\s*\{/,'availability note styling must stay present');
-assert.match(filters,/\.availability-quick button\s*\{[^}]*min-width:\s*76px;/s,'availability quick actions must keep their reviewed geometry');
+assert.match(filters,/\.location-fields\s*\{[^}]*grid-template-columns:\s*minmax\(0,[^)]+\)\s+minmax\(\d+px,[^)]+\);/s,'shared location geometry must reserve a bounded radius track');
+assert.match(filters,/\.location-fields \.radius-select\s*\{[^}]*grid-template-columns:\s*auto minmax\(\d+px,1fr\);/s,'radius select must reserve an explicit value track');
+assert.match(filters,/\.radius-select select\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*\d+px;[^}]*max-width:\s*100%;/s,'radius value control must fill its track without clipping');
+const radiusContainerMin=Number(filters.match(/\.location-fields \.radius-select\s*\{[^}]*min-width:\s*(\d+)px;/s)?.[1]||0);
+const radiusValueMin=Number(filters.match(/\.radius-select select\s*\{[^}]*min-width:\s*(\d+)px;/s)?.[1]||0);
+assert.ok(radiusContainerMin>=120,'radius container must remain wide enough for label plus three-digit km values');
+assert.ok(radiusValueMin>=64,'radius value track must remain wide enough for a visible selected value');
+assert.match(filters,/\.availability-note\s*\{/,'availability note styling must stay present for non-search empty/status copy');
+assert.match(filters,/\.availability-quick button\s*\{[^}]*min-width:\s*72px;/s,'availability quick actions must keep their compact reviewed geometry');
 assert.doesNotMatch(search,/(?:^|\n)\.filter-card\s*\{|(?:^|\n)\.location-fields\s*\{|(?:^|\n)\.settings-divider\s*\{/,'search.css must not redefine shared filter primitives');
 assert.doesNotMatch(savedSearches,/(?:^|\n)\.filter-card\s*\{|(?:^|\n)\.location-fields\s*\{/,'saved-searches.css must compose shared filter primitives instead of redefining them');
+
+assert.match(savedSearches,/\.saved-search-entry\s*\{[^}]*min-width:\s*0;/s,'saved-search rows must allow their content to shrink');
+assert.match(savedSearches,/\.saved-search-actions\s*\{[^}]*min-width:\s*0;/s,'saved-search action groups must be shrink-safe');
+assert.match(savedSearches,/@media\s*\(max-width:\s*430px\)[\s\S]*?\.saved-search-actions\s*\{[^}]*width:\s*100%;[^}]*grid-template-columns:\s*repeat\(3,minmax\(0,1fr\)\) 32px;/s,'mobile saved-search actions must fit the available row width');
+assert.match(savedSearches,/@media\s*\(max-width:\s*430px\)[\s\S]*?\.saved-search-actions button\s*\{\s*width:\s*100%;\s*\}/s,'mobile saved-search buttons must stay within their grid tracks');
+assert.match(savedSearches,/@media\s*\(max-width:\s*350px\)[\s\S]*?\.saved-search-actions\s*\{[^}]*grid-template-columns:\s*repeat\(4,minmax\(0,1fr\)\);/s,'narrow saved-search actions must collapse to four equal tracks');
+assert.match(savedSearches,/@media\s*\(max-width:\s*350px\)[\s\S]*?\.saved-search-actions button span\s*\{\s*display:\s*none;\s*\}/s,'narrow saved-search actions must drop text before overflowing');
 
 assert.match(listingCard,/\.cards-grid\s*\{/,'shared listing grid belongs to components/listing-card.css');
 assert.match(listingCard,/\.grid-card\s*\{/,'shared listing card belongs to components/listing-card.css');
@@ -133,7 +168,7 @@ assert.match(base,/@media\s*\(prefers-reduced-motion:\s*reduce\)/,'foundation/ba
 assert.match(base,/\.icon-button\s*\{[^}]*width:\s*42px;[^}]*height:\s*42px;/s,'icon button geometry must stay stable');
 assert.match(discover,/\.swipe-media-panel\s*\{[^}]*min-height:\s*535px;/s,'Swipe media geometry must stay stable');
 assert.match(listingCard,/\.grid-card\s*\{[^}]*aspect-ratio:\s*\.77;/s,'listing-card aspect ratio must stay stable');
-assert.match(search,/\.search-screen \.screen-scroll\s*\{\s*padding:\s*12px var\(--screen-x\) 18px;\s*\}/,'Search viewport spacing must stay stable');
+assert.match(search,/\.search-screen \.screen-scroll\s*\{\s*padding:\s*8px var\(--screen-x\) 14px;\s*\}/,'Search viewport spacing must keep the compact reviewed geometry');
 assert.match(profile,/\.profile-action-rail\s*\{[^}]*grid-template-columns:\s*repeat\(5,minmax\(0,1fr\)\);/s,'Profile action layout must stay five-column');
 assert.match(messaging,/\.chat-screen\s*\{[^}]*grid-template-rows:\s*minmax\(0,1fr\) auto auto;/s,'Chat layout rows must stay stable');
 assert.match(messaging,/\.chat-composer\s*\{[^}]*grid-template-columns:\s*36px minmax\(0,1fr\) 36px 46px;/s,'Chat composer geometry must stay stable');

@@ -29,7 +29,7 @@ export function createEffects({store,router}) {
   };
   const boot=async()=>{
     await Promise.allSettled([
-      core.loadSettings(), core.loadDashboard(), core.loadRecentSearches(),
+      core.loadSettings(), core.loadDashboard(),
       messaging.loadMessagingStatus(), messaging.loadThreads(), pricing.loadPricingSettings()
     ]);
     messaging.connectEvents();
