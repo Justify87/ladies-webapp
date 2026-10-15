@@ -34,6 +34,10 @@ export function renderHeader(state,route){
     return `<button class="icon-button" data-action="back" aria-label="Zurück">${icon('back')}</button><button class="chat-avatar whatsapp-avatar" data-action="chat-profile" aria-label="Profil öffnen">${t?.whatsappAvatar?`<img src="${a(t.whatsappAvatar)}" alt="WhatsApp-Profilbild">`:icon('user')}</button><span class="chat-copy"><b>${e(t?.name||'Chat')}</b>${phone?`<small class="chat-phone">${e(phone)}</small>`:''}${presence?`<small class="chat-presence">${e(presence)}</small>`:''}</span>${recordingCancel}${call}${favorite}${endpointSwitcher}<button class="icon-button" data-action="pricing-manual" title="Preiserkennung">${icon('tag')}</button><button class="icon-button" data-action="chat-profile" aria-label="Profil öffnen">${icon('more')}</button>`;
   }
   if(route.name==='saved-searches')return `<button class="icon-button" data-action="back" aria-label="Zurück">${icon('back')}</button><div class="brand saved-search-header-title">Gespeicherte <strong>Suchen</strong></div>`;
+  if(route.name==='saved-search-results'){
+    const item=(state.savedSearches?.items||[]).find(entry=>String(entry.id)===String(route.params?.id||''));
+    return `<button class="icon-button" data-action="back" aria-label="Zurück">${icon('back')}</button><div class="brand saved-search-header-title">${e(item?.name||'Suchergebnisse')}</div>`;
+  }
   if(route.name==='profile'||route.name==='history'||route.name==='archive')return '';
   const discovery=route.name==='swipe'||route.name==='grid';
   const switcher=route.name==='swipe'?`<button class="icon-button view-switch" data-action="root-route" data-route="grid" aria-label="Rasteransicht">${gridGlyph()}</button>`:route.name==='grid'?`<button class="icon-button view-switch" data-action="root-route" data-route="swipe" aria-label="Swipe-Ansicht">${cardsGlyph()}</button>`:'';
@@ -41,4 +45,4 @@ export function renderHeader(state,route){
   const actions=discovery?`${discoveryModes(state)}${switcher}`:route.name==='search'?savedSearchButton:`<button class="icon-button" data-action="root-route" data-route="search" aria-label="Suche öffnen">${icon('search')}</button>`;
   return `<div class="brand">Ladies <strong>Explorer</strong>${icon('heart')}</div><div class="header-actions ${discovery?'discovery-header-actions':''}">${actions}</div>`;
 }
-export function renderBottomNav(state,route){const active=S.rootNav(route.name);if(['chat','profile','history','archive','saved-searches'].includes(route.name))return '';return NAV.map(([id,ico,label])=>`<button class="${active===id?'active':''}" data-action="root-route" data-route="${id}">${id==='messages'&&S.unreadTotal(state)?`<span class="nav-badge">${e(Math.min(99,S.unreadTotal(state)))}</span>`:''}${icon(ico)}<span>${e(label)}</span></button>`).join('');}
+export function renderBottomNav(state,route){const active=S.rootNav(route.name);if(['chat','profile','history','archive','saved-searches','saved-search-results'].includes(route.name))return '';return NAV.map(([id,ico,label])=>`<button class="${active===id?'active':''}" data-action="root-route" data-route="${id}">${id==='messages'&&S.unreadTotal(state)?`<span class="nav-badge">${e(Math.min(99,S.unreadTotal(state)))}</span>`:''}${icon(ico)}<span>${e(label)}</span></button>`).join('');}
