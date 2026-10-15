@@ -4,8 +4,35 @@ import { filterPayload, profileBundleVm, formEnumWireValue } from '../data/adapt
 
 const SEARCH_RADII=[5,10,20,30,50,70,100];
 const normalizeRadius=value=>SEARCH_RADII.includes(Number(value))?Number(value):20;
+const warmedMedia=new Set();
 
-export function createCoreEffects({store,router}) {
+function mediaUrls(profile){
+  const media=Array.isArray(profile?.media)?profile.media:[];
+  return [...new Set(media.flatMap(item=>[item?.kind==='IMAGE'?item?.src:null,item?.poster].filter(Boolean)).map(String))];
+}
+
+function warmImage(url){
+  if(!url||warmedMedia.has(url)||typeof Image==='undefined')return Promise.resolve();
+  warmedMedia.add(url);
+  return new Promise(resolve=>{
+    const image=new Image();
+    const done=()=>resolve();
+    image.decoding='async';
+    image.onload=done;
+    image.onerror=done;
+    image.src=url;
+    if(image.complete)resolve();
+  });
+}
+
+async function warmProfileMedia(profile){
+  const urls=mediaUrls(profile);
+  if(!urls.length)return;
+  await warmImage(urls[0]);
+  for(const url of urls.slice(1))void warmImage(url);
+}
+
+export function createCoreEffects({store,router,onPrefetchedProfile=null}) {
   let previewAbort=null, previewTimer=null, previewSeq=0, businessScanSeq=0;
   const toast=message=>store.dispatch({type:'TOAST',value:message});
   const state=()=>store.getState();
@@ -150,13 +177,22 @@ export function createCoreEffects({store,router}) {
     const seen=new Set();
     while(true){
       const row=rawSearchRowAt();
-      if(!row||seen.has(row.advertId))return;
+      if(!row||seen.has(row.advertId))return [];
       seen.add(row.advertId);
       await loadBundle(row,{detail:true,quiet:true});
       const current=rawSearchRowAt();
       if(!businessFilterEnabled()||current?.advertId===row.advertId)break;
     }
-    [1,2].forEach((offset)=>{const next=rawSearchRowAt(state().discover.index+offset);if(next)setTimeout(()=>loadBundle(next,{detail:false,quiet:true}),offset*300);});
+
+    const start=state().discover.index;
+    const windowRows=[0,1,2].map(offset=>rawSearchRowAt(start+offset)).filter(Boolean);
+    const vms=(await Promise.all(windowRows.map(row=>loadBundle(row,{detail:true,quiet:true})))).filter(Boolean);
+    const profiles=vms.map(vm=>S.detailFor(state(),vm.personId)||vm);
+    await Promise.all(profiles.map(profile=>warmProfileMedia(profile)));
+    if(typeof onPrefetchedProfile==='function'){
+      await Promise.allSettled(vms.filter(vm=>vm.personId).map(vm=>onPrefetchedProfile(vm.personId)));
+    }
+    return vms;
   }
 
   async function mutatePerson(personId,patch) {
