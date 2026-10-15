@@ -65,7 +65,7 @@ async function warmProfileMedia(profile){
 }
 
 export function createCoreEffects({store,router,onPrefetchedProfile=null}) {
-  let previewAbort=null, previewTimer=null, previewSeq=0, businessScanSeq=0, swipePrefetch=null;
+  let previewAbort=null, previewTimer=null, previewSeq=0, businessScanSeq=0, swipePrefetch=null, listSeq=0;
   const toast=message=>store.dispatch({type:'TOAST',value:message});
   const state=()=>store.getState();
   const searchPayload=()=>{const payload=filterPayload(state().search.filters);payload.radius=normalizeRadius(payload.radius);return payload;};
@@ -300,9 +300,18 @@ export function createCoreEffects({store,router,onPrefetchedProfile=null}) {
   async function refreshProfile(personId) { await loadPerson(personId,{force:true}); }
 
   async function loadList(tab=state().lists.tab) {
+    const target=String(tab||state().lists.tab).toUpperCase();
+    const sequence=++listSeq;
     store.dispatch({type:'LIST_LOADING',value:true});
-    try { const d=await api.list(tab); store.dispatch({type:'LIST_ITEMS',items:d?.items || []}); }
-    catch(error){store.dispatch({type:'LIST_LOADING',value:false});toast(error.message);}
+    try {
+      const d=await api.list(target);
+      if(sequence!==listSeq||target!==state().lists.tab)return;
+      store.dispatch({type:'LIST_ITEMS',items:d?.items || []});
+    } catch(error){
+      if(sequence!==listSeq||target!==state().lists.tab)return;
+      store.dispatch({type:'LIST_LOADING',value:false});
+      toast(error.message);
+    }
   }
 
   async function runStatusCheck() {

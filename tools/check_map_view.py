@@ -254,10 +254,11 @@ with tempfile.TemporaryDirectory() as tmp:
     assert city_key("Grimma") in saved
 
 # Keep the already-executed smoke-suite entry point stable while extending it with
-# the profile-request browser regression checks. CI configuration stays untouched.
-subprocess.run(
-    ["node", "--experimental-default-type=module", "tools/check_profile_request_ui.mjs"],
-    check=True,
-)
+# browser-facing regression checks. CI configuration stays untouched.
+for check in ("tools/check_profile_request_ui.mjs", "tools/check_favorites_redesign.mjs"):
+    subprocess.run(
+        ["node", "--experimental-default-type=module", check],
+        check=True,
+    )
 
 print("map view backend regression checks passed")

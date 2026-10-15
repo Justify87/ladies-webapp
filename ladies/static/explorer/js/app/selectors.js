@@ -71,11 +71,6 @@ export const listRows = state => {
   const sort=String(state.lists.sort||'DATE').toUpperCase();
   return [...rows].sort((left,right)=>{
     if(sort==='NAME')return String(left.name||'').localeCompare(String(right.name||''),'de',{sensitivity:'base'});
-    if(sort==='DISTANCE'){
-      const a=Number(left.distance_km ?? left.distance ?? Number.POSITIVE_INFINITY);
-      const b=Number(right.distance_km ?? right.distance ?? Number.POSITIVE_INFINITY);
-      return a-b;
-    }
     const time=row=>Date.parse(row.updated_at||row.last_seen_at||row.person_last_seen_at||row.recent_change?.created_at||row.created_at||0)||0;
     return time(right)-time(left);
   });
