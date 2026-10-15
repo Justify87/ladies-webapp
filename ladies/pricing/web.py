@@ -3,7 +3,7 @@ from __future__ import annotations
 from flask import jsonify, request
 
 from ladies_v9.database import Database
-from ladies_v9.errors import ConflictError, NotFoundError, ValidationError
+from ladies_v9.errors import ConflictError, ExternalServiceError, NotFoundError, ValidationError
 from ladies_v9.request_parsing import read_int
 
 from .canonical import CanonicalPriceIntelligenceService
@@ -57,6 +57,8 @@ def install_pricing(app, *, data_dir, database: Database | None = None) -> Price
             raise NotFoundError("Chat nicht gefunden") from exc
         except (ValueError, TypeError) as exc:
             raise ValidationError(str(exc)) from exc
+        except RuntimeError as exc:
+            raise ExternalServiceError(str(exc)) from exc
 
     @app.get("/api/pricing/proposals/<int:extraction_id>")
     def pricing_get_proposal(extraction_id: int):
