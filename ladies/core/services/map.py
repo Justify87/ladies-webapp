@@ -121,12 +121,12 @@ class MapService:
                 "updated_at": _now_iso(),
             }
 
-    def _resolve_postal(self, spec: dict[str, str]) -> None:
+    def _resolve_postal(self, spec: dict[str, str]) -> bool:
         postal_code = spec["value"]
         response = self._http.get(ZIPPOPOTAM_URL.format(postal_code=postal_code), timeout=6)
         if response.status_code == 404:
             self._remember_not_found(spec["key"], source="ZIPPOPOTAM")
-            return
+            return False
         response.raise_for_status()
         data = response.json()
         coordinates: list[tuple[float, float]] = []
@@ -137,7 +137,7 @@ class MapService:
                 continue
         if not coordinates:
             self._remember_not_found(spec["key"], source="ZIPPOPOTAM")
-            return
+            return False
         self._remember(
             spec["key"],
             lat=sum(item[0] for item in coordinates) / len(coordinates),
@@ -145,6 +145,7 @@ class MapService:
             precision="POSTAL",
             source="ZIPPOPOTAM",
         )
+        return True
 
     def _resolve_city(self, spec: dict[str, str]) -> None:
         self._city_limiter.wait()
@@ -180,7 +181,20 @@ class MapService:
                     continue
                 try:
                     if spec["kind"] == "postal":
-                        self._resolve_postal(spec)
+                        postal_resolved = self._resolve_postal(spec)
+                        fallback_key = spec.get("fallback_city_key")
+                        fallback_value = spec.get("fallback_city")
+                        if (
+                            not postal_resolved
+                            and fallback_key
+                            and fallback_value
+                            and self._cached_record(fallback_key) is None
+                        ):
+                            self._resolve_city({
+                                "key": fallback_key,
+                                "kind": "city",
+                                "value": fallback_value,
+                            })
                     else:
                         self._resolve_city(spec)
                 except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
@@ -217,11 +231,15 @@ class MapService:
             if postal_key:
                 postal_record = self._cached_record(postal_key)
                 if postal_record is None:
-                    specs[postal_key] = {
+                    spec = {
                         "key": postal_key,
                         "kind": "postal",
                         "value": item["postal"],
                     }
+                    if city_key and item["city"]:
+                        spec["fallback_city_key"] = city_key
+                        spec["fallback_city"] = item["city"]
+                    specs[postal_key] = spec
                 elif postal_record.get("status") == "NOT_FOUND" and city_key and self._cached_record(city_key) is None:
                     specs[city_key] = {
                         "key": city_key,
