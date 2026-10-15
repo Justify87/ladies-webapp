@@ -40,6 +40,16 @@ def merge_pricing_person(db: Session, source_id: int, target_id: int) -> bool:
     return moved
 
 
+def install_pricing_identity_merge_listener() -> None:
+    """Compatibility shim for the former global SQLAlchemy merge listener.
+
+    Identity-merge integrations are configured explicitly on PersonRepository by
+    app.py. Keeping this public symbol preserves the existing import contract
+    without reinstalling the hidden global listener.
+    """
+    return None
+
+
 def reconcile_identity_events(database) -> int:
     """Repair pricing refs for persisted merge events before messaging reconciliation."""
     merged = 0
@@ -64,4 +74,8 @@ def reconcile_identity_events(database) -> int:
     return merged
 
 
-__all__ = ["merge_pricing_person", "reconcile_identity_events"]
+__all__ = [
+    "install_pricing_identity_merge_listener",
+    "merge_pricing_person",
+    "reconcile_identity_events",
+]
