@@ -123,12 +123,11 @@ class MessagingService(_CanonicalMessagingService):
             target = db.scalar(
                 select(ChatThread).where(ChatThread.person_id == int(person_id)).limit(1)
             )
-
-            if target is not None and reconcile_thread_in_session(db, target).status == NON_LADIES:
-                raise ValueError(
-                    "Die Ziel-Person besitzt einen explizit ausgeschlossenen WhatsApp-Chat. "
-                    "Diese Klassifizierung muss zuerst bewusst korrigiert werden."
-                )
+            if target is not None:
+                # Reconciliation may structurally detach an old NON_LADIES chat.
+                # That private history remains separate and must not block a new,
+                # explicitly assigned Ladies conversation for the same person.
+                reconcile_thread_in_session(db, target)
 
             # The user is explicitly assigning the reviewed conversation, so this
             # deliberate action may override a previous exclusion on that source
