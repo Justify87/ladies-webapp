@@ -15,10 +15,19 @@ from werkzeug.utils import secure_filename
 
 from ladies_v9.database import Database
 from ladies_v9.errors import ConflictError, NotFoundError, ValidationError
-from ladies_v9.models import Person, PersonUserState, utcnow
 from ladies_v9.request_parsing import read_bool, read_int
 
 from .models import ContactEndpoint
+from .scope import (
+    bind_provider_address,
+    endpoint_is_ladies_scoped,
+    event_is_ladies_scoped,
+    message_is_ladies_scoped,
+    person_is_ladies_scoped,
+    refresh_endpoint_identity,
+    scoped_thread_items,
+    thread_is_ladies_scoped,
+)
 from .service import MessagingService
 
 LOGGER = logging.getLogger("ladies_explorer.messaging.routes")
@@ -50,6 +59,22 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
         raise RuntimeError("Messaging benötigt die gemeinsame Application-Database")
     service = MessagingService(database, data_dir)
     app.extensions["ladies_messaging"] = service
+
+    def require_person(person_id: int) -> None:
+        if not person_is_ladies_scoped(database, person_id):
+            raise NotFoundError("Person gehört zu keiner Ladies-Anzeige")
+
+    def require_thread(thread_id: int) -> None:
+        if not thread_is_ladies_scoped(database, thread_id):
+            raise NotFoundError("Chat nicht gefunden")
+
+    def require_message(message_id: int) -> None:
+        if not message_is_ladies_scoped(database, message_id):
+            raise NotFoundError("Nachricht nicht gefunden")
+
+    def require_endpoint(endpoint_id: int) -> None:
+        if not endpoint_is_ladies_scoped(database, endpoint_id):
+            raise NotFoundError("Endpoint nicht gefunden")
 
     configured_limit = app.config.get("MAX_CONTENT_LENGTH")
     if configured_limit is None or int(configured_limit) > MAX_MEDIA_REQUEST_BYTES:
@@ -89,10 +114,16 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
         filter_name = str(request.args.get("filter") or "ALL").upper()
         if filter_name not in {"ALL", "UNREAD", "UNASSIGNED"}:
             raise ValidationError("Ungültiger Filter")
-        return jsonify(items=service.threads(filter_name))
+        items = service.threads(filter_name)
+        return jsonify(items=scoped_thread_items(
+            database,
+            items,
+            include_unassigned=filter_name == "UNASSIGNED",
+        ))
 
     @app.get("/api/messaging/threads/<int:thread_id>")
     def messaging_thread(thread_id: int):
+        require_thread(thread_id)
         try:
             limit = read_int(request.args, "limit", default=100, minimum=1, maximum=200)
             before = read_int(request.args, "before", minimum=1) if request.args.get("before") else None
@@ -102,15 +133,21 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
 
     @app.post("/api/messaging/person/<int:person_id>/thread")
     def messaging_person_thread(person_id: int):
+        require_person(person_id)
         data = request.get_json(silent=True) or {}
         try:
             listing_id = read_int(data, "listing_id", minimum=1) if data.get("listing_id") else None
-            return jsonify(service.ensure_person_thread(person_id, listing_id))
+            payload = service.ensure_person_thread(person_id, listing_id)
+            endpoint_id = int((payload.get("endpoint") or {}).get("endpoint_id") or 0)
+            if endpoint_id:
+                refresh_endpoint_identity(service, endpoint_id)
+            return jsonify(payload)
         except KeyError as exc:
             raise NotFoundError("Person nicht gefunden") from exc
 
     @app.get("/api/messaging/person/<int:person_id>")
     def messaging_person_summary(person_id: int):
+        require_person(person_id)
         try:
             listing_id = read_int(request.args, "listing_id", minimum=1) if request.args.get("listing_id") else None
             return jsonify(service.person_summary(person_id, listing_id))
@@ -119,11 +156,19 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
 
     @app.get("/api/messaging/endpoints/<int:endpoint_id>/probe")
     def messaging_endpoint_probe(endpoint_id: int):
+        require_endpoint(endpoint_id)
         with service.database.session() as db:
             endpoint = db.get(ContactEndpoint, endpoint_id)
             if endpoint is None:
                 raise NotFoundError("Endpoint nicht gefunden")
-            base = {"endpoint_id": endpoint.endpoint_id, "display_phone": endpoint.display_phone, "normalized_phone": endpoint.normalized_phone, "exists": None, "profile_picture_url": None, "detail": "not_connected"}
+            base = {
+                "endpoint_id": endpoint.endpoint_id,
+                "display_phone": endpoint.display_phone,
+                "normalized_phone": endpoint.normalized_phone,
+                "exists": None,
+                "profile_picture_url": None,
+                "detail": "not_connected",
+            }
             if endpoint.state != "ACTIVE":
                 base["detail"] = "identity_conflict"
                 return jsonify(base)
@@ -137,15 +182,13 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
         try:
             event = service.gateway.command("contact_info", jid=jid, include_profile_picture=True, timeout=12)
             payload = event.get("payload") or {}
-            base.update({"exists": payload.get("exists"), "profile_picture_url": payload.get("profile_picture_url"), "detail": payload.get("detail") or "unknown"})
-            provider_address = payload.get("jid")
-            if payload.get("exists") is True and provider_address:
-                with service.database.session() as db:
-                    endpoint = db.get(ContactEndpoint, endpoint_id)
-                    if endpoint is not None and endpoint.state == "ACTIVE":
-                        endpoint.provider_address = str(provider_address)
-                        endpoint.last_seen_at = utcnow()
-                        endpoint.updated_at = utcnow()
+            base.update({
+                "exists": payload.get("exists"),
+                "profile_picture_url": payload.get("profile_picture_url"),
+                "detail": payload.get("detail") or "unknown",
+            })
+            if payload.get("exists") is True:
+                bind_provider_address(service, endpoint_id, payload.get("jid"))
             return jsonify(base)
         except Exception:
             LOGGER.warning("WhatsApp contact probe failed endpoint_id=%s", endpoint_id, exc_info=True)
@@ -154,14 +197,23 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
 
     @app.post("/api/messaging/threads/<int:thread_id>/messages")
     def messaging_send(thread_id: int):
+        require_thread(thread_id)
         data = request.get_json(silent=True) or {}
+        endpoint_id = read_int(data, "endpoint_id", minimum=1) if data.get("endpoint_id") else None
+        if endpoint_id:
+            require_endpoint(endpoint_id)
+            refresh_endpoint_identity(service, endpoint_id)
         try:
-            return jsonify(message=service.send_text(
+            message = service.send_text(
                 thread_id,
                 data.get("text") or "",
-                read_int(data, "endpoint_id", minimum=1) if data.get("endpoint_id") else None,
+                endpoint_id,
                 read_int(data, "reply_to_message_id", minimum=1) if data.get("reply_to_message_id") else None,
-            ))
+            )
+            sent_endpoint_id = int(message.get("endpoint_id") or endpoint_id or 0)
+            if sent_endpoint_id:
+                refresh_endpoint_identity(service, sent_endpoint_id)
+            return jsonify(message=message)
         except KeyError as exc:
             raise NotFoundError("Chat nicht gefunden") from exc
         except (ValueError, RuntimeError) as exc:
@@ -169,6 +221,7 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
 
     @app.post("/api/messaging/threads/<int:thread_id>/media")
     def messaging_send_media(thread_id: int):
+        require_thread(thread_id)
         if request.content_length and request.content_length > MAX_MEDIA_REQUEST_BYTES:
             return jsonify(error="Datei ist zu groß (maximal 100 MB)"), 413
         upload = request.files.get("file")
@@ -181,6 +234,9 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
         if view_once and media_type not in VIEW_ONCE_MEDIA_TYPES:
             raise ValidationError("Einmal ansehen ist für diesen Medientyp nicht verfügbar")
         endpoint_id = read_int(request.form, "endpoint_id", minimum=1) if request.form.get("endpoint_id") else None
+        if endpoint_id:
+            require_endpoint(endpoint_id)
+            refresh_endpoint_identity(service, endpoint_id)
         reply_to = read_int(request.form, "reply_to_message_id", minimum=1) if request.form.get("reply_to_message_id") else None
         mime_type = str(upload.mimetype or "application/octet-stream")
         original_name = secure_filename(upload.filename) or f"upload{_extension(upload.filename, mime_type)}"
@@ -191,7 +247,7 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
             if target.stat().st_size > MAX_MEDIA_BYTES:
                 target.unlink(missing_ok=True)
                 return jsonify(error="Datei ist zu groß (maximal 100 MB)"), 413
-            return jsonify(message=service.send_media(
+            message = service.send_media(
                 thread_id,
                 archive_name=archive_name,
                 media_type=media_type,
@@ -201,23 +257,23 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
                 endpoint_id=endpoint_id,
                 reply_to=reply_to,
                 view_once=view_once,
-            ))
+            )
+            sent_endpoint_id = int(message.get("endpoint_id") or endpoint_id or 0)
+            if sent_endpoint_id:
+                refresh_endpoint_identity(service, sent_endpoint_id)
+            return jsonify(message=message)
         except KeyError as exc:
             target.unlink(missing_ok=True)
             raise NotFoundError("Chat nicht gefunden") from exc
         except (TypeError, ValueError) as exc:
-            # These failures occur before a retryable outgoing message exists.
-            # Remove the uploaded blob so validation/conversion failures cannot
-            # accumulate orphaned files.
             target.unlink(missing_ok=True)
             raise ValidationError(str(exc)) from exc
         except RuntimeError as exc:
-            # Gateway failures leave a FAILED message intentionally; its media
-            # must stay available for the existing retry action.
             raise ValidationError(str(exc)) from exc
 
     @app.post("/api/messaging/messages/<int:message_id>/retry")
     def messaging_retry(message_id: int):
+        require_message(message_id)
         try:
             return jsonify(message=service.retry(message_id))
         except KeyError as exc:
@@ -227,6 +283,7 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
 
     @app.post("/api/messaging/messages/<int:message_id>/reaction")
     def messaging_reaction(message_id: int):
+        require_message(message_id)
         data = request.get_json(silent=True) or {}
         try:
             return jsonify(message=service.send_reaction(message_id, data.get("emoji") or ""))
@@ -237,6 +294,7 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
 
     @app.patch("/api/messaging/messages/<int:message_id>")
     def messaging_edit(message_id: int):
+        require_message(message_id)
         data = request.get_json(silent=True) or {}
         try:
             return jsonify(message=service.edit_message(message_id, data.get("text") or ""))
@@ -247,6 +305,7 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
 
     @app.delete("/api/messaging/messages/<int:message_id>")
     def messaging_delete(message_id: int):
+        require_message(message_id)
         try:
             return jsonify(message=service.delete_message(message_id))
         except KeyError as exc:
@@ -256,6 +315,7 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
 
     @app.get("/api/messaging/messages/<int:message_id>/media")
     def messaging_media(message_id: int):
+        require_message(message_id)
         try:
             target, mime_type, file_name, as_attachment = service.media_path(message_id)
             response = send_file(target, mimetype=mime_type, as_attachment=as_attachment, download_name=file_name, conditional=False, max_age=0)
@@ -274,6 +334,7 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
 
     @app.get("/api/messaging/messages/<int:message_id>/view-once")
     def messaging_view_once(message_id: int):
+        require_message(message_id)
         try:
             target, mime_type = service.view_once_path(message_id)
             response = send_file(target, mimetype=mime_type, conditional=False, max_age=0)
@@ -292,9 +353,13 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
 
     @app.post("/api/messaging/threads/<int:thread_id>/presence")
     def messaging_presence(thread_id: int):
+        require_thread(thread_id)
         data = request.get_json(silent=True) or {}
+        endpoint_id = read_int(data, "endpoint_id", minimum=1) if data.get("endpoint_id") else None
+        if endpoint_id:
+            require_endpoint(endpoint_id)
         try:
-            return jsonify(service.presence(thread_id, str(data.get("state") or "paused"), read_int(data, "endpoint_id", minimum=1) if data.get("endpoint_id") else None))
+            return jsonify(service.presence(thread_id, str(data.get("state") or "paused"), endpoint_id))
         except KeyError as exc:
             raise NotFoundError("Chat nicht gefunden") from exc
         except (ValueError, RuntimeError) as exc:
@@ -302,10 +367,14 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
 
     @app.post("/api/messaging/threads/<int:thread_id>/read")
     def messaging_read(thread_id: int):
+        require_thread(thread_id)
         data = request.get_json(silent=True) or {}
         message_ids = data.get("message_ids")
         if message_ids is not None and not isinstance(message_ids, list):
             raise ValidationError("message_ids muss eine Liste sein")
+        if message_ids is not None:
+            for message_id in message_ids:
+                require_message(int(message_id))
         try:
             return jsonify(service.mark_read(thread_id, message_ids))
         except KeyError as exc:
@@ -313,10 +382,15 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
 
     @app.get("/api/messaging/unassigned")
     def messaging_unassigned():
-        return jsonify(items=service.unassigned())
+        return jsonify(items=scoped_thread_items(
+            database,
+            service.unassigned(),
+            include_unassigned=True,
+        ))
 
     @app.get("/api/messaging/endpoints/<int:endpoint_id>/candidates")
     def messaging_candidates(endpoint_id: int):
+        require_endpoint(endpoint_id)
         try:
             return jsonify(items=service.assignment_candidates(endpoint_id))
         except KeyError as exc:
@@ -324,24 +398,12 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
 
     @app.post("/api/messaging/endpoints/<int:endpoint_id>/assign")
     def messaging_assign(endpoint_id: int):
+        require_endpoint(endpoint_id)
         data = request.get_json(silent=True) or {}
         try:
-            person_id = data.get("person_id")
-            if data.get("create_person"):
-                display_name = str(data.get("display_name") or "WhatsApp-Kontakt")[:160]
-                with service.database.session() as db:
-                    endpoint = db.get(ContactEndpoint, endpoint_id)
-                    if endpoint is None:
-                        raise KeyError(endpoint_id)
-                    person = Person(display_name=display_name)
-                    db.add(person)
-                    db.flush()
-                    db.add(PersonUserState(person_id=person.person_id))
-                    person_id = person.person_id
-            if not person_id:
-                raise ValidationError("person_id fehlt")
-            resolved_id = int(person_id)
-            return jsonify(endpoint=service.assign_endpoint(endpoint_id, resolved_id), person_id=resolved_id)
+            person_id = read_int(data, "person_id", minimum=1)
+            require_person(person_id)
+            return jsonify(endpoint=service.assign_endpoint(endpoint_id, person_id), person_id=person_id)
         except KeyError as exc:
             raise NotFoundError("Endpoint oder Person nicht gefunden") from exc
         except ValueError as exc:
@@ -365,7 +427,8 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
                 while True:
                     try:
                         event = subscriber.get(timeout=20)
-                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        if event_is_ladies_scoped(database, event):
+                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                     except queue.Empty:
                         yield ": keepalive\n\n"
             finally:
