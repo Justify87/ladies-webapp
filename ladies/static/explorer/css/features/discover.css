@@ -1,0 +1,69 @@
+.header-actions.discovery-header-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.header-discovery-modes { display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 999px; background: var(--color-surface-soft); }
+.header-discovery-modes button { min-width: 44px; height: 34px; padding: 0 11px; border: 0; border-radius: 999px; background: transparent; color: inherit; font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
+.header-discovery-modes button.selected { background: var(--color-surface); color: var(--color-accent); box-shadow: 0 1px 4px rgba(25,28,38,.12); }
+.view-switch-glyph { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+.swipe-shell { position: relative; width: 100%; height: 100%; min-height: 100%; overflow: hidden; }
+.swipe-profile .screen-scroll { padding: 10px 10px 110px; scroll-snap-type: y proximity; }
+.swipe-media-panel {
+  position: relative;
+  height: min(720px, calc(100dvh - var(--status-h) - var(--header-h) - var(--nav-h) - 24px));
+  min-height: 535px;
+  scroll-snap-align: start;
+}
+.swipe-media-panel .profile-media {
+  height: 100%;
+  min-height: 100%;
+  overflow: hidden;
+  border-radius: 23px;
+  background: #ded2cc;
+  box-shadow: var(--shadow-float);
+  touch-action: pan-y;
+}
+.swipe-media-panel .profile-media > img,
+.swipe-media-panel .profile-media > video { width: 100%; height: 100%; object-fit: cover; }
+.swipe-media-panel .media-story { z-index: 5; top: 16px; left: 17px; right: 17px; gap: 5px; }
+.swipe-media-panel .media-story i { height: 4px; background: rgba(255,255,255,.45); }
+.swipe-media-panel .media-story i.active { background: rgba(255,255,255,.96); }
+.swipe-media-panel .media-count { display: none; }
+.swipe-undo {
+  position: fixed;
+  z-index: 20;
+  right: 16px;
+  bottom: calc(var(--nav-h) + 14px);
+  width: 46px;
+  height: 46px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255,255,255,.96);
+  color: #18202a;
+  box-shadow: 0 8px 24px rgba(15,23,42,.16);
+  display: grid;
+  place-items: center;
+}
+.swipe-undo:disabled { opacity: .35; box-shadow: none; }
+.swipe-media-panel .online-pill.media-availability { position: absolute; z-index: 7; top: 34px; left: 20px; display: inline-flex; align-items: center; gap: 7px; min-height: 38px; padding: 0 14px; border: 1px solid rgba(255,255,255,.72); border-radius: 20px; background: rgba(255,239,247,.96); color: var(--color-accent); font-size: 12px; font-weight: 650; box-shadow: 0 3px 14px rgba(36,28,33,.08); pointer-events: none; }
+.swipe-media-panel .media-availability svg { width: 17px; height: 17px; }
+
+.grid-screen .screen-scroll { padding: 16px 12px 100px; }
+
+.discover-intelligence-bar { display: flex; align-items: center; justify-content: center; gap: 7px; }
+.discover-mode-pills { display: inline-flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid rgba(225,227,234,.92); border-radius: 20px; background: rgba(255,255,255,.94); box-shadow: 0 6px 20px rgba(28,34,47,.08); }
+.discover-mode-pills button { min-height: 30px; padding: 0 11px; border: 0; border-radius: 16px; background: transparent; color: #657187; font-size: 11px; font-weight: 750; }
+.discover-mode-pills button.selected { background: var(--color-accent-soft); color: var(--color-accent-strong); }
+.discover-delta-pill { max-width: 205px; min-height: 36px; padding: 0 10px; display: inline-flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid rgba(209,45,124,.16); border-radius: 18px; background: rgba(255,247,250,.96); color: #af2868; box-shadow: 0 6px 20px rgba(28,34,47,.07); font-size: 10px; font-weight: 750; }
+.discover-delta-pill svg { width: 14px; height: 14px; flex: 0 0 14px; }
+.grid-screen .discover-intelligence-bar { position: sticky; z-index: 12; top: 0; margin: -4px 0 10px; padding: 4px 0 6px; background: transparent; }
+.swipe-shell > .discover-intelligence-bar { position: absolute; z-index: 30; top: 12px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 42px); pointer-events: auto; }
+.swipe-shell > .discover-intelligence-bar .discover-mode-pills,
+.swipe-shell > .discover-intelligence-bar .discover-delta-pill { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+
+@media (max-width: 430px) {
+  .header-actions.discovery-header-actions { gap: 5px; }
+  .header-discovery-modes { padding: 2px; }
+  .header-discovery-modes button { min-width: 39px; height: 32px; padding: 0 8px; font-size: 12px; }
+  .view-switch { width: 36px; height: 36px; }
+  .discover-delta-pill { max-width: 145px; }
+  .swipe-shell > .discover-intelligence-bar .discover-delta-pill { display: none; }
+}

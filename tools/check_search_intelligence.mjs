@@ -248,7 +248,7 @@ const mapRepositorySource=readFileSync(new URL('../ladies/core/repositories/map.
 const mapViewSource=readFileSync(new URL('../ladies/map_view.py',import.meta.url),'utf8');
 const appSource=readFileSync(new URL('../ladies/app.py',import.meta.url),'utf8');
 const profileSource=readFileSync(new URL('../ladies/static/explorer/js/ui/profile.js',import.meta.url),'utf8');
-const prototypeSource=readFileSync(new URL('../ladies/static/explorer/css/prototype.css',import.meta.url),'utf8');
+const discoverStylesSource=readFileSync(new URL('../ladies/static/explorer/css/features/discover.css',import.meta.url),'utf8');
 const chromeSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/chrome.js',import.meta.url),'utf8');
 const searchScreenSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/search.js',import.meta.url),'utf8');
 const savedSearchScreenSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/saved_searches.js',import.meta.url),'utf8');
@@ -348,8 +348,8 @@ assert.doesNotMatch(profileSource,/swipe-details/,'retired Swipe-only detail mar
 assert.match(profileSource,/data-action="profile-request"/,'profile action rail must expose the request action');
 assert.doesNotMatch(profileSource,/profile-share/,'retired share action must not return');
 assert.doesNotMatch(requestedSource,/cleanSwipe|requested-swipe-identity|requested-profile-availability|availabilityMode/,'legacy Swipe DOM rewriting must stay removed');
-assert.match(prototypeSource,/\.swipe-profile \.screen-scroll/,'Swipe keeps its media-sized scroll surface through the canonical Swipe profile class');
-assert.doesNotMatch(prototypeSource,/swipe-details|profile-media::after/,'legacy Swipe detail styling and dark media overlay must stay removed');
+assert.match(discoverStylesSource,/\.swipe-profile \.screen-scroll/,'Swipe keeps its media-sized scroll surface through the canonical Discover stylesheet');
+assert.doesNotMatch(discoverStylesSource,/swipe-details|profile-media::after/,'retired Swipe detail styling and dark media overlay must stay removed');
 assert.match(requestedSource,/requested-new-encounter"><summary/,'new encounter capture must start collapsed');
 assert.doesNotMatch(requestedSource,/requested-new-encounter"\s+open/,'new encounter capture must never render open by default');
 assert.match(requestedSource,/dataset\.requestedPriceHistory='1'/,'profile must provide a dedicated price history tab');

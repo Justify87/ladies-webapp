@@ -234,6 +234,8 @@ jobs:
 
           node --experimental-default-type=module tools/check_search_intelligence.mjs
           node --experimental-default-type=module tools/check_har_runtime_fixes.mjs
+          node --experimental-default-type=module tools/check_favorites_redesign.mjs
+          node --experimental-default-type=module tools/check_css_architecture.mjs
 
       - name: Check project metadata syntax
         run: |
