@@ -62,21 +62,6 @@ export function installRegressionUi({store,effects}) {
   let swipeBusy=false;
   let suppressMediaTapUntil=0;
 
-  function enhanceAvailability() {
-    const panel=document.querySelector('#screenHost .swipe-media-panel');
-    const pill=document.querySelector('#screenHost .swipe-details .online-pill');
-    if(!panel||!pill)return;
-    pill.classList.add('media-availability');
-    pill.innerHTML=`${icon('calendar')}<span>Heute verfügbar</span>`;
-    panel.appendChild(pill);
-  }
-
-  function enhanceBadges() {
-    document.querySelectorAll('#screenHost .swipe-details .badge-row .badge').forEach(badge=>{
-      badge.title=badge.textContent.trim();
-    });
-  }
-
   function enhanceDescription() {
     const root=document.querySelector('#screenHost [data-scroll-root]');
     const personId=String(document.querySelector('#screenHost [data-profile-media]')?.dataset.personId||'');
@@ -163,8 +148,6 @@ export function installRegressionUi({store,effects}) {
   }
 
   function enhanceDom() {
-    enhanceAvailability();
-    enhanceBadges();
     enhanceDescription();
     enhanceRatings();
     enhanceChoices();
