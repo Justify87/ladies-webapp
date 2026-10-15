@@ -1,4 +1,4 @@
-import { api } from '../api/client.js';
+import { api, logClient } from '../api/client.js';
 
 const MAX_REFRESHES=8;
 const REFRESH_DELAY_MS=1400;
@@ -19,6 +19,41 @@ function activeMapItems(results=[]){
     }
   }
   return items;
+}
+
+function validCoordinatePair(value){
+  if(!Array.isArray(value)||value.length<2)return false;
+  const lng=Number(value[0]),lat=Number(value[1]);
+  return Number.isFinite(lng)&&Number.isFinite(lat)&&lng>=-180&&lng<=180&&lat>=-90&&lat<=90;
+}
+
+async function sanitizeMapPoints(points){
+  const features=Array.isArray(points?.features)?points.features:[];
+  const valid=features.filter(feature=>feature?.geometry?.type==='Point'&&validCoordinatePair(feature.geometry.coordinates));
+  if(valid.length===features.length)return points;
+  const invalid=features.filter(feature=>!valid.includes(feature));
+  await logClient('error','map-data','Ungültige Kartenkoordinaten vom Backend verworfen',{
+    invalid_count:invalid.length,
+    location_keys:invalid.map(feature=>feature?.properties?.location_key).filter(Boolean).slice(0,12)
+  });
+  const center=valid.length?[
+    valid.reduce((sum,feature)=>sum+Number(feature.geometry.coordinates[0]),0)/valid.length,
+    valid.reduce((sum,feature)=>sum+Number(feature.geometry.coordinates[1]),0)/valid.length
+  ]:null;
+  const invalidProfiles=invalid.reduce((sum,feature)=>sum+Number(feature?.properties?.profile_count||0),0);
+  return {
+    ...(points||{}),
+    type:'FeatureCollection',
+    features:valid,
+    meta:{
+      ...(points?.meta||{}),
+      center,
+      location_count:valid.length,
+      mapped_profile_count:Math.max(0,Number(points?.meta?.mapped_profile_count||0)-invalidProfiles),
+      unresolved_profile_count:Number(points?.meta?.unresolved_profile_count||0)+invalidProfiles,
+      invalid_location_count:invalid.length
+    }
+  };
 }
 
 export function mapRequestDescriptor(state){
@@ -57,7 +92,7 @@ export function createMapEffects({store,mapPoints=api.mapPoints}) {
     store.dispatch({type:'DISCOVER_MAP_LOADING',key:requested.key,value:true});
 
     try{
-      const points=await mapPoints({items:requested.items});
+      const points=await sanitizeMapPoints(await mapPoints({items:requested.items}));
       const latest=mapRequestDescriptor(store.getState());
       if(sequence!==generation||latest.key!==requested.key)return null;
 
