@@ -7,6 +7,7 @@ import {
   baselineFromResults,
   computeSavedSearchDelta
 } from '../ladies/static/explorer/js/search_intelligence.js';
+import { computeSavedResultDelta, savedSearchHasUnread } from '../ladies/static/explorer/js/saved_searches.js';
 import { threadRows, unreadTotal } from '../ladies/static/explorer/js/app/selectors.js';
 import { canonicalPriceRows, invalidatesProfilePricing } from '../ladies/static/explorer/js/requested_fixes.js';
 
@@ -66,6 +67,21 @@ const rawBaseline=baselineFromResults([
 ]);
 assert.deepEqual(rawBaseline.listings.map(item=>item.listing_id),[7,8]);
 
+// Saved-search alerts are based only on result keys that have never been seen before.
+const savedResultDelta=computeSavedResultDelta({
+  result_baseline:{completed_at:'2026-10-10T10:00:00+00:00',keys:['1001','1002']},
+  seen_result_keys:['1001','1002']
+},[
+  {advert_id:'1002'},
+  {advert_id:'1003'}
+],'2026-10-11T10:00:00+00:00');
+assert.equal(savedResultDelta.initial,false);
+assert.equal(savedResultDelta.new_results_count,1,'only never-seen result keys trigger a saved-search notification');
+assert.equal(savedResultDelta.removed_results_count,1,'removed results are tracked without counting as new');
+assert.deepEqual(savedResultDelta.new_result_keys,['1003']);
+assert.equal(savedSearchHasUnread({settings:{values:{saved_searches:[{unread_new_results:false},{unread_new_results:true}]}}}),true);
+assert.equal(savedSearchHasUnread({settings:{values:{saved_searches:[{unread_new_results:false}]}}}),false);
+
 // Message filters are local views over one canonical all-thread collection.
 const messageState={messaging:{query:'',viewFilter:'UNASSIGNED',threads:[
   {thread_id:1,person_id:11,display_name:'A',unread_count:2},
@@ -93,6 +109,10 @@ const discoverSource=readFileSync(new URL('../ladies/static/explorer/js/ui/scree
 const profileSource=readFileSync(new URL('../ladies/static/explorer/js/ui/profile.js',import.meta.url),'utf8');
 const prototypeSource=readFileSync(new URL('../ladies/static/explorer/css/prototype.css',import.meta.url),'utf8');
 const chromeSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/chrome.js',import.meta.url),'utf8');
+const searchScreenSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/search.js',import.meta.url),'utf8');
+const savedSearchSource=readFileSync(new URL('../ladies/static/explorer/js/saved_searches.js',import.meta.url),'utf8');
+const activeSearchSource=readFileSync(new URL('../ladies/static/explorer/js/search_runtime.js',import.meta.url),'utf8');
+const searchPreviewSource=readFileSync(new URL('../ladies/search_preview.py',import.meta.url),'utf8');
 const clientSource=readFileSync(new URL('../ladies/static/explorer/js/api/client.js',import.meta.url),'utf8');
 const encounterSource=readFileSync(new URL('../ladies/static/explorer/js/effects/encounters.js',import.meta.url),'utf8');
 const requestedSource=readFileSync(new URL('../ladies/static/explorer/js/requested_fixes.js',import.meta.url),'utf8');
@@ -102,6 +122,16 @@ assert.match(discoverSource,/grid-card-heart[^>]+data-action="grid-like"/s,'visi
 assert.doesNotMatch(discoverSource,/discover-mode-pills/,'availability controls must not be duplicated inside Grid or Swipe content');
 assert.match(chromeSource,/header-discovery-modes/,'Swipe and Grid availability controls must live in the shared header');
 assert.match(chromeSource,/route\.name==='swipe'.*data-route="grid".*gridGlyph\(\).*route\.name==='grid'.*data-route="swipe"/s,'shared header must expose both view switches with a real Grid glyph');
+assert.match(chromeSource,/data-saved-search-action="open"/,'search header action must open the dedicated saved-search screen');
+assert.match(chromeSource,/saved-search-notification/,'header must expose a dedicated new-result indicator');
+assert.doesNotMatch(searchScreenSource,/savedSearchesCard|saved-searches-card/,'saved searches must no longer render inside the filter screen');
+assert.match(savedSearchSource,/searchTransient\(filterPayload\(normalized\)\)/,'saved searches must use the isolated transient search path');
+assert.doesNotMatch(savedSearchSource,/type:'SEARCH_FILTERS'|type:'SEARCH_RESULTS'/,'saved-search execution must never mutate active search filters or results');
+assert.match(savedSearchSource,/delta\.new_results_count>0/,'notification state must only be raised by genuinely new results');
+assert.match(activeSearchSource,/type:'SEARCH_RESULTS'.*automatic:true,transient:true/s,'automatic full-result hydration must populate the active result set without becoming a manual search');
+assert.match(searchPreviewSource,/@app\.post\("\/api\/search-transient"\)/,'backend must expose a non-persisting full search path');
+assert.match(searchPreviewSource,/fetch_search_configured/,'transient full search must reuse the canonical upstream search fetcher');
+assert.doesNotMatch(searchPreviewSource,/create_search_run|finish_search_run/,'transient full search must not persist SearchRun history');
 assert.match(clientSource,/threads:\s*\(\)\s*=>\s*request\('\/api\/messaging\/threads\?filter=ALL'\)/,'thread API must always load the canonical unfiltered collection');
 assert.match(encounterSource,/querySelector\('\[name="base_price_eur"\]'\)\)payload\.base_price_eur=/,'hidden base price must only be sent when present');
 assert.match(encounterSource,/querySelector\('\[name="note"\]'\)\)payload\.note=/,'hidden note must only be sent when present');
