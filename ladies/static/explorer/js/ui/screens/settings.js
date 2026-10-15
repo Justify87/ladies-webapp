@@ -13,7 +13,7 @@ function whatsappConnectionPanel(wa){
   else if(qrPending)pairingBox=`<div class="wa-preview" data-whatsapp-pairing><div class="wa-qr" aria-hidden="true"></div><div class="wa-copy"><b>QR-Code wird vorbereitet …</b><small>Die Verbindung wird initialisiert. Der Code erscheint hier automatisch.</small></div></div>`;
   const actions=[];
   if(connected)actions.push(`<button data-action="wa-disconnect">Trennen</button>`);else if(pairing)actions.push(`<button data-action="wa-disconnect">Abbrechen</button>`);else if(dependencyMissing)actions.push(`<button class="settings-primary" disabled>WhatsApp nicht verfügbar</button>`);else if(!authRequired&&!reconnecting)actions.push(`<button class="settings-primary" data-action="wa-connect">${hasSaved?'Wieder verbinden':'WhatsApp verbinden'}</button>`);else if(reconnecting)actions.push(`<button class="settings-primary" disabled>Wird wieder verbunden …</button>`);
-  if(hasSaved||connected||authRequired)actions.push(`<button class="danger" data-action="wa-reset">Verbindung neu einrichten</button>`);
+  actions.push(`<button class="danger" data-action="wa-reset">Verbindungsdaten vollständig löschen</button>`);
   return `<div class="wa-status"><span class="wa-status-dot ${connected?'connected':''}"></span><div class="wa-status-copy"><b>${e(whatsappStatusLabel(wa))}</b><small>${e(detail)}</small></div></div>${pairingBox}<div class="settings-action-row">${actions.join('')}</div>`;
 }
 
