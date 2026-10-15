@@ -5,13 +5,14 @@ from hashlib import sha256
 import json
 import logging
 from pathlib import Path
+import unicodedata
 from typing import Any
 
 from sqlalchemy import desc, select, update
 
 from ladies_v9.database import Database
-from ladies_v9.models import AppSetting, IdentityEvent, Person, PriceItem, PriceList, utcnow
-from ladies_v9.messaging.models import ChatMessage, ChatThread
+from ladies_v9.models import AppSetting, IdentityEvent, Listing, ListingSnapshot, Person, PriceItem, PriceList, utcnow
+from ladies_v9.messaging.models import ChatMessage, ChatThread, ContactEndpoint
 
 from .context import ContextMessage
 from .media_locator import PricingMediaLocator
@@ -26,9 +27,8 @@ from .models import (
     PriceOfferMeta,
     PriceServiceRule,
 )
-from .normalize import extract_durations, extract_money
 from .ocr import PaddleOcrV6TinyEngine
-from .rules import merge_partial, proposal_diff
+from .proposal_ops import merge_partial, proposal_diff
 from .schema import empty_proposal, validate_proposal
 
 LOGGER = logging.getLogger("ladies_explorer.pricing")
@@ -36,12 +36,10 @@ LOGGER = logging.getLogger("ladies_explorer.pricing")
 SETTING_ENABLED = "price_intelligence_enabled"
 SETTING_MAGIC = "price_magic_button_enabled"
 SETTING_OCR = "price_ocr_enabled"
-SETTING_MODEL = "price_semantic_model_enabled"
 DEFAULT_SETTINGS = {
     SETTING_ENABLED: True,
     SETTING_MAGIC: True,
     SETTING_OCR: True,
-    SETTING_MODEL: False,
 }
 
 
@@ -66,8 +64,13 @@ def iso(value: datetime | None) -> str | None:
     return value.isoformat()
 
 
+def _grounding_text(value: str | None) -> str:
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return " ".join(text.split())
+
+
 class PriceExtractionCore:
-    """Extraction, OCR and persistence primitives for the canonical pricing service."""
+    """OCR, FunctionGemma runtime and persistence primitives for pricing."""
 
     def __init__(self, database: Database, data_dir: str | Path):
         if not isinstance(database, Database):
@@ -109,11 +112,12 @@ class PriceExtractionCore:
         return self.settings()
 
     def runtime_status(self) -> dict[str, Any]:
+        semantic = self.semantic.status()
         return {
             "settings": self.settings(),
             "ocr": self.ocr.status(),
-            "semantic_model": self.semantic.status(),
-            "extractor": {"name": "rules", "version": "1", "ready": True},
+            "semantic_model": semantic,
+            "extractor": {"name": self.semantic.name, "version": self.semantic.version, "ready": semantic["available"]},
         }
 
     def _message_media(self, message: ChatMessage) -> dict[str, Any]:
@@ -140,8 +144,6 @@ class PriceExtractionCore:
             row.ocr_engine = None
             row.ocr_engine_version = None
             row.ocr_confidence = None
-            row.price_signal_score = 0
-            row.price_signal_reasons_json = None
             row.updated_at = utcnow()
 
         if message.message_type == "IMAGE" and row.ocr_status in {"NOT_NEEDED", "PENDING"}:
@@ -224,7 +226,14 @@ class PriceExtractionCore:
             if db.get(Person, int(person_id)) is None:
                 raise KeyError(person_id)
             price_list_id, proposal = self._current_proposal(db, int(person_id))
-            return {"person_id": int(person_id), "price_list_id": price_list_id, "proposal": proposal}
+            row = db.get(PriceList, price_list_id) if price_list_id else None
+            return {
+                "person_id": int(person_id),
+                "price_list_id": price_list_id,
+                "listing_id": row.listing_id if row else None,
+                "location": self._location_payload(db, row.listing_id) if row and row.listing_id else None,
+                "proposal": proposal,
+            }
 
     def history(self, person_id: int, limit: int = 30) -> list[dict[str, Any]]:
         with self.database.session() as db:
@@ -276,11 +285,70 @@ class PriceExtractionCore:
         } for i, x in enumerate(conditions)]
         return validate_proposal(proposal)
 
+    def _location_payload(self, db, listing_id: int | None) -> dict[str, Any] | None:
+        if not listing_id:
+            return None
+        listing = db.get(Listing, int(listing_id))
+        if listing is None:
+            return None
+        snapshot = db.get(ListingSnapshot, listing.current_snapshot_id) if listing.current_snapshot_id else None
+        address = snapshot.hidden_location if snapshot else None
+        city = snapshot.city if snapshot else None
+        postal_code = snapshot.postal_code if snapshot else None
+        locality = " ".join(part for part in (postal_code, city) if part)
+        label_parts = []
+        for value in (address, locality, listing.external_listing_id):
+            text = str(value or "").strip()
+            if text and text not in label_parts:
+                label_parts.append(text)
+        return {
+            "listing_id": listing.listing_id,
+            "label": " · ".join(label_parts) or f"Inserat {listing.listing_id}",
+            "city": city,
+            "postal_code": postal_code,
+            "address": address,
+            "external_listing_id": listing.external_listing_id,
+        }
+
+    def _location_options(self, db, person_id: int | None) -> list[dict[str, Any]]:
+        if not person_id:
+            return []
+        listings = db.scalars(
+            select(Listing)
+            .where(Listing.person_id == int(person_id))
+            .order_by(desc(Listing.last_seen_at), desc(Listing.listing_id))
+        ).all()
+        return [payload for row in listings if (payload := self._location_payload(db, row.listing_id))]
+
+    def _suggested_listing_id(self, db, extraction: PriceExtraction) -> int | None:
+        if extraction.base_price_list_id:
+            base = db.get(PriceList, extraction.base_price_list_id)
+            if base and base.listing_id:
+                return int(base.listing_id)
+        anchors = db.scalars(
+            select(PriceExtractionMessage)
+            .where(PriceExtractionMessage.price_extraction_id == extraction.price_extraction_id)
+            .order_by(desc(PriceExtractionMessage.position))
+        ).all()
+        for anchor in anchors:
+            message = db.get(ChatMessage, anchor.message_id)
+            endpoint = db.get(ContactEndpoint, message.endpoint_id) if message and message.endpoint_id else None
+            listing_id = int(endpoint.source_listing_id) if endpoint and endpoint.source_listing_id else None
+            if not listing_id:
+                continue
+            listing = db.get(Listing, listing_id)
+            if listing and extraction.person_id and listing.person_id == int(extraction.person_id):
+                return listing_id
+        options = self._location_options(db, extraction.person_id)
+        return int(options[0]["listing_id"]) if options else None
+
     def _price_list_payload(self, db, row: PriceList) -> dict[str, Any]:
         meta = db.get(PriceListRevisionMeta, row.price_list_id)
         return {
             "price_list_id": row.price_list_id,
             "person_id": row.person_id,
+            "listing_id": row.listing_id,
+            "location": self._location_payload(db, row.listing_id),
             "observed_at": iso(row.observed_at),
             "source": row.source,
             "currency": row.currency,
@@ -306,6 +374,8 @@ class PriceExtractionCore:
             .where(PriceExtractionMessage.price_extraction_id == row.price_extraction_id)
             .order_by(PriceExtractionMessage.position)
         ).all()
+        price_list = db.get(PriceList, row.accepted_price_list_id) if row.accepted_price_list_id else None
+        listing_id = int(price_list.listing_id) if price_list and price_list.listing_id else self._suggested_listing_id(db, row)
         return {
             "price_extraction_id": row.price_extraction_id,
             "person_id": row.person_id,
@@ -315,6 +385,9 @@ class PriceExtractionCore:
             "extractor": {"name": row.extractor_name, "version": row.extractor_version},
             "base_price_list_id": row.base_price_list_id,
             "accepted_price_list_id": row.accepted_price_list_id,
+            "listing_id": listing_id,
+            "location": self._location_payload(db, listing_id),
+            "location_options": self._location_options(db, row.person_id),
             "created_at": iso(row.created_at),
             "reviewed_at": iso(row.reviewed_at),
             "proposal": proposal,
@@ -332,7 +405,10 @@ class PriceExtractionCore:
         cache: dict[int, str] = {}
         for section in (proposal["offers"], proposal["service_rules"], proposal["conditions"]):
             for item in section:
-                for evidence in item.get("evidence") or []:
+                evidence_rows = item.get("evidence") or []
+                if not evidence_rows:
+                    raise ValueError("FunctionGemma-Ausgabe enthält eine Angabe ohne Quellbeleg")
+                for evidence in evidence_rows:
                     message_id = int(evidence["message_id"])
                     if message_id not in allowed:
                         raise ValueError("Proposal verweist auf eine fremde Nachricht")
@@ -340,19 +416,10 @@ class PriceExtractionCore:
                         message = db.get(ChatMessage, message_id)
                         derived = db.get(ChatMessageDerived, message_id)
                         cache[message_id] = self._effective_text(message, derived) if message else ""
-        for offer in proposal["offers"]:
-            evidence_text = "\n".join(cache.get(int(e["message_id"]), "") for e in offer.get("evidence") or [])
-            if offer.get("duration_minutes") is not None:
-                if offer["duration_minutes"] not in {x["minutes"] for x in extract_durations(evidence_text)}:
-                    raise ValueError("Erkannte Dauer ist nicht durch die Quellnachricht belegt")
-            if offer.get("amount_cents") is not None:
-                if offer["amount_cents"] not in {x["amount_cents"] for x in extract_money(evidence_text)}:
-                    raise ValueError("Erkannter Preis ist nicht durch die Quellnachricht belegt")
-        for rule in proposal["service_rules"]:
-            if rule.get("amount_cents") is not None:
-                evidence_text = "\n".join(cache.get(int(e["message_id"]), "") for e in rule.get("evidence") or [])
-                if rule["amount_cents"] not in {x["amount_cents"] for x in extract_money(evidence_text)}:
-                    raise ValueError("Erkannter Aufpreis ist nicht durch die Quellnachricht belegt")
+                    excerpt = _grounding_text(evidence.get("excerpt"))
+                    source = _grounding_text(cache[message_id])
+                    if not excerpt or excerpt not in source:
+                        raise ValueError("FunctionGemma-Beleg ist nicht wortgetreu in der Quellnachricht enthalten")
 
     def _save_evidence(self, db, price_list_id: int, extraction_id: int, evidence_rows: list[dict[str, Any]] | None,
                        *, price_item_id: int | None = None, price_service_rule_id: int | None = None,

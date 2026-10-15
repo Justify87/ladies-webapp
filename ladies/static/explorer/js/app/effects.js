@@ -21,7 +21,7 @@ export function createEffects({store,router}) {
   const encounters=createEncounterEffects({store,getEffects});
   const profileRequests=createProfileRequestEffects({store});
   const openProfile=async args=>{
-    await core.openProfile(args);
+    await regressions.openProfile(args);
     const route=store.getState().navigation.stack.at(-1);
     const personId=Number(route?.name==='profile'?route.params?.personId:0);
     if(personId)await profileRequests.loadProfileRequest(personId);
