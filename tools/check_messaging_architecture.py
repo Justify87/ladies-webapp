@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import runpy
 import sys
+import tempfile
+import threading
+import types
 from pathlib import Path
 
 
@@ -29,6 +32,222 @@ def check_identity() -> None:
     require(message_raw_id({"id": "ABC123"}) == "ABC123", "identity raw from key")
 
 
+def _connection_namespace():
+    previous = sys.modules.get("qrcode")
+    fake_qrcode = types.ModuleType("qrcode")
+    fake_qrcode.make = lambda value: None
+    sys.modules["qrcode"] = fake_qrcode
+    try:
+        return runpy.run_path(str(ROOT / "ladies/messaging/connection_lifecycle.py"))
+    finally:
+        if previous is None:
+            sys.modules.pop("qrcode", None)
+        else:
+            sys.modules["qrcode"] = previous
+
+
+def _check_connection_runtime() -> None:
+    gateway_ns = runpy.run_path(str(ROOT / "ladies/messaging/gateway.py"))
+    gateway_cls = gateway_ns["WhatsAppGateway"]
+
+    # Legacy service startup must not be able to create a worker without an
+    # explicit connection intent.
+    with tempfile.TemporaryDirectory() as tmp:
+        gateway = gateway_cls(Path(tmp), Path(tmp) / "auth", lambda event: None)
+        gateway.dependency_status = lambda: (_ for _ in ()).throw(AssertionError("implicit start checked dependencies"))
+        gateway.start()
+        require(gateway.proc is None, "gateway start is inert without connection intent")
+
+    # Reproduce the old reset race: the process already crashed, _watch() has
+    # cleared proc and is sleeping. stop() must still invalidate that watcher.
+    class CrashedProc:
+        stdin = None
+
+        @staticmethod
+        def wait():
+            return 7
+
+        @staticmethod
+        def poll():
+            return 7
+
+    with tempfile.TemporaryDirectory() as tmp:
+        gateway = gateway_cls(Path(tmp), Path(tmp) / "auth", lambda event: None)
+        gateway._desired_running = True
+        gateway._stopping = False
+        gateway._generation = 4
+        gateway.state = "CONNECTED"
+        proc = CrashedProc()
+        gateway.proc = proc
+        starts: list[str] = []
+        gateway.start = lambda: starts.append("start")
+        globals_ = gateway_cls._watch.__globals__
+        old_sleep = globals_["time"].sleep
+        old_delays = globals_["RESTART_DELAYS"]
+        globals_["RESTART_DELAYS"] = (0,)
+        globals_["time"].sleep = lambda delay: gateway.stop()
+        try:
+            gateway._watch(proc, 4)
+        finally:
+            globals_["time"].sleep = old_sleep
+            globals_["RESTART_DELAYS"] = old_delays
+        require(not starts, "stale crash watcher cannot restart after stop")
+        require(not gateway._desired_running, "stop clears desired worker state even with proc already gone")
+
+    # A genuine crash while connection intent is still active must restart the
+    # process and explicitly reconnect because the Node worker no longer pairs
+    # automatically on process startup.
+    with tempfile.TemporaryDirectory() as tmp:
+        gateway = gateway_cls(Path(tmp), Path(tmp) / "auth", lambda event: None)
+        gateway._desired_running = True
+        gateway._stopping = False
+        gateway._generation = 9
+        gateway.state = "CONNECTED"
+        proc = CrashedProc()
+        gateway.proc = proc
+        calls: list[str] = []
+        gateway.start = lambda: calls.append("start")
+        gateway.command = lambda command_type, timeout=15, **payload: calls.append(command_type)
+        globals_ = gateway_cls._watch.__globals__
+        old_sleep = globals_["time"].sleep
+        old_delays = globals_["RESTART_DELAYS"]
+        globals_["RESTART_DELAYS"] = (0,)
+        globals_["time"].sleep = lambda delay: None
+        try:
+            gateway._watch(proc, 9)
+        finally:
+            globals_["time"].sleep = old_sleep
+            globals_["RESTART_DELAYS"] = old_delays
+        require(calls == ["start", "connect"], "active crash recovery restarts and reconnects")
+
+    connection_ns = _connection_namespace()
+    lifecycle_cls = connection_ns["WhatsAppConnectionLifecycle"]
+
+    class FakeEvents:
+        def __init__(self):
+            self.items = []
+
+        def publish(self, event):
+            self.items.append(event)
+
+    class FakeGateway:
+        def __init__(self):
+            self.state = "NOT_CONFIGURED"
+            self.detail = None
+            self.qr = None
+            self.account = None
+            self.last_connected_at = None
+            self.proc = None
+            self.commands = []
+            self.stop_calls = 0
+            self.connect_started = threading.Event()
+            self.allow_connect = threading.Event()
+            self.block_connect = False
+
+        @staticmethod
+        def dependency_status():
+            return True, None
+
+        def command(self, command_type, timeout=15, **payload):
+            self.commands.append(command_type)
+            if command_type == "connect" and self.block_connect:
+                self.connect_started.set()
+                require(self.allow_connect.wait(2), "resume connect test timed out")
+            return {"ok": True}
+
+        def stop(self):
+            self.stop_calls += 1
+            self.proc = None
+
+    class FakeService:
+        def __init__(self, auth_dir, gateway=None):
+            self.auth_dir = auth_dir
+            self.gateway = gateway or FakeGateway()
+            self.events = FakeEvents()
+
+        def status(self):
+            return {
+                "state": self.gateway.state,
+                "detail": self.gateway.detail,
+                "qr_available": bool(self.gateway.qr),
+                "account": self.gateway.account,
+                "last_connected_at": self.gateway.last_connected_at,
+            }
+
+        def qr(self):
+            return self.gateway.qr
+
+        def disconnect(self):
+            self.gateway.state = "DISCONNECTED"
+            return self.status()
+
+    # Clean-slate reset removes nested credentials/keys and does not recreate
+    # the auth directory or issue a new connect command.
+    with tempfile.TemporaryDirectory() as tmp:
+        auth_dir = Path(tmp) / "auth"
+        service = FakeService(auth_dir)
+        lifecycle = lifecycle_cls(service)
+        (auth_dir / "keys").mkdir(parents=True)
+        (auth_dir / "creds.json").write_text('{"registered": false}', encoding="utf-8")
+        (auth_dir / "keys" / "signal.json").write_text("secret", encoding="utf-8")
+        service.gateway.commands.clear()
+        result = lifecycle.reset()
+        require(result["state"] == "NOT_CONFIGURED", "reset returns clean not-configured state")
+        require(result["has_local_auth_data"] is False, "reset verifies local auth data removed")
+        require(not auth_dir.exists(), "reset does not recreate auth directory")
+        require("connect" not in service.gateway.commands, "reset never reconnects")
+
+    # If deletion fails, reset must fail loudly instead of returning a false
+    # success that makes the UI claim all credentials were deleted.
+    with tempfile.TemporaryDirectory() as tmp:
+        auth_dir = Path(tmp) / "auth"
+        service = FakeService(auth_dir)
+        lifecycle = lifecycle_cls(service)
+        auth_dir.mkdir(parents=True)
+        (auth_dir / "creds.json").write_text('{"registered": false}', encoding="utf-8")
+        globals_ = lifecycle_cls._delete_auth_state.__globals__
+        old_rmtree = globals_["shutil"].rmtree
+        old_sleep = globals_["time"].sleep
+        globals_["shutil"].rmtree = lambda path: (_ for _ in ()).throw(OSError("locked"))
+        globals_["time"].sleep = lambda delay: None
+        try:
+            try:
+                lifecycle.reset()
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("reset must fail when auth files remain")
+        finally:
+            globals_["shutil"].rmtree = old_rmtree
+            globals_["time"].sleep = old_sleep
+        require(service.gateway.state == "ERROR", "failed auth deletion leaves explicit error state")
+        require((auth_dir / "creds.json").exists(), "failed deletion test kept auth evidence")
+
+    # If an automatic resume is already in flight, reset serializes behind it
+    # and wins last. No stale resume can recreate auth after reset completes.
+    with tempfile.TemporaryDirectory() as tmp:
+        auth_dir = Path(tmp) / "auth"
+        auth_dir.mkdir(parents=True)
+        (auth_dir / "creds.json").write_text('{"registered": true}', encoding="utf-8")
+        gateway = FakeGateway()
+        gateway.block_connect = True
+        service = FakeService(auth_dir, gateway)
+        lifecycle = lifecycle_cls(service)
+        require(gateway.connect_started.wait(2), "registered session resume did not start")
+        reset_result = {}
+
+        def do_reset():
+            reset_result.update(lifecycle.reset())
+
+        reset_thread = threading.Thread(target=do_reset)
+        reset_thread.start()
+        gateway.allow_connect.set()
+        reset_thread.join(2)
+        require(not reset_thread.is_alive(), "reset completed after in-flight resume")
+        require(reset_result.get("state") == "NOT_CONFIGURED", "reset wins over in-flight resume")
+        require(not auth_dir.exists(), "resume cannot recreate auth after completed reset")
+
+
 def check_backend() -> None:
     service = source("ladies/messaging/service_v2.py")
     require("PersonUserState" not in service, "backend discovery state removed")
@@ -36,7 +255,7 @@ def check_backend() -> None:
     require("def _ingest_provider_batch" in service, "backend batch ingest")
     require("def _register_raw_message" in service, "backend raw-id quote index")
     require("history_metadata" in service, "backend history metadata")
-    require("provider_chat_deleted" in service, "backend provider chat delete state")
+    require("provider_chat_deleted" in service, "backend provider state model")
     require("ProviderPeerState" in service, "backend provider state model")
     require("message_identity" in service, "backend canonical provider identity")
     require("Build the thread index before inserting the current row" in service, "backend history quote ordering")
@@ -48,21 +267,33 @@ def check_backend() -> None:
     connection = source("ladies/messaging/connection_lifecycle.py")
     require("class WhatsAppConnectionLifecycle" in connection, "connection lifecycle boundary")
     require('payload.get("registered") is True' in connection, "registered auth detection")
+    require("self._intent_generation" in connection, "connection intent generation")
     require("self._pairing_requested" in connection, "explicit pairing intent")
     require('state == "QR_REQUIRED"' in connection, "QR state gating")
     require("shutil.rmtree(self.auth_dir" in connection, "complete auth reset")
     require("gateway.command(\"logout\"" in connection, "remote logout before local reset")
-    require("messages/media/history" in connection, "reset scope documents chat preservation")
+    require("Messages, media and chat history" in connection, "reset scope documents chat preservation")
     require('gateway.command("connect"' in connection, "pairing starts via explicit lifecycle command")
     require("wa-resume-session" in connection, "registered sessions resume explicitly")
-    require("self.service.gateway.stop()" in connection, "unregistered startup worker is stopped")
+    require("generation != self._intent_generation" in connection, "stale resume intent is rejected")
+    require("WhatsApp-Verbindungsdaten konnten nicht vollständig gelöscht werden" in connection, "reset verifies auth deletion")
     require("pairing_failed_code_" in connection, "pairing failure translated for UI")
+
+    gateway = source("ladies/messaging/gateway.py")
+    require("self._desired_running" in gateway, "gateway desired-running state")
+    require("self._generation" in gateway, "gateway restart generation")
+    require("if not self._desired_running" in gateway, "implicit gateway start is blocked")
+    require("generation != self._generation" in gateway, "stale watcher generation is rejected")
+    require('self.command("connect", timeout=15)' in gateway, "crashed worker explicitly reconnects")
+    require("self._desired_running = False" in gateway.split("def stop", 1)[1], "stop cancels desired worker state")
 
     routes = source("ladies/messaging/routes_v2.py")
     require("WhatsAppConnectionLifecycle(service)" in routes, "lifecycle wired directly into canonical router")
     require('@app.delete("/api/messaging/connection")' in routes, "canonical connection reset endpoint")
     require('/api/messaging/qr' not in routes, "legacy QR endpoint removed")
     require('/api/messaging/logout' not in routes, "legacy logout endpoint removed")
+
+    _check_connection_runtime()
 
 
 def check_worker() -> None:
