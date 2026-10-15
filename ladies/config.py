@@ -37,6 +37,25 @@ def application_version() -> str:
         return _source_project_version()
 
 
+def _ui_filter_options(values: dict[str, str]) -> list[dict[str, str]]:
+    """Expose one user-facing option per canonical filter value.
+
+    The source catalog intentionally keeps alternate Ladies labels for parsing.
+    The UI must not expose those aliases as duplicate controls for one value.
+    """
+    order: list[str] = []
+    label_by_value: dict[str, str] = {}
+    for label, slug in values.items():
+        value = str(slug)
+        text = str(label)
+        if value not in label_by_value:
+            order.append(value)
+            label_by_value[value] = text
+        elif len(text.strip()) > len(label_by_value[value].strip()):
+            label_by_value[value] = text
+    return [{"label": label_by_value[value], "value": value} for value in order]
+
+
 def frontend_config(*, default_city: str, default_radius: int) -> dict:
     categories = []
     seen = set()
@@ -53,7 +72,7 @@ def frontend_config(*, default_city: str, default_radius: int) -> dict:
         values = FILTER_VALUE_MAP.get(group, {})
         groups.append({
             "key": group,
-            "options": [{"label": label, "value": slug} for label, slug in values.items()],
+            "options": _ui_filter_options(values),
         })
 
     return {
