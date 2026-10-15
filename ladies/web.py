@@ -107,11 +107,6 @@ def create_app(
         limit = read_int(request.args, "limit", default=100, minimum=1, maximum=500)
         return jsonify(items=repos.history.changes(limit))
 
-    @app.get("/api/recent-searches")
-    def api_recent_searches():
-        limit = read_int(request.args, "limit", default=8, minimum=1, maximum=100)
-        return jsonify(items=repos.search.recent_searches(limit))
-
     @app.get("/api/storage")
     def api_storage():
         return jsonify(repos.archive.storage_info())

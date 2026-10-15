@@ -276,36 +276,6 @@ class SearchRepository:
         """Explicitly bridge one user-selected probe result into the canonical domain."""
         return self.sync_search_profiles([profile])[0]
 
-    def recent_searches(self, limit: int = 8) -> list[dict[str, Any]]:
-        limit = max(1, min(30, int(limit)))
-        with self.database.session() as db:
-            rows = db.scalars(
-                select(SearchRun)
-                .where(SearchRun.finished_at.is_not(None))
-                .order_by(desc(SearchRun.started_at))
-                .limit(limit * 5)
-            ).all()
-            seen: set[tuple[str, int]] = set()
-            out: list[dict[str, Any]] = []
-            for row in rows:
-                key = ((row.city_slug or row.city or "").lower(), int(row.radius_km or 0))
-                if key in seen:
-                    continue
-                seen.add(key)
-                out.append({
-                    "search_run_id": row.search_run_id,
-                    "city": row.city,
-                    "city_slug": row.city_slug,
-                    "radius_km": row.radius_km,
-                    "filters": _loads(row.filters_json, {}) or {},
-                    "advert_count": row.advert_count,
-                    "started_at": _iso(row.started_at),
-                    "finished_at": _iso(row.finished_at),
-                })
-                if len(out) >= limit:
-                    break
-            return out
-
     @staticmethod
     def _ensure_listing_from_search(
         db: Session,

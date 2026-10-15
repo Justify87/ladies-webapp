@@ -146,11 +146,6 @@ export function createCoreEffects({store,router,onPrefetchedProfile=null}) {
     catch(error){ if(showToast)toast(error.message); }
   }
 
-  async function loadRecentSearches() {
-    try { const d=await api.recentSearches(); store.dispatch({type:'RECENT_SEARCHES',items:d?.items || []}); }
-    catch {}
-  }
-
   async function openHistoryDrill(kind) {
     try {
       const d = kind === 'relistings' ? await api.historyRelistings(100) : await api.historyChanges(100);
@@ -188,7 +183,6 @@ export function createCoreEffects({store,router,onPrefetchedProfile=null}) {
       const data=await api.search(searchPayload());
       const meta=data?.meta || null;
       store.dispatch({type:'SEARCH_RESULTS',results:data?.results || [],meta});
-      void loadRecentSearches();
       if(state().discover.mode==='swipe')await prefetchCurrent({waitForPrimary:true});
       store.dispatch({type:'SEARCH_LOADING',value:false});
       router.replaceRoot('discover');
@@ -358,5 +352,5 @@ export function createCoreEffects({store,router,onPrefetchedProfile=null}) {
 
   async function snapshotCompare(a,b) { try{const [x,y]=await Promise.all([api.snapshot(a),api.snapshot(b)]);store.dispatch({type:'SHEET',value:{kind:'snapshot',payload:{before:x?.snapshot,after:y?.snapshot}}});}catch(error){toast(error.message);} }
 
-  return Object.freeze({loadSettings,loadDashboard,loadRecentSearches,openHistoryDrill,schedulePreview,performSearch,loadBundle,loadPerson,classifyBusinessProfiles,prefetchCurrent,mutatePerson,discoverDecision,undoDecision,openProfile,refreshProfile,loadList,runStatusCheck,statusSingle,saveProfileData,addPrice,merge,split,snapshotCompare,rawSearchRowAt,toast});
+  return Object.freeze({loadSettings,loadDashboard,openHistoryDrill,schedulePreview,performSearch,loadBundle,loadPerson,classifyBusinessProfiles,prefetchCurrent,mutatePerson,discoverDecision,undoDecision,openProfile,refreshProfile,loadList,runStatusCheck,statusSingle,saveProfileData,addPrice,merge,split,snapshotCompare,rawSearchRowAt,toast});
 }

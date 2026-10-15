@@ -48,8 +48,6 @@ export function reducer(state=initialState, action={}) {
         )),
       });
     }
-    case 'RECENT_SEARCHES':
-      return updateSlice(state, 'search', {recent: action.items || []});
 
     case 'SAVED_SEARCH_ITEMS':
       return updateSlice(state, 'savedSearches', {items: action.items || []});
