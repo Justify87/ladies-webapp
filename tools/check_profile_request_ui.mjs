@@ -21,10 +21,14 @@ assert.equal(profileRequestRefreshDelay(new Date(base-250).toISOString(),base),0
 assert.equal(profileRequestRefreshDelay(null,base),null);
 
 const effectsSource=readFileSync(new URL('../ladies/static/explorer/js/app/effects.js',import.meta.url),'utf8');
+const commandsSource=readFileSync(new URL('../ladies/static/explorer/js/app/commands.js',import.meta.url),'utf8');
 const backendSource=readFileSync(new URL('../ladies/messaging/profile_requests.py',import.meta.url),'utf8');
 const integrationSource=readFileSync(new URL('../ladies/messaging/integration.py',import.meta.url),'utf8');
 assert.match(effectsSource,/await regressions\.openProfile\(args\)/,'profile request loading must extend the canonical regression-safe profile opener');
 assert.doesNotMatch(effectsSource,/await core\.openProfile\(args\)/,'profile request integration must not bypass canonical person resolution');
+const requestCommand=commandsSource.match(/'profile-request':[^\n]+/)?.[0]||'';
+assert.match(requestCommand,/currentRoute\(state\(\)\)\.params\?\.advertId/,'profile request command must pass the active advert identity');
+assert.doesNotMatch(requestCommand,/listings\?\.\[0\]|listings\[0\]/,'profile request command must never choose the first listing implicitly');
 assert.match(backendSource,/status="PREPARED"/,'request metadata and local message must be committed before provider dispatch');
 assert.match(backendSource,/self\.messaging\._dispatch_text\(message_id\)/,'automatic requests must reuse the canonical text dispatcher');
 assert.match(backendSource,/row\.status = "FAILED" if retryable else "UNCERTAIN"/,'ambiguous provider outcomes must never become immediately retryable');
@@ -76,7 +80,7 @@ try{
   await new Promise(resolve=>setTimeout(resolve,180));
   assert.ok(fetchCalls>=2,'cooldown/recheck timer must refresh status automatically');
   assert.equal(state.messaging.profileRequests['7'].can_send,true,'expired cooldown must reactivate without reopening profile');
-  await effects.sendProfileRequest(7,11);
+  await effects.sendProfileRequest(7,'advert-b');
 }finally{
   globalThis.fetch=originalFetch;
 }
