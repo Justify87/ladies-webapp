@@ -217,6 +217,13 @@ export function reducer(state=initialState, action={}) {
         [key]: {...(state.messaging.contactByEndpoint[key]||{}), ...(action.value||{})},
       });
     }
+    case 'PROFILE_REQUEST_STATE': {
+      const key=String(Number(action.personId||0));
+      if(key==='0')return state;
+      return updateMappedSlice(state, 'messaging', 'profileRequests', {
+        [key]: {...(state.messaging.profileRequests?.[key]||{}), ...(action.value||{})},
+      });
+    }
     case 'ASSIGNMENT':
       return updateSlice(state, 'messaging', {assignment: action.value || null});
     case 'MESSAGE_RECORDING':
