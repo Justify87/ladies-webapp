@@ -24,15 +24,12 @@ export function mapRequestDescriptor(state){
 }
 
 export function createMapEffects({store}) {
-  let abort=null;
   let generation=0;
   let timer=null;
   let refreshes=0;
 
   const cancel=()=>{
     generation+=1;
-    abort?.abort();
-    abort=null;
     clearTimeout(timer);
     timer=null;
     refreshes=0;
@@ -50,10 +47,7 @@ export function createMapEffects({store}) {
     if(!force&&current.key===requested.key&&current.points&&!current.points?.meta?.pending_count)return current.points;
     if(!force&&current.key===requested.key&&current.loading)return current.points||null;
 
-    generation+=1;
-    const sequence=generation;
-    abort?.abort();
-    abort=new AbortController();
+    const sequence=++generation;
     clearTimeout(timer);
     timer=null;
     store.dispatch({type:'DISCOVER_MAP_LOADING',key:requested.key,value:true});
@@ -62,11 +56,10 @@ export function createMapEffects({store}) {
       const points=await api.mapPoints({
         listing_ids:requested.listingIds,
         fallback_city:requested.city
-      },{signal:abort.signal});
+      });
       const latest=mapRequestDescriptor(store.getState());
       if(sequence!==generation||latest.key!==requested.key)return null;
 
-      abort=null;
       store.dispatch({type:'DISCOVER_MAP_POINTS',key:requested.key,points});
       if(Number(points?.meta?.pending_count||0)>0&&refreshes<MAX_REFRESHES){
         refreshes+=1;
@@ -80,10 +73,9 @@ export function createMapEffects({store}) {
       }
       return points;
     }catch(error){
-      if(error?.name==='AbortError'||sequence!==generation)return null;
+      if(sequence!==generation)return null;
       const latest=mapRequestDescriptor(store.getState());
       if(latest.key!==requested.key)return null;
-      abort=null;
       store.dispatch({type:'DISCOVER_MAP_LOADING',key:requested.key,value:false,error:error?.message||String(error)});
       if(!quiet)store.dispatch({type:'TOAST',value:error?.message||String(error)});
       return null;
