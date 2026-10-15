@@ -618,6 +618,7 @@ class PriceIntelligenceService(PriceExtractionCore):
                 current=current,
             )
             self._set_selected_listing(db, extraction, listing_id)
+            extraction.base_price_list_id = base_price_list_id
             fingerprint = self._proposal_fingerprint(effective)
             legacy_items = self._legacy_items(db, base_price_list_id)
 
