@@ -4,11 +4,26 @@ import * as S from '../app/selectors.js';
 export function createPricingEffects({store,getEffects}) {
   const toast=message=>store.dispatch({type:'TOAST',value:message});
   const state=()=>store.getState();
+  const runtimeReady=()=>state().settings.pricingRuntime?.extractor?.ready===true;
 
-  async function loadPricingSettings(){try{const [settings,runtime]=await Promise.all([api.pricingSettings(),api.pricingStatus().catch(()=>({}))]);store.dispatch({type:'PRICING_SETTINGS',value:settings?.settings||settings||{}});store.dispatch({type:'PRICING_RUNTIME',value:runtime||{}});}catch{} }
-  async function loadPricingForThread(threadId){try{const [signal,timeline]=await Promise.all([api.pricingSignal(threadId).catch(()=>({})),api.pricingTimeline(threadId,100).catch(()=>({items:[]}))]);store.dispatch({type:'PRICING_THREAD',threadId,value:{threadId,signal:signal?.signal||signal,timeline:timeline?.items||timeline}});}catch{} }
+  async function ensureRuntimeReady(){
+    const known=state().settings.pricingRuntime?.extractor?.ready;
+    if(known===true)return true;
+    if(known===false)return false;
+    try{
+      const runtime=await api.pricingStatus();
+      store.dispatch({type:'PRICING_RUNTIME',value:runtime||{}});
+      return runtime?.extractor?.ready===true;
+    }catch{return false;}
+  }
 
-  async function openPricing(threadId,messageId=null){try{let proposal=await api.createPriceProposal(threadId,{trigger_type:messageId?'MESSAGE':'MANUAL',seed_message_id:messageId||null});if(proposal?.price_extraction_id)proposal=await api.priceProposal(proposal.price_extraction_id);store.dispatch({type:'PRICING_PROPOSAL',value:proposal});}catch(error){toast(error.message);} }
+  async function loadPricingSettings(){try{const settings=await api.pricingSettings();store.dispatch({type:'PRICING_SETTINGS',value:settings?.settings||settings||{}});}catch{} }
+  async function loadPricingForThread(threadId){try{const [signal,timeline]=await Promise.all([api.pricingSignal(threadId).catch(()=>({})),api.pricingTimeline(threadId,100).catch(()=>({items:[]}))]);store.dispatch({type:'PRICING_THREAD',threadId,value:{threadId,signal:runtimeReady()?(signal?.signal||signal):null,timeline:timeline?.items||timeline}});}catch{} }
+
+  async function openPricing(threadId,messageId=null){
+    if(!await ensureRuntimeReady())return toast('Preiserkennung nicht verfügbar: FunctionGemma ist nicht eingerichtet.');
+    try{let proposal=await api.createPriceProposal(threadId,{trigger_type:messageId?'MESSAGE':'MANUAL',seed_message_id:messageId||null});if(proposal?.price_extraction_id)proposal=await api.priceProposal(proposal.price_extraction_id);store.dispatch({type:'PRICING_PROPOSAL',value:proposal});}catch(error){toast(error.message);}
+  }
   async function openExistingPricing(extractionId){try{const proposal=await api.priceProposal(extractionId);store.dispatch({type:'PRICING_PROPOSAL',value:proposal});}catch(error){toast(error.message);} }
   async function openPersonPricing(personId){try{const [current,history]=await Promise.all([api.currentPricing(personId),api.pricingHistory(personId,30)]);store.dispatch({type:'SHEET',value:{kind:'person-pricing',payload:{personId,current,history:history?.items||[]}}});}catch(error){toast(error.message);} }
 
