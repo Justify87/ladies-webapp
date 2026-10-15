@@ -36,6 +36,15 @@ def _postal_code(item: dict[str, Any]) -> str | None:
     return None
 
 
+def _address_label(item: dict[str, Any], *, postal: str | None, city: str) -> str:
+    hidden = " ".join(str(item.get("hidden_location") or "").split()).strip()
+    if hidden:
+        return hidden[:160]
+    if postal and city:
+        return f"{postal} {city}"[:160]
+    return str(postal or city or "")[:160]
+
+
 def _city_key(city: str) -> str:
     return f"city:DE:{_normalized_city(city)}"
 
@@ -58,8 +67,9 @@ class MapService:
 
     The request path reads canonical local listing data plus the current search-row
     city fallback. Missing centroids are resolved only by the dedicated map
-    background executor. Hidden addresses never leave the process; only a five-digit
-    postcode or, when no usable postcode exists, a city name may reach a provider.
+    background executor. Hidden location text may be returned to the local browser
+    as a profile label, but only a five-digit postcode or, when unavailable, a city
+    name may ever reach an external geocoding provider.
     """
 
     def __init__(self, repository, *, data_dir: str | Path, background):
@@ -371,6 +381,7 @@ class MapService:
                 **item,
                 "postal": postal,
                 "city": city,
+                "address_label": _address_label(item, postal=postal, city=city),
                 "postal_key": _postal_key(postal) if postal else None,
                 "city_key": _city_key(city) if city else None,
             })
@@ -416,6 +427,7 @@ class MapService:
                 "person_id": int(item["person_id"]),
                 "listing_id": int(item["listing_id"]),
                 "advert_id": str(item["advert_id"]),
+                "address_label": item["address_label"],
             })
 
         features = []
