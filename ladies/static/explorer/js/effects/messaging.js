@@ -53,9 +53,18 @@ export function createMessagingEffects({store,router,getEffects}) {
 
   async function disconnectWhatsapp(){try{store.dispatch({type:'MESSAGE_STATUS',value:await api.messagingDisconnect()});toast('WhatsApp getrennt');}catch(error){toast(error.message);} }
 
-  async function logoutWhatsapp(){try{store.dispatch({type:'MESSAGE_STATUS',value:await api.messagingLogout()});contactProbeAt.clear();toast('WhatsApp abgemeldet');}catch(error){toast(error.message);} }
-
-  async function showQr(){try{const d=await api.messagingQr();store.dispatch({type:'SHEET',value:{kind:'qr',payload:{qr:d?.qr}}});}catch(error){store.dispatch({type:'SHEET',value:{kind:'qr',payload:{qr:null}}});toast(error.message);} }
+  async function resetWhatsapp(){
+    if(!confirm('Gespeicherte WhatsApp-Verbindung löschen und neu einrichten?\n\nDie Chat-Historie bleibt erhalten. Die lokale WhatsApp-Anmeldung wird gelöscht und anschließend eine neue Kopplung gestartet.'))return;
+    try{
+      store.dispatch({type:'MESSAGE_STATUS',value:await api.messagingReset()});
+      contactProbeAt.clear();
+      const next=await api.messagingConnect();
+      store.dispatch({type:'MESSAGE_STATUS',value:next});
+      if(['DEPENDENCY_MISSING','ERROR'].includes(String(next?.state||'').toUpperCase()))toast(next?.detail||'Neue WhatsApp-Verbindung konnte nicht gestartet werden');
+      else toast('Verbindung zurückgesetzt – QR-Code wird vorbereitet');
+      setTimeout(loadMessagingStatus,800);
+    }catch(error){toast(error.message);}
+  }
 
   async function loadThreads(){store.dispatch({type:'THREADS_LOADING',value:true});try{const d=await api.threads('ALL');store.dispatch({type:'THREADS',items:d?.items||[]});}catch(error){store.dispatch({type:'THREADS_LOADING',value:false});toast(error.message);} }
 
@@ -96,5 +105,5 @@ export function createMessagingEffects({store,router,getEffects}) {
 
   function connectEvents(){if(events)return;try{events=new EventSource('/api/messaging/events');events.onopen=()=>store.dispatch({type:'MESSAGE_EVENTS',value:true});events.onerror=()=>store.dispatch({type:'MESSAGE_EVENTS',value:false});events.onmessage=async ev=>{let payload={};try{payload=JSON.parse(ev.data||'{}');}catch{};if(payload.type==='presence'){applyPresence(payload);return;}await Promise.allSettled([loadMessagingStatus(),loadThreads()]);const t=S.currentThread(state());if(t&&(payload.thread_id===t.threadId||payload.message?.thread_id===t.threadId||!payload.thread_id))loadThread(t.threadId).catch(()=>{});};}catch(error){logClient('warning','sse',error.message);}}
 
-  return Object.freeze({loadMessagingStatus,connectWhatsapp,disconnectWhatsapp,logoutWhatsapp,showQr,loadThreads,loadThread,openChat,openPersonChat,sendChat,sendAttachment,findMessage,reactMessage,openViewOnce,deleteMessage,retryMessage,startVoice,stopVoice,cancelVoice,openAssignment,assignEndpoint,createPersonAndAssign,connectEvents,currentEndpointId,probeContact});
+  return Object.freeze({loadMessagingStatus,connectWhatsapp,disconnectWhatsapp,resetWhatsapp,loadThreads,loadThread,openChat,openPersonChat,sendChat,sendAttachment,findMessage,reactMessage,openViewOnce,deleteMessage,retryMessage,startVoice,stopVoice,cancelVoice,openAssignment,assignEndpoint,createPersonAndAssign,connectEvents,currentEndpointId,probeContact});
 }

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import io
 import json
 import logging
 import mimetypes
@@ -9,7 +7,6 @@ import queue
 import uuid
 from pathlib import Path
 
-import qrcode
 from flask import Response, jsonify, request, send_file, stream_with_context
 from werkzeug.utils import secure_filename
 
@@ -18,6 +15,7 @@ from ladies_v9.errors import ConflictError, NotFoundError, ValidationError
 from ladies_v9.models import Person
 from ladies_v9.request_parsing import read_bool, read_int
 
+from .connection_lifecycle import WhatsAppConnectionLifecycle
 from .models import ChatMessage, ChatThread, ContactEndpoint
 from .scope import bind_provider_address, refresh_endpoint_identity
 from .service_v2 import MessagingService
@@ -27,13 +25,6 @@ MAX_MEDIA_BYTES = 100 * 1024 * 1024
 MAX_MEDIA_REQUEST_BYTES = MAX_MEDIA_BYTES + (2 * 1024 * 1024)
 ALLOWED_MEDIA_TYPES = {"IMAGE", "VIDEO", "AUDIO", "VOICE", "DOCUMENT"}
 VIEW_ONCE_MEDIA_TYPES = {"IMAGE", "VIDEO", "AUDIO", "VOICE"}
-
-
-def _qr_data_uri(value: str) -> str:
-    image = qrcode.make(value)
-    buf = io.BytesIO()
-    image.save(buf, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 def _extension(file_name: str, mime_type: str) -> str:
@@ -50,7 +41,9 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
     if not isinstance(database, Database):
         raise RuntimeError("Messaging benötigt die gemeinsame Application-Database")
     service = MessagingService(database, data_dir)
+    connection = WhatsAppConnectionLifecycle(service)
     app.extensions["ladies_messaging"] = service
+    app.extensions["ladies_whatsapp_connection"] = connection
 
     # Messaging resources are authorized by their own persistence, not by the
     # current discovery/listing/preference state of an associated Person.
@@ -87,26 +80,19 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
 
     @app.get("/api/messaging/status")
     def messaging_status():
-        return jsonify(service.status())
+        return jsonify(connection.status())
 
     @app.post("/api/messaging/connect")
     def messaging_connect():
-        return jsonify(service.connect())
+        return jsonify(connection.connect())
 
     @app.post("/api/messaging/disconnect")
     def messaging_disconnect():
-        return jsonify(service.disconnect())
+        return jsonify(connection.disconnect())
 
-    @app.post("/api/messaging/logout")
-    def messaging_logout():
-        return jsonify(service.logout())
-
-    @app.get("/api/messaging/qr")
-    def messaging_qr():
-        value = service.qr()
-        if not value:
-            raise NotFoundError("Kein QR-Code verfügbar")
-        return jsonify(qr=_qr_data_uri(value))
+    @app.delete("/api/messaging/connection")
+    def messaging_reset_connection():
+        return jsonify(connection.reset())
 
     @app.get("/api/messaging/threads")
     def messaging_threads():
@@ -435,7 +421,7 @@ def install_messaging(app, *, data_dir, database: Database | None = None) -> Mes
         data = request.get_json(silent=True) or {}
         if "typing_enabled" in data:
             service.set_typing_enabled(read_bool(data, "typing_enabled"))
-        return jsonify(service.status())
+        return jsonify(connection.status())
 
     @app.get("/api/messaging/events")
     def messaging_events():
