@@ -52,7 +52,7 @@ class MapRepository:
                     select(PriceList, PriceItem)
                     .join(PriceItem, PriceItem.price_list_id == PriceList.price_list_id)
                     .where(
-                        PriceList.person_id.in_(listings_by_person),
+                        PriceList.person_id.in_(list(listings_by_person)),
                         or_(PriceList.listing_id.in_(ordered), PriceList.listing_id.is_(None)),
                         PriceList.currency == "EUR",
                         PriceItem.item_type == "BASE",
