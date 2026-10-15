@@ -46,7 +46,7 @@ class Session:
         self.headers = {}
 
     def get(self, *args, **kwargs):
-        raise AssertionError("Map behavior checks must not perform network I/O")
+        raise AssertionError("Map behavior checks must not perform unexpected network I/O")
 
 
 requests.RequestException = RequestException
@@ -118,8 +118,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert not background.submissions
 
 
-# A postcode is the first and only external lookup while it is unresolved. City
-# geocoding must not run eagerly in parallel with a more precise postal lookup.
+# A postcode is the first and only lookup initially. City geocoding must not run
+# eagerly in parallel with a more precise postal lookup.
 with tempfile.TemporaryDirectory() as tmp:
     background = Background()
     service = MapService(
@@ -133,9 +133,54 @@ with tempfile.TemporaryDirectory() as tmp:
     pending = background.submissions[0][2][0]
     assert [spec["kind"] for spec in pending] == ["postal"]
     assert pending[0]["value"] == "04109"
+    assert pending[0]["fallback_city"] == "Leipzig"
 
 
-# Only a definitively unavailable postcode may fall back to the city resolver.
+# A definite postal miss falls through to the city inside the same background job,
+# so frontend polling is not required to schedule the fallback.
+class Response:
+    def __init__(self, status_code, payload):
+        self.status_code = status_code
+        self.payload = payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RequestException(str(self.status_code))
+
+    def json(self):
+        return self.payload
+
+
+class ScriptedSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+        self.headers = {}
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return self.responses.pop(0)
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    service = MapService(Repository([]), data_dir=tmp, background=Background())
+    service._http = ScriptedSession([
+        Response(404, {}),
+        Response(200, [{"lat": "51.3397", "lon": "12.3731"}]),
+    ])
+    service._resolve_missing([{
+        "key": postal_key("99999"),
+        "kind": "postal",
+        "value": "99999",
+        "fallback_city_key": city_key("Leipzig"),
+        "fallback_city": "Leipzig",
+    }])
+    assert service._cached_record(postal_key("99999"))["status"] == "NOT_FOUND"
+    assert service._resolved_location(city_key("Leipzig"))["precision"] == "SEARCH_AREA"
+    assert len(service._http.calls) == 2
+
+
+# A postcode already known as unavailable schedules only its city fallback.
 with tempfile.TemporaryDirectory() as tmp:
     background = Background()
     service = MapService(
