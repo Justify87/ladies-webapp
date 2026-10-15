@@ -77,7 +77,7 @@ export function createMessagingEffects({store,router,getEffects}) {
 
   async function openChat(threadId,endpointId=null){router.push('chat',{threadId:Number(threadId)});await loadThread(Number(threadId));if(endpointId){store.dispatch({type:'THREAD_ENDPOINT',endpointId:Number(endpointId)});void probeContact(endpointId,{force:true});}}
 
-  async function openPersonChat(personId,listingId=null){try{const d=await api.ensurePersonThread(personId,listingId);await api.classifyThread(d.thread_id,{status:'LADIES_CONFIRMED',method:'explicit_profile_action'});await loadThreads();await openChat(d.thread_id,d.endpoint?.endpoint_id||null);}catch(error){toast(error.message);} }
+  async function openPersonChat(personId,listingId=null){try{const d=await api.ensurePersonThread(personId,listingId);await loadThreads();await openChat(d.thread_id,d.endpoint?.endpoint_id||null);}catch(error){toast(error.message);} }
 
   async function sendChat(form){const threadId=Number(form.dataset.threadId),fd=new FormData(form),text=String(fd.get('text')||'').trim();if(!text)return;const editing=state().messaging.editing,reply=state().messaging.replyTo;try{getEffects().sendPresence(threadId,'paused');if(editing)await api.editMessage(editing.id,text);else await api.sendText(threadId,{text,reply_to_message_id:reply?.id||null,endpoint_id:currentEndpointId()||null});form.reset();if(editing)store.dispatch({type:'EDITING',value:null});store.dispatch({type:'REPLY_TO',value:null});await Promise.all([loadThread(threadId),loadThreads()]);}catch(error){toast(error.message);} }
 
@@ -102,11 +102,9 @@ export function createMessagingEffects({store,router,getEffects}) {
 
   async function openAssignment(endpointId){try{const [candidates,probe]=await Promise.all([api.assignmentCandidates(endpointId),api.endpointProbe(endpointId).catch(()=>null)]);const items=(candidates?.items||[]).map(candidate=>({...candidate,city:(candidate.evidence||[]).map(ev=>`${ev.decision||ev.kind}: ${ev.text||ev.kind||''}`).join(' · ')}));store.dispatch({type:'SHEET',value:{kind:'assign',payload:{endpointId,candidates:items,probe}}});}catch(error){toast(error.message);} }
 
-  async function openAssignedThread(personId,endpointId,classificationMethod=null){const summary=await api.personMessaging(Number(personId));const threadId=Number(summary?.thread_id||0);if(!threadId)return;if(classificationMethod)await api.classifyThread(threadId,{status:'LADIES_CONFIRMED',method:classificationMethod});await loadThreads();router.replace('chat',{threadId});await loadThread(threadId);if(endpointId){store.dispatch({type:'THREAD_ENDPOINT',endpointId:Number(endpointId)});void probeContact(endpointId,{force:true});}}
+  async function openAssignedThread(personId,endpointId){const summary=await api.personMessaging(Number(personId));const threadId=Number(summary?.thread_id||0);if(!threadId)return;await loadThreads();router.replace('chat',{threadId});await loadThread(threadId);if(endpointId){store.dispatch({type:'THREAD_ENDPOINT',endpointId:Number(endpointId)});void probeContact(endpointId,{force:true});}}
 
-  async function assignEndpoint(endpointId,personId){try{const d=await api.assignEndpoint(endpointId,{person_id:Number(personId)});store.dispatch({type:'SHEET',value:null});await openAssignedThread(d?.person_id||personId,endpointId,'manual_assignment');toast('Kontakt zugeordnet');}catch(error){toast(error.message);} }
-
-  async function createPersonAndAssign(form){const endpointId=Number(form.dataset.endpointId),name=String(new FormData(form).get('display_name')||'WhatsApp-Kontakt');try{const d=await api.assignEndpoint(endpointId,{create_person:true,display_name:name});store.dispatch({type:'SHEET',value:null});await openAssignedThread(d?.person_id,endpointId,'manual_assignment');toast('Person erstellt und zugeordnet');}catch(error){toast(error.message);} }
+  async function assignEndpoint(endpointId,personId){try{const d=await api.assignEndpoint(endpointId,{person_id:Number(personId)});store.dispatch({type:'SHEET',value:null});await openAssignedThread(d?.person_id||personId,endpointId);toast('Kontakt zugeordnet');}catch(error){toast(error.message);} }
 
   async function markNonLadies(threadId){
     if(!confirm('Diesen WhatsApp-Chat dauerhaft als keinen Ladies-Kontakt markieren?\n\nEr bleibt technisch synchronisiert, wird aber weder im Ladies-Postfach noch in „Nicht zugeordnet“ angezeigt.'))return;
@@ -119,5 +117,5 @@ export function createMessagingEffects({store,router,getEffects}) {
 
   function connectEvents(){if(events)return;try{events=new EventSource('/api/messaging/events');events.onopen=()=>store.dispatch({type:'MESSAGE_EVENTS',value:true});events.onerror=()=>store.dispatch({type:'MESSAGE_EVENTS',value:false});events.onmessage=async ev=>{let payload={};try{payload=JSON.parse(ev.data||'{}');}catch{};if(payload.type==='presence'){applyPresence(payload);return;}await Promise.allSettled([loadMessagingStatus(),loadThreads()]);const t=S.currentThread(state());if(t&&(payload.thread_id===t.threadId||payload.message?.thread_id===t.threadId||!payload.thread_id))loadThread(t.threadId).catch(()=>{});};}catch(error){logClient('warning','sse',error.message);}}
 
-  return Object.freeze({loadMessagingStatus,connectWhatsapp,disconnectWhatsapp,resetWhatsapp,loadThreads,loadThread,openChat,openPersonChat,sendChat,sendAttachment,findMessage,reactMessage,openViewOnce,deleteMessage,retryMessage,startVoice,stopVoice,cancelVoice,openAssignment,assignEndpoint,createPersonAndAssign,markNonLadies,connectEvents,currentEndpointId,probeContact});
+  return Object.freeze({loadMessagingStatus,connectWhatsapp,disconnectWhatsapp,resetWhatsapp,loadThreads,loadThread,openChat,openPersonChat,sendChat,sendAttachment,findMessage,reactMessage,openViewOnce,deleteMessage,retryMessage,startVoice,stopVoice,cancelVoice,openAssignment,assignEndpoint,markNonLadies,connectEvents,currentEndpointId,probeContact});
 }
