@@ -21,12 +21,12 @@ def _jid_phone(jid: str | None) -> str | None:
 
 
 class RecentHistoryCache:
-    """Bounded sidecar of already observed WhatsApp messages.
+    """Bounded fallback cache for recently observed live WhatsApp messages.
 
-    The replaceable application DB may be deleted during tests. The linked-device
-    session is intentionally persistent, so the last ten observed messages per
-    endpoint live beside that session and can seed a fresh DB after a profile is
-    liked again.
+    The linked-device session intentionally outlives a replaceable application
+    database. Keeping a tiny live-message fallback beside that session can seed a
+    rebuilt database when provider history is temporarily unavailable. Provider
+    history/backfill itself belongs only in the canonical SQL conversation store.
     """
 
     def __init__(self, data_dir: str | Path, limit: int = REHYDRATE_LIMIT):
@@ -136,7 +136,11 @@ class RecentHistoryCache:
         usable = [
             self._clean(payload)
             for payload in payloads
-            if isinstance(payload, dict) and payload.get("provider_message_id")
+            if (
+                isinstance(payload, dict)
+                and payload.get("provider_message_id")
+                and not payload.get("rehydrated")
+            )
         ]
         if not usable:
             return
