@@ -61,7 +61,6 @@ export function createCommands({store,router,effects}) {
     'voice-start':()=>effects.startVoice(),
     'voice-stop':()=>effects.stopVoice(),
     'voice-cancel':()=>effects.cancelVoice(),
-    'chat-favorite':async ()=>{const t=S.currentThread(state());if(!t?.personId)return effects.toast('Chat ist keiner Person zugeordnet');const detail=await effects.loadPerson(t.personId,{force:true,quiet:true});const favorite=detail?.user_state?.favorite ?? t.favorite;await effects.mutatePerson(t.personId,{favorite:!favorite});await Promise.all([effects.loadThreads('ALL'),effects.loadThread(t.threadId)]);},
     'chat-profile':()=>{const t=S.currentThread(state());if(t?.personId)return effects.openProfile({personId:t.personId});const endpointId=Number(t?.selectedEndpoint?.endpoint_id||t?.selected_endpoint?.endpoint_id||t?.endpoint?.endpoint_id||t?.endpoints?.[0]?.endpoint_id||0);if(endpointId)return effects.openAssignment(endpointId);effects.toast('Chat ist keiner Person zugeordnet');},
     'wa-connect':()=>effects.connectWhatsapp(),
     'wa-disconnect':()=>effects.disconnectWhatsapp(),
