@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from collections import defaultdict
+
+from sqlalchemy import desc, or_, select
 
 from ladies_v9.database import Database
-from ladies_v9.models import Listing, ListingSnapshot
+from ladies_v9.models import Listing, ListingSnapshot, PriceItem, PriceList
 
 
 class MapRepository:
@@ -40,6 +42,38 @@ class MapRepository:
                 for listing, snapshot in rows
             }
 
+            listings_by_person: dict[int, list[int]] = defaultdict(list)
+            for listing_id, (listing, _) in by_listing.items():
+                listings_by_person[int(listing.person_id)].append(listing_id)
+
+            price_60_by_listing: dict[int, int] = {}
+            if listings_by_person:
+                price_rows = db.execute(
+                    select(PriceList, PriceItem)
+                    .join(PriceItem, PriceItem.price_list_id == PriceList.price_list_id)
+                    .where(
+                        PriceList.person_id.in_(listings_by_person),
+                        or_(PriceList.listing_id.in_(ordered), PriceList.listing_id.is_(None)),
+                        PriceList.currency == "EUR",
+                        PriceItem.item_type == "BASE",
+                        PriceItem.duration_minutes == 60,
+                    )
+                    .order_by(
+                        desc(PriceList.observed_at),
+                        desc(PriceList.price_list_id),
+                        PriceItem.price_item_id,
+                    )
+                ).all()
+                for price_list, price_item in price_rows:
+                    person_id = int(price_list.person_id)
+                    if price_list.listing_id is None:
+                        targets = listings_by_person.get(person_id, [])
+                    else:
+                        listing_id = int(price_list.listing_id)
+                        targets = [listing_id] if listing_id in seen_ids else []
+                    for listing_id in targets:
+                        price_60_by_listing.setdefault(listing_id, int(price_item.amount_cents))
+
             items: list[dict] = []
             for listing_id in ordered:
                 pair = by_listing.get(listing_id)
@@ -53,5 +87,6 @@ class MapRepository:
                     "city": snapshot.city if snapshot else None,
                     "postal_code": snapshot.postal_code if snapshot else None,
                     "hidden_location": snapshot.hidden_location if snapshot else None,
+                    "price_60_cents": price_60_by_listing.get(listing_id),
                 })
             return items
