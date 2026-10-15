@@ -90,6 +90,7 @@ assert.equal(invalidatesProfilePricing('PROFILE_TAB'),false);
 
 // Focused guards for the Explorer follow-up fixes.
 const discoverSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/discover.js',import.meta.url),'utf8');
+const discoverMapSource=readFileSync(new URL('../ladies/static/explorer/js/ui/discover_map.js',import.meta.url),'utf8');
 const profileSource=readFileSync(new URL('../ladies/static/explorer/js/ui/profile.js',import.meta.url),'utf8');
 const prototypeSource=readFileSync(new URL('../ladies/static/explorer/css/prototype.css',import.meta.url),'utf8');
 const chromeSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/chrome.js',import.meta.url),'utf8');
@@ -98,10 +99,25 @@ const encounterSource=readFileSync(new URL('../ladies/static/explorer/js/effects
 const requestedSource=readFileSync(new URL('../ladies/static/explorer/js/requested_fixes.js',import.meta.url),'utf8');
 const canonicalPricingSource=readFileSync(new URL('../ladies/pricing/canonical.py',import.meta.url),'utf8');
 const pricingWebSource=readFileSync(new URL('../ladies/pricing/web.py',import.meta.url),'utf8');
+const mapServiceSource=readFileSync(new URL('../ladies/core/services/map.py',import.meta.url),'utf8');
+const webSource=readFileSync(new URL('../ladies/web.py',import.meta.url),'utf8');
+const templateSource=readFileSync(new URL('../ladies/templates/index.html',import.meta.url),'utf8');
 assert.match(discoverSource,/grid-card-heart[^>]+data-action="grid-like"/s,'visible Grid heart must trigger Like');
-assert.doesNotMatch(discoverSource,/discover-mode-pills/,'availability controls must not be duplicated inside Grid or Swipe content');
-assert.match(chromeSource,/header-discovery-modes/,'Swipe and Grid availability controls must live in the shared header');
-assert.match(chromeSource,/route\.name==='swipe'.*data-route="grid".*gridGlyph\(\).*route\.name==='grid'.*data-route="swipe"/s,'shared header must expose both view switches with a real Grid glyph');
+assert.doesNotMatch(discoverSource,/discover-mode-pills/,'availability controls must not be duplicated inside discover content');
+assert.match(chromeSource,/header-discovery-modes/,'availability controls must stay in the shared header');
+assert.match(chromeSource,/\['swipe','cards','Entdecken'\]/,'bottom navigation must expose the discovery area as Entdecken');
+assert.match(discoverSource,/\['swipe','cards','Swipe'\].*\['grid','grid','Raster'\].*\['map','pin','Karte'\]/s,'discover content must expose explicit Swipe, Raster and Karte buttons');
+assert.doesNotMatch(chromeSource,/gridGlyph|cardsGlyph|view-switch/,'the ambiguous two-state header view toggle must stay removed');
+assert.match(discoverMapSource,/maplibre-gl@6\.14\.0/,'MapLibre must remain pinned to the reviewed version');
+assert.match(discoverMapSource,/tiles\.openfreemap\.org\/styles\/liberty/,'map must use the OpenFreeMap Liberty style');
+assert.match(discoverMapSource,/cluster:true/,'profile points must use MapLibre clustering');
+assert.match(discoverMapSource,/getClusterExpansionZoom/,'cluster clicks must zoom into their contents');
+assert.match(clientSource,/mapPoints:\s*searchRunId\s*=>\s*request\(`\/api\/map-points\//,'frontend must load map points through the local API');
+assert.match(webSource,/@app\.get\("\/api\/map-points\/<int:search_run_id>"\)/,'backend must expose search-run scoped map points');
+assert.match(mapServiceSource,/map-geocode-cache\.json/,'geocoding must be cached locally');
+assert.match(mapServiceSource,/POSTAL_RE/,'map service must derive postal codes locally');
+assert.doesNotMatch(mapServiceSource,/params=\{[^}]*hidden_location/s,'hidden locations must never be submitted to a third-party geocoder');
+assert.match(templateSource,/discover-map\.css/,'new map styling must be loaded without changing the existing stylesheet order');
 assert.match(clientSource,/threads:\s*\(\)\s*=>\s*request\('\/api\/messaging\/threads\?filter=ALL'\)/,'thread API must always load the canonical unfiltered collection');
 assert.match(encounterSource,/querySelector\('\[name="base_price_eur"\]'\)\)payload\.base_price_eur=/,'hidden base price must only be sent when present');
 assert.match(encounterSource,/querySelector\('\[name="note"\]'\)\)payload\.note=/,'hidden note must only be sent when present');
