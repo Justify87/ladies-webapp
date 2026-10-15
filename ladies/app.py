@@ -148,12 +148,15 @@ def create_app(
 
     access = LanAccessManager(data_dir)
     background = BackgroundTasks(max_workers=2)
+    map_background = BackgroundTasks(max_workers=1, max_pending=4)
     app.config["LAN_ACCESS_MANAGER"] = access
     app.config["LAN_ACCESS_TOKEN"] = access.pairing_token
     app.extensions["background_tasks"] = background
+    app.extensions["map_background_tasks"] = map_background
     atexit.register(background.shutdown)
+    atexit.register(map_background.shutdown)
 
-    install_map_view(app, background=background, data_dir=data_dir)
+    install_map_view(app, background=map_background, data_dir=data_dir)
 
     @app.before_request
     def protect_remote_local_data():
