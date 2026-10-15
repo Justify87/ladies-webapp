@@ -30,6 +30,7 @@ export function createController({store,router,effects,commands}) {
   let lastSheetKey=null;
   let lastSwipeAnalysisKey=null;
   let autoFocusedChatKey=null;
+  let lastEditingMessageId=0;
   const chatScrollMemory=new Map();
   const screenScrollMemory=new Map();
 
@@ -44,13 +45,9 @@ export function createController({store,router,effects,commands}) {
 
   function captureManagedFocus(){
     const active=document.activeElement;
-    if(!active||!host.contains(active))return null;
-    let selector=null;
-    if(active.matches?.('[data-message-search]'))selector='[data-message-search]';
-    else if(active.matches?.('[data-chat-form] textarea[name="text"]'))selector='[data-chat-form] textarea[name="text"]';
-    if(!selector)return null;
+    if(!active||!host.contains(active)||!active.matches?.('[data-chat-form] textarea[name="text"]'))return null;
     return {
-      selector,
+      selector:'[data-chat-form] textarea[name="text"]',
       value:'value' in active?active.value:null,
       selectionStart:typeof active.selectionStart==='number'?active.selectionStart:null,
       selectionEnd:typeof active.selectionEnd==='number'?active.selectionEnd:null,
@@ -58,19 +55,46 @@ export function createController({store,router,effects,commands}) {
     };
   }
 
-  function restoreManagedFocus(snapshot){
+  function restoreManagedFocus(snapshot,{restoreValue=true}={}){
     if(!snapshot)return false;
     const target=host.querySelector(snapshot.selector);
     if(!target)return false;
-    if(snapshot.value!==null&&'value' in target)target.value=snapshot.value;
+    if(restoreValue&&snapshot.value!==null&&'value' in target)target.value=snapshot.value;
     try{target.focus({preventScroll:true});}catch{target.focus();}
-    if(snapshot.selectionStart!==null&&typeof target.setSelectionRange==='function'){
+    if(typeof target.setSelectionRange==='function'){
       const max=String(target.value||'').length;
-      const start=Math.max(0,Math.min(max,snapshot.selectionStart));
-      const end=Math.max(start,Math.min(max,snapshot.selectionEnd??start));
-      try{target.setSelectionRange(start,end,snapshot.selectionDirection||'none');}catch{}
+      const start=restoreValue&&snapshot.selectionStart!==null?Math.max(0,Math.min(max,snapshot.selectionStart)):max;
+      const end=restoreValue&&snapshot.selectionStart!==null?Math.max(start,Math.min(max,snapshot.selectionEnd??start)):max;
+      try{target.setSelectionRange(start,end,restoreValue?snapshot.selectionDirection||'none':'none');}catch{}
     }
     return document.activeElement===target;
+  }
+
+  function patchFocusedMessageSearch(nextHtml){
+    const search=host.querySelector('[data-message-search]');
+    if(!search||document.activeElement!==search)return false;
+    const currentScroll=search.closest('.screen-scroll');
+    if(!currentScroll)return false;
+    const template=document.createElement('template');
+    template.innerHTML=nextHtml.trim();
+    const nextScroll=template.content.querySelector('.messages-screen .screen-scroll');
+    if(!nextScroll)return false;
+
+    const currentFilters=currentScroll.querySelector('.message-filters');
+    const nextFilters=nextScroll.querySelector('.message-filters');
+    if(currentFilters&&nextFilters&&currentFilters.innerHTML!==nextFilters.innerHTML)currentFilters.innerHTML=nextFilters.innerHTML;
+
+    const currentList=currentScroll.querySelector('.thread-list');
+    const nextList=nextScroll.querySelector('.thread-list');
+    if(!currentList||!nextList)return false;
+    if(currentList.innerHTML!==nextList.innerHTML)currentList.innerHTML=nextList.innerHTML;
+
+    const currentWarning=currentScroll.querySelector('.whatsapp-disconnected-banner');
+    const nextWarning=nextScroll.querySelector('.whatsapp-disconnected-banner');
+    if(currentWarning&&!nextWarning)currentWarning.remove();
+    else if(!currentWarning&&nextWarning)currentScroll.insertBefore(nextWarning.cloneNode(true),currentFilters||currentScroll.firstChild);
+    else if(currentWarning&&nextWarning&&currentWarning.innerHTML!==nextWarning.innerHTML)currentWarning.innerHTML=nextWarning.innerHTML;
+    return true;
   }
 
   function focusChatComposer(){
@@ -194,6 +218,8 @@ export function createController({store,router,effects,commands}) {
     const route=S.currentRoute(state);
     const out=renderApp(state);
     const routeChanged=route.key!==lastRouteKey;
+    const editingMessageId=route.name==='chat'?Number(state.messaging.editing?.id||0):0;
+    const editingChanged=editingMessageId!==lastEditingMessageId;
     const nextSheetKey=sheetRenderKey(state.ui.sheet);
     const sheetChanged=nextSheetKey!==lastSheetKey;
     const overlaySnapshot=!sheetChanged&&nextSheetKey?captureScrollState(overlay,'.bottom-sheet'):[];
@@ -205,12 +231,14 @@ export function createController({store,router,effects,commands}) {
     if(out.header!==lastHeaderHtml){header.innerHTML=out.header;lastHeaderHtml=out.header;}
     if(out.nav!==lastNavHtml){nav.innerHTML=out.nav;lastNavHtml=out.nav;}
 
-    const screenUpdate=updateScrollableRegion(host,out.body,{
-      previousHtml:lastBodyHtml,
-      force:routeChanged,
-      snapshot:screenScrollMemory.get(route.key),
-      reset:routeChanged
-    });
+    const screenUpdate=route.name==='messages'&&!routeChanged&&patchFocusedMessageSearch(out.body)
+      ? {replaced:false,restored:false}
+      : updateScrollableRegion(host,out.body,{
+          previousHtml:lastBodyHtml,
+          force:routeChanged,
+          snapshot:screenScrollMemory.get(route.key),
+          reset:routeChanged
+        });
     lastBodyHtml=out.body;
 
     updateScrollableRegion(overlay,out.sheet,{
@@ -234,10 +262,11 @@ export function createController({store,router,effects,commands}) {
     }
 
     lastRouteKey=route.key;
+    lastEditingMessageId=editingMessageId;
     if(screenUpdate.replaced)bindSwipeGesture();
     syncDiscoverMap({host,state,store,effects});
     maybeAutoAnalyzeSwipe(state);
-    if(screenUpdate.replaced&&!routeChanged)restoreManagedFocus(focusSnapshot);
+    if(screenUpdate.replaced&&!routeChanged)restoreManagedFocus(focusSnapshot,{restoreValue:!editingChanged});
     if(route.name==='chat'&&screenUpdate.replaced)restoreChatScroll(Number(route.params?.threadId||S.currentThread(state)?.threadId||0));
     if(route.name==='chat'){
       const chatFocusKey=`${route.key}:${Number(route.params?.threadId||S.currentThread(state)?.threadId||0)}`;
