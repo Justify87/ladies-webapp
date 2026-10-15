@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import threading
 from typing import Any
 
 import orjson
@@ -67,6 +68,10 @@ class SearchRepository:
 
     def __init__(self, database: Database):
         self.database = database
+        # All canonical listing creation/update transactions share one boundary.
+        # The app is a threaded single process, so this prevents duplicate inserts
+        # for the same (source, external_listing_id) before either transaction commits.
+        self._canonical_write_lock = threading.RLock()
 
     @staticmethod
     def _business_profile_payload(db: Session, listing: Listing) -> dict[str, Any]:
@@ -185,65 +190,91 @@ class SearchRepository:
     ) -> list[dict[str, Any]]:
         now = utcnow()
         result_payload: list[dict[str, Any]] = []
-        with self.database.session() as db:
-            run = db.get(SearchRun, int(search_run_id))
-            if run is None:
-                raise ValueError("Search run nicht gefunden")
-            run.finished_at = now
-            run.advert_count = (
-                meta.get("server_advert_count")
-                if meta.get("server_advert_count") is not None
-                else len(profiles)
-            )
-            try:
-                run.distance_searched = (
-                    int(meta.get("distance_searched"))
-                    if meta.get("distance_searched") is not None
-                    else run.radius_km
+        with self._canonical_write_lock:
+            with self.database.session() as db:
+                run = db.get(SearchRun, int(search_run_id))
+                if run is None:
+                    raise ValueError("Search run nicht gefunden")
+                run.finished_at = now
+                run.advert_count = (
+                    meta.get("server_advert_count")
+                    if meta.get("server_advert_count") is not None
+                    else len(profiles)
                 )
-            except (TypeError, ValueError):
-                run.distance_searched = run.radius_km
-            run.metadata_json = _dumps(meta)
+                try:
+                    run.distance_searched = (
+                        int(meta.get("distance_searched"))
+                        if meta.get("distance_searched") is not None
+                        else run.radius_km
+                    )
+                except (TypeError, ValueError):
+                    run.distance_searched = run.radius_km
+                run.metadata_json = _dumps(meta)
 
-            for position, profile in enumerate(profiles, start=1):
-                listing = self._ensure_listing_from_search(db, profile, now)
-                db.add(SearchResult(
-                    search_run_id=run.search_run_id,
-                    listing_id=listing.listing_id,
-                    position=position,
-                    observed_at=now,
-                    thumbnail_url=profile.thumbnail_url,
-                    name=profile.name,
-                    city=profile.city,
-                    has_video=profile.has_video,
-                    is_premium=profile.is_premium,
-                    has_ai_content=profile.has_ai_content,
-                    markers_json=_dumps(profile.markers),
-                ))
-                db.add(ListingObservation(
-                    listing_id=listing.listing_id,
-                    observed_at=now,
-                    source="SEARCH",
-                    status="SEEN",
-                    search_run_id=run.search_run_id,
-                    details_json=_dumps({
-                        "position": position,
-                        "name": profile.name,
-                        "city": profile.city,
-                    }),
-                ))
-                result_payload.append(self._search_payload(db, listing, profile))
+                for position, profile in enumerate(profiles, start=1):
+                    listing = self._ensure_listing_from_search(db, profile, now)
+                    db.add(SearchResult(
+                        search_run_id=run.search_run_id,
+                        listing_id=listing.listing_id,
+                        position=position,
+                        observed_at=now,
+                        thumbnail_url=profile.thumbnail_url,
+                        name=profile.name,
+                        city=profile.city,
+                        has_video=profile.has_video,
+                        is_premium=profile.is_premium,
+                        has_ai_content=profile.has_ai_content,
+                        markers_json=_dumps(profile.markers),
+                    ))
+                    db.add(ListingObservation(
+                        listing_id=listing.listing_id,
+                        observed_at=now,
+                        source="SEARCH",
+                        status="SEEN",
+                        search_run_id=run.search_run_id,
+                        details_json=_dumps({
+                            "position": position,
+                            "name": profile.name,
+                            "city": profile.city,
+                        }),
+                    ))
+                    result_payload.append(self._search_payload(db, listing, profile))
         return result_payload
 
     def sync_search_profiles(self, profiles: list[SearchProfile]) -> list[dict[str, Any]]:
-        """Canonicalize search rows locally without creating SearchRun/SearchResult history."""
+        """Canonicalize active-search rows locally without creating SearchRun history."""
         now = utcnow()
         result_payload: list[dict[str, Any]] = []
-        with self.database.session() as db:
-            for profile in profiles:
-                listing = self._ensure_listing_from_search(db, profile, now)
-                result_payload.append(self._search_payload(db, listing, profile))
+        with self._canonical_write_lock:
+            with self.database.session() as db:
+                for profile in profiles:
+                    listing = self._ensure_listing_from_search(db, profile, now)
+                    result_payload.append(self._search_payload(db, listing, profile))
         return result_payload
+
+    def probe_search_profiles(self, profiles: list[SearchProfile]) -> list[dict[str, Any]]:
+        """Read local state for upstream rows without mutating canonical person/listing data."""
+        result_payload: list[dict[str, Any]] = []
+        with self.database.session() as db:
+            advert_ids = [str(profile.advert_id) for profile in profiles]
+            listings = db.scalars(
+                select(Listing).where(
+                    Listing.source == "LADIES",
+                    Listing.external_listing_id.in_(advert_ids),
+                )
+            ).all() if advert_ids else []
+            by_advert = {str(row.external_listing_id): row for row in listings}
+            for profile in profiles:
+                listing = by_advert.get(str(profile.advert_id))
+                if listing is None:
+                    result_payload.append(self._unpersisted_search_payload(profile))
+                else:
+                    result_payload.append(self._search_payload(db, listing, profile))
+        return result_payload
+
+    def materialize_search_profile(self, profile: SearchProfile) -> dict[str, Any]:
+        """Explicitly bridge one user-selected probe result into the canonical domain."""
+        return self.sync_search_profiles([profile])[0]
 
     def recent_searches(self, limit: int = 8) -> list[dict[str, Any]]:
         limit = max(1, min(30, int(limit)))
@@ -322,6 +353,39 @@ class SearchRepository:
                 if profile.name:
                     person.display_name = profile.name
         return listing
+
+    @staticmethod
+    def _unpersisted_search_payload(profile: SearchProfile) -> dict[str, Any]:
+        return {
+            "advert_id": str(profile.advert_id),
+            "listing_id": None,
+            "person_id": None,
+            "name": profile.name,
+            "city": profile.city,
+            "category": profile.category,
+            "profile_url": profile.profile_url,
+            "thumbnail_url": profile.thumbnail_url,
+            "has_video": profile.has_video,
+            "is_premium": profile.is_premium,
+            "has_ai_content": profile.has_ai_content,
+            "markers": profile.markers,
+            "preference": "NONE",
+            "favorite": False,
+            "known_listing_count": 0,
+            "reappear_count": 0,
+            "person_first_seen_at": None,
+            "listing_published_at": None,
+            "listing_first_seen_at": None,
+            "listing_last_seen_at": None,
+            "current_status": None,
+            "match_decision": None,
+            "recent_change": None,
+            "recent_location_change": None,
+            "business_profile_known": False,
+            "is_business_profile": False,
+            "business_website_url": None,
+            "business_profile_checked_at": None,
+        }
 
     @staticmethod
     def _search_payload(db: Session, listing: Listing, profile: SearchProfile) -> dict[str, Any]:
