@@ -19,16 +19,6 @@ export function renderMedia(vm,index=0,{standalone=false,autoplay=false}={}) {
   </div>`;
 }
 
-export function renderActionRail(vm) {
-  return `<div class="profile-action-rail">
-    <button class="profile-action ${vm.preference==='LIKE'?'selected':''}" data-action="profile-like" data-person-id="${a(vm.personId)}" aria-pressed="${vm.preference==='LIKE'}">${icon('heart')}<span>Like</span></button>
-    <button class="profile-action ${vm.favorite?'selected':''}" data-action="profile-favorite" data-person-id="${a(vm.personId)}" aria-pressed="${vm.favorite}">${icon('star')}<span>Favorit</span></button>
-    <button class="profile-action" data-action="profile-chat" data-person-id="${a(vm.personId)}">${icon('chat')}<span>Chat</span></button>
-    <button class="profile-action" data-action="profile-contact" data-person-id="${a(vm.personId)}">${icon('phone')}<span>Kontakt</span></button>
-    <button class="profile-action" data-action="profile-share" data-person-id="${a(vm.personId)}" data-source-url="${a(vm.sourceUrl||'')}">${icon('external')}<span>Teilen</span></button>
-  </div>`;
-}
-
 function relativeRequestTime(value) {
   const time=value?new Date(value).getTime():NaN;if(!Number.isFinite(time))return '';
   const seconds=Math.max(0,Math.floor((Date.now()-time)/1000));
@@ -39,17 +29,32 @@ function relativeRequestTime(value) {
   const weeks=Math.floor(days/7);return `vor ${weeks} ${weeks===1?'Woche':'Wochen'}`;
 }
 
-function renderProfileRequest(vm,requestState) {
+function requestAction(vm,requestState) {
   const state=requestState||{};
   const loading=requestState===null||Boolean(state.loading);
   const sending=Boolean(state.sending);
   const lastAt=state.last_request_at||null;
   const canSend=state.can_send!==false;
   const disabled=loading||sending||!canSend;
-  const label=loading?'Anfrage wird geprüft…':sending?'Wird gesendet…':lastAt?(canSend?'Erneut anfragen':'✓ Anfrage gesendet'):'Anfrage stellen';
+  const label=loading?'Prüfen…':sending?'Senden…':lastAt&&!canSend?'Angefragt':'Anfrage stellen';
+  return `<button class="profile-action profile-request-button ${lastAt&&!canSend?'selected':''}" data-action="profile-request" data-person-id="${a(vm.personId)}" data-advert-id="${a(vm.advertId||vm.advert_id||'')}" ${disabled?'disabled':''}>${icon(lastAt&&!canSend?'check':'message')}<span>${e(label)}</span></button>`;
+}
+
+export function renderActionRail(vm,requestState=null) {
+  return `<div class="profile-action-rail">
+    <button class="profile-action ${vm.preference==='LIKE'?'selected':''}" data-action="profile-like" data-person-id="${a(vm.personId)}" aria-pressed="${vm.preference==='LIKE'}">${icon('heart')}<span>Like</span></button>
+    <button class="profile-action ${vm.favorite?'selected':''}" data-action="profile-favorite" data-person-id="${a(vm.personId)}" aria-pressed="${vm.favorite}">${icon('star')}<span>Favorit</span></button>
+    <button class="profile-action" data-action="profile-chat" data-person-id="${a(vm.personId)}">${icon('chat')}<span>Chat</span></button>
+    ${requestAction(vm,requestState)}
+    <button class="profile-action" data-action="profile-contact" data-person-id="${a(vm.personId)}">${icon('phone')}<span>Kontakt</span></button>
+  </div>`;
+}
+
+function renderRequestMeta(requestState) {
+  const lastAt=requestState?.last_request_at||null;
   const relative=relativeRequestTime(lastAt);
-  const meta=relative?`<p class="muted" aria-live="polite">${e(relative==='gerade eben'?'Letzte Anfrage: gerade eben':`Letzte Anfrage ${relative}`)}</p>`:'';
-  return `<div class="profile-request-action"><div class="settings-action-row"><button type="button" class="settings-primary" data-action="profile-request" data-person-id="${a(vm.personId)}" ${disabled?'disabled':''}>${icon(lastAt&&!canSend?'check':'message')}<span>${e(label)}</span></button></div>${meta}</div>`;
+  if(!relative)return '';
+  return `<p class="profile-request-meta muted" aria-live="polite">${e(relative==='gerade eben'?'Letzte Anfrage: gerade eben':`Letzte Anfrage ${relative}`)}</p>`;
 }
 
 function renderInfo(detail) {
@@ -152,19 +157,18 @@ export function renderIdentity(vm) {
   return `<div class="profile-identity"><div class="profile-name-row"><h1>${e(vm.name)}${vm.age?`, ${e(String(vm.age).replace(/\s*Jahre?.*/i,''))}`:''}</h1>${vm.activeToday?'<span class="online-pill">Heute online</span>':''}</div><div class="profile-meta-place">${icon('pin')}${e(vm.city || 'Ort unbekannt')}</div><div class="badge-row">${vm.listingCount>1?`<span class="badge purple">${icon('users')}Person bekannt · ${vm.listingCount} Anzeigen</span>`:personNew?`<span class="badge blue">${icon('user')}Person neu erkannt</span>`:''}${listingNew?`<span class="badge blue">${icon('sparkles')}Anzeige neu</span>`:''}<span class="badge">${icon('shield')}${e(statusText)}</span>${vm.hasVideo?`<span class="badge blue">${icon('play')}Video</span>`:''}</div></div>`;
 }
 
-function renderProfileBody(vm,detail,{activeTab='info',filters={selected:{}},showDescriptionChanges=false,requestState=undefined}={}) {
+function renderProfileBody(vm,detail,{activeTab='info',filters={selected:{}},showDescriptionChanges=false,requestState=null}={}) {
   const content=detail
     ? renderTabs(detail,activeTab,filters,{showDescriptionChanges})
     : `<section class="profile-card loading-card"><span class="spinner"></span><span>Profildetails werden geladen …</span></section>`;
-  const requestAction=requestState===undefined?'':renderProfileRequest(vm,requestState);
-  return `<section class="standalone-profile-body">${renderIdentity(vm)}${renderActionRail(vm)}${requestAction}${content}</section>`;
+  return `<section class="standalone-profile-body">${renderIdentity(vm)}${renderActionRail(vm,requestState)}${renderRequestMeta(requestState)}${content}</section>`;
 }
 
-export function renderStandalone(detail,{activeTab='info',mediaIndex=0,filters={selected:{}},autoplay=false,showDescriptionChanges=false,requestState=undefined}={}) {
+export function renderStandalone(detail,{activeTab='info',mediaIndex=0,filters={selected:{}},autoplay=false,showDescriptionChanges=false,requestState=null}={}) {
   return `<div class="screen-view standalone-profile"><div class="screen-scroll" data-scroll-root><section class="standalone-media-wrap"><button class="profile-back-button" data-action="back" aria-label="Zurück">${icon('back')}</button><button class="profile-more-button" data-action="profile-more" data-person-id="${a(detail.personId)}">${icon('more')}</button>${renderMedia(detail,mediaIndex,{standalone:true,autoplay})}</section>${renderProfileBody(detail,detail,{activeTab,filters,showDescriptionChanges,requestState})}</div></div>`;
 }
 
-export function renderSwipe(bundle,detail,{activeTab='info',mediaIndex=0,filters={selected:{}},autoplay=false,showDescriptionChanges=false}={}) {
+export function renderSwipe(bundle,detail,{activeTab='info',mediaIndex=0,filters={selected:{}},autoplay=false,showDescriptionChanges=false,requestState=null}={}) {
   const vm=detail || bundle;
-  return `<div class="screen-view standalone-profile swipe-profile"><div class="screen-scroll" data-scroll-root data-swipe-scroll><section class="swipe-media-panel">${renderMedia(vm,mediaIndex,{standalone:true,autoplay})}</section>${renderProfileBody(vm,detail,{activeTab,filters,showDescriptionChanges})}</div></div>`;
+  return `<div class="screen-view standalone-profile swipe-profile"><div class="screen-scroll" data-scroll-root data-swipe-scroll><section class="swipe-media-panel">${renderMedia(vm,mediaIndex,{standalone:true,autoplay})}</section>${renderProfileBody(vm,detail,{activeTab,filters,showDescriptionChanges,requestState})}</div></div>`;
 }
