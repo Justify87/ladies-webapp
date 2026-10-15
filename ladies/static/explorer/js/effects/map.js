@@ -66,12 +66,18 @@ export function createMapEffects({store,mapPoints=api.mapPoints}) {
   let generation=0;
   let timer=null;
   let refreshes=0;
+  let retryKey=null;
+
+  const resetRetryBudget=key=>{
+    retryKey=key;
+    refreshes=0;
+  };
 
   const cancel=()=>{
     generation+=1;
     clearTimeout(timer);
     timer=null;
-    refreshes=0;
+    resetRetryBudget(null);
   };
 
   async function loadMapPoints({force=false,quiet=true}={}) {
@@ -83,6 +89,7 @@ export function createMapEffects({store,mapPoints=api.mapPoints}) {
       return null;
     }
 
+    if(retryKey!==requested.key)resetRetryBudget(requested.key);
     if(!force&&current.key===requested.key&&current.points&&!current.points?.meta?.pending_count)return current.points;
     if(!force&&current.key===requested.key&&current.loading)return current.points||null;
 
@@ -104,7 +111,9 @@ export function createMapEffects({store,mapPoints=api.mapPoints}) {
           const now=mapRequestDescriptor(store.getState());
           if(now.key===requested.key)void loadMapPoints({force:true,quiet:true});
         },REFRESH_DELAY_MS);
-      }else refreshes=0;
+      }else if(!Number(points?.meta?.pending_count||0)){
+        refreshes=0;
+      }
       return points;
     }catch(error){
       if(sequence!==generation)return null;
