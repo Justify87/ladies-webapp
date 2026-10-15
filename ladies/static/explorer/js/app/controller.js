@@ -1,4 +1,5 @@
 import { renderApp } from '../ui/render.js';
+import { syncDiscoverMap } from '../ui/discover_map.js';
 import * as S from './selectors.js';
 import { captureScrollState, updateScrollableRegion } from './scroll_state.js';
 
@@ -43,8 +44,7 @@ export function createController({store,router,effects,commands}) {
   function bindSwipeGesture(){
     swipeBinding?.();
     swipeBinding=null;
-    const route=S.currentRoute(store.getState());
-    if(route.name!=='swipe')return;
+    if(!S.isSwipeDiscover(store.getState()))return;
     const surface=host.querySelector('[data-profile-media]');
     if(!surface)return;
     let active=false,startX=0,startY=0,dx=0,dy=0,pid=null;
@@ -116,8 +116,8 @@ export function createController({store,router,effects,commands}) {
     });
   }
 
-  function maybeAutoAnalyzeSwipe(state,route){
-    if(route.name!=='swipe'||!state.settings.values.visual_check_enabled){lastSwipeAnalysisKey=null;return;}
+  function maybeAutoAnalyzeSwipe(state){
+    if(!S.isSwipeDiscover(state)||!state.settings.values.visual_check_enabled){lastSwipeAnalysisKey=null;return;}
     const vm=S.currentProfileBundle(state);
     const detail=vm?.personId?S.detailFor(state,vm.personId):null;
     if(!detail)return;
@@ -193,7 +193,8 @@ export function createController({store,router,effects,commands}) {
 
     lastRouteKey=route.key;
     if(screenUpdate.replaced)bindSwipeGesture();
-    maybeAutoAnalyzeSwipe(state,route);
+    syncDiscoverMap({host,state,store,effects});
+    maybeAutoAnalyzeSwipe(state);
     if(route.name==='chat'&&screenUpdate.replaced)restoreChatScroll(Number(route.params?.threadId||S.currentThread(state)?.threadId||0));
   }
 
@@ -265,9 +266,9 @@ export function createController({store,router,effects,commands}) {
       if(store.getState().ui.sheet)store.dispatch({type:'SHEET',value:null});
       else router.back();
     }
-    if(ev.key==='ArrowLeft'&&S.currentRoute(store.getState()).name==='swipe')effects.discoverDecision('DISLIKE');
-    if(ev.key==='ArrowRight'&&S.currentRoute(store.getState()).name==='swipe')effects.discoverDecision('LIKE');
-    if((ev.key==='Backspace'||ev.key==='z')&&ev.altKey&&S.currentRoute(store.getState()).name==='swipe')effects.undoDecision();
+    if(ev.key==='ArrowLeft'&&S.isSwipeDiscover(store.getState()))effects.discoverDecision('DISLIKE');
+    if(ev.key==='ArrowRight'&&S.isSwipeDiscover(store.getState()))effects.discoverDecision('LIKE');
+    if((ev.key==='Backspace'||ev.key==='z')&&ev.altKey&&S.isSwipeDiscover(store.getState()))effects.undoDecision();
   });
 
   store.subscribe(render);
