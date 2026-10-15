@@ -46,6 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           find ladies/static/explorer -type f \( -name '*.js' -o -name '*.mjs' \) -print -exec node --experimental-default-type=module --check {} \;
+          find ladies/messaging/whatsapp_worker tools -type f -name '*.mjs' -print -exec node --experimental-default-type=module --check {} \;
 
       - name: Focused behavior smoke checks
         run: |
@@ -232,6 +233,8 @@ jobs:
           assert.equal(newSheet.scrollTop,215);
           JS
 
+          python tools/check_messaging_architecture.py
+          node --experimental-default-type=module tools/check_messaging_provider_identity.mjs
           node --experimental-default-type=module tools/check_search_intelligence.mjs
           node --experimental-default-type=module tools/check_har_runtime_fixes.mjs
           node --experimental-default-type=module tools/check_favorites_redesign.mjs
