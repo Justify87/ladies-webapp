@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable
 
 from sqlalchemy import select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from ladies_v9.models import Listing, utcnow
 
@@ -10,6 +11,7 @@ from .models import (
     ChatClassification,
     ChatMessage,
     ChatThread,
+    ContactEndpoint,
     EndpointClassification,
 )
 
@@ -20,155 +22,249 @@ VALID_STATUSES = {LADIES_CONFIRMED, UNKNOWN, NON_LADIES}
 LADIES_SOURCE = "LADIES"
 
 
+def person_is_ladies(db, person_id: int | None) -> bool:
+    if person_id is None:
+        return False
+    return db.scalar(
+        select(Listing.listing_id)
+        .where(
+            Listing.person_id == int(person_id),
+            Listing.source == LADIES_SOURCE,
+        )
+        .limit(1)
+    ) is not None
+
+
+def endpoint_ids_for_thread(db, thread: ChatThread) -> list[int]:
+    """Return every endpoint owned by a conversation, even before it has messages.
+
+    Person-backed threads own all endpoints of that person. Unassigned threads own
+    the endpoints referenced by their persisted messages. The union is important
+    for sticky classification when a new phone appears before its first message.
+    """
+
+    values = {
+        int(value)
+        for value in db.scalars(
+            select(ChatMessage.endpoint_id)
+            .where(
+                ChatMessage.thread_id == int(thread.thread_id),
+                ChatMessage.endpoint_id.is_not(None),
+            )
+            .distinct()
+        ).all()
+        if value is not None
+    }
+    if thread.person_id is not None:
+        values.update(
+            int(value)
+            for value in db.scalars(
+                select(ContactEndpoint.endpoint_id).where(
+                    ContactEndpoint.person_id == int(thread.person_id),
+                    ContactEndpoint.provider == "WHATSAPP",
+                )
+            ).all()
+        )
+    return sorted(values)
+
+
+def _ensure_thread_row(db, thread: ChatThread) -> ChatClassification:
+    row = db.get(ChatClassification, int(thread.thread_id))
+    if row is not None:
+        return row
+    now = utcnow()
+    db.execute(
+        sqlite_insert(ChatClassification)
+        .values(
+            thread_id=int(thread.thread_id),
+            status=UNKNOWN,
+            method="bootstrap_unknown",
+            decided_at=now,
+            updated_at=now,
+        )
+        .on_conflict_do_nothing(index_elements=["thread_id"])
+    )
+    db.flush()
+    row = db.get(ChatClassification, int(thread.thread_id))
+    if row is None:
+        raise RuntimeError("Chat-Klassifizierung konnte nicht angelegt werden")
+    return row
+
+
+def _ensure_endpoint_row(db, endpoint_id: int) -> EndpointClassification:
+    row = db.get(EndpointClassification, int(endpoint_id))
+    if row is not None:
+        return row
+    now = utcnow()
+    db.execute(
+        sqlite_insert(EndpointClassification)
+        .values(
+            endpoint_id=int(endpoint_id),
+            status=UNKNOWN,
+            method="bootstrap_unknown",
+            decided_at=now,
+            updated_at=now,
+        )
+        .on_conflict_do_nothing(index_elements=["endpoint_id"])
+    )
+    db.flush()
+    row = db.get(EndpointClassification, int(endpoint_id))
+    if row is None:
+        raise RuntimeError("Endpoint-Klassifizierung konnte nicht angelegt werden")
+    return row
+
+
+def endpoint_status_in_session(db, endpoint_id: int) -> str:
+    return _ensure_endpoint_row(db, int(endpoint_id)).status
+
+
+def thread_status_in_session(db, thread: ChatThread) -> str:
+    return _ensure_thread_row(db, thread).status
+
+
+def _promote_unknown_endpoints(
+    endpoint_rows: Iterable[EndpointClassification],
+    status: str,
+    method: str,
+) -> None:
+    now = utcnow()
+    for item in endpoint_rows:
+        if item.status != UNKNOWN:
+            continue
+        item.status = status
+        item.method = method
+        item.decided_at = now
+        item.updated_at = now
+
+
+def set_thread_classification_in_session(
+    db,
+    thread: ChatThread,
+    status: str,
+    *,
+    method: str,
+    force_endpoints: bool,
+    additional_endpoint_ids: Iterable[int] = (),
+) -> ChatClassification:
+    status = str(status or "").upper()
+    if status not in VALID_STATUSES:
+        raise ValueError("Ungültige Chat-Klassifizierung")
+    method = str(method or "manual")[:48]
+    row = _ensure_thread_row(db, thread)
+    now = utcnow()
+    row.status = status
+    row.method = method
+    row.decided_at = now
+    row.updated_at = now
+
+    endpoint_ids = set(endpoint_ids_for_thread(db, thread))
+    endpoint_ids.update(int(value) for value in additional_endpoint_ids if value)
+    for endpoint_id in endpoint_ids:
+        endpoint_row = _ensure_endpoint_row(db, endpoint_id)
+        if force_endpoints or endpoint_row.status == UNKNOWN:
+            endpoint_row.status = status
+            endpoint_row.method = method
+            endpoint_row.decided_at = now
+            endpoint_row.updated_at = now
+    return row
+
+
+def reconcile_thread_in_session(
+    db,
+    thread: ChatThread,
+    *,
+    additional_endpoint_ids: Iterable[int] = (),
+) -> ChatClassification:
+    """Apply sticky product classification inside an existing write transaction.
+
+    NON_LADIES is fail-closed: if an inconsistent legacy/merge state contains an
+    explicitly excluded endpoint, the thread is hidden rather than leaking that
+    endpoint into the Ladies inbox. Explicit manual assignment can later override
+    the whole conversation atomically.
+    """
+
+    row = _ensure_thread_row(db, thread)
+    endpoint_ids = set(endpoint_ids_for_thread(db, thread))
+    endpoint_ids.update(int(value) for value in additional_endpoint_ids if value)
+    endpoint_rows = [_ensure_endpoint_row(db, endpoint_id) for endpoint_id in sorted(endpoint_ids)]
+
+    if any(item.status == NON_LADIES for item in endpoint_rows):
+        if row.status != NON_LADIES:
+            now = utcnow()
+            row.status = NON_LADIES
+            row.method = "endpoint_exclusion_fail_closed"
+            row.decided_at = now
+            row.updated_at = now
+        _promote_unknown_endpoints(endpoint_rows, NON_LADIES, "sticky_endpoint_exclusion")
+        return row
+
+    if row.status == NON_LADIES:
+        _promote_unknown_endpoints(endpoint_rows, NON_LADIES, "sticky_thread_exclusion")
+        return row
+
+    if row.status == LADIES_CONFIRMED:
+        _promote_unknown_endpoints(endpoint_rows, LADIES_CONFIRMED, "sticky_thread_confirmation")
+        return row
+
+    if any(item.status == LADIES_CONFIRMED for item in endpoint_rows):
+        return set_thread_classification_in_session(
+            db,
+            thread,
+            LADIES_CONFIRMED,
+            method="sticky_endpoint_confirmation",
+            force_endpoints=False,
+            additional_endpoint_ids=endpoint_ids,
+        )
+
+    if person_is_ladies(db, thread.person_id):
+        return set_thread_classification_in_session(
+            db,
+            thread,
+            LADIES_CONFIRMED,
+            method="persisted_ladies_identity",
+            force_endpoints=False,
+            additional_endpoint_ids=endpoint_ids,
+        )
+
+    return row
+
+
 class MessagingClassifier:
     """Persistent product classification for WhatsApp-backed conversations.
 
-    Provider sync remains complete. This layer decides which persisted chats belong
-    in the Ladies inbox. Decisions are sticky: automatic reconciliation only
-    promotes an undecided UNKNOWN chat; it never overwrites an explicit
-    LADIES_CONFIRMED or NON_LADIES decision.
+    Provider sync remains complete. Product reads are side-effect free; backfill
+    and reconciliation happen only at startup and identity-changing write paths.
+    Automatic transitions may promote UNKNOWN, but never undo explicit
+    LADIES_CONFIRMED/NON_LADIES decisions.
     """
 
     def __init__(self, database):
         self.database = database
         self.reconcile()
 
-    @staticmethod
-    def _endpoint_ids(db, thread_id: int) -> list[int]:
-        return [
-            int(value)
-            for value in db.scalars(
-                select(ChatMessage.endpoint_id)
-                .where(
-                    ChatMessage.thread_id == int(thread_id),
-                    ChatMessage.endpoint_id.is_not(None),
-                )
-                .distinct()
-            ).all()
-            if value is not None
-        ]
-
-    @staticmethod
-    def _person_is_ladies(db, person_id: int | None) -> bool:
-        if person_id is None:
-            return False
-        return db.scalar(
-            select(Listing.listing_id)
-            .where(
-                Listing.person_id == int(person_id),
-                Listing.source == LADIES_SOURCE,
-            )
-            .limit(1)
-        ) is not None
-
-    @staticmethod
-    def _ensure_thread_row(db, thread: ChatThread) -> ChatClassification:
-        row = db.get(ChatClassification, int(thread.thread_id))
-        if row is None:
-            row = ChatClassification(
-                thread_id=int(thread.thread_id),
-                status=UNKNOWN,
-                method="bootstrap_unknown",
-            )
-            db.add(row)
-            db.flush()
-        return row
-
-    @staticmethod
-    def _ensure_endpoint_row(db, endpoint_id: int) -> EndpointClassification:
-        row = db.get(EndpointClassification, int(endpoint_id))
-        if row is None:
-            row = EndpointClassification(
-                endpoint_id=int(endpoint_id),
-                status=UNKNOWN,
-                method="bootstrap_unknown",
-            )
-            db.add(row)
-            db.flush()
-        return row
-
-    @staticmethod
-    def _promote_unknown_endpoints(endpoint_rows: list[EndpointClassification], status: str, method: str) -> None:
-        now = utcnow()
-        for item in endpoint_rows:
-            if item.status != UNKNOWN:
-                continue
-            item.status = status
-            item.method = method
-            item.decided_at = now
-            item.updated_at = now
-
     def reconcile(self) -> None:
-        """Backfill and promote only durable Ladies identity evidence.
-
-        A Person link alone is not enough: automatic confirmation additionally
-        requires persistent LADIES listing provenance. A persisted NON_LADIES
-        endpoint wins over newly inferred identity until the user explicitly
-        confirms the chat again. Sticky thread decisions are copied to endpoints
-        that appear later, so classification survives subsequent thread merges.
-        """
-
         with self.database.session() as db:
-            threads = db.scalars(select(ChatThread)).all()
-            for thread in threads:
-                row = self._ensure_thread_row(db, thread)
-                endpoint_ids = self._endpoint_ids(db, thread.thread_id)
-                endpoint_rows = [self._ensure_endpoint_row(db, endpoint_id) for endpoint_id in endpoint_ids]
-
-                if row.status in {LADIES_CONFIRMED, NON_LADIES}:
-                    self._promote_unknown_endpoints(
-                        endpoint_rows,
-                        row.status,
-                        "sticky_thread_confirmation" if row.status == LADIES_CONFIRMED else "sticky_thread_exclusion",
-                    )
-                    continue
-                if any(item.status == NON_LADIES for item in endpoint_rows):
-                    row.status = NON_LADIES
-                    row.method = "sticky_endpoint_exclusion"
-                    row.decided_at = utcnow()
-                    row.updated_at = utcnow()
-                    self._promote_unknown_endpoints(endpoint_rows, NON_LADIES, "sticky_endpoint_exclusion")
-                    continue
-                if any(item.status == LADIES_CONFIRMED for item in endpoint_rows):
-                    row.status = LADIES_CONFIRMED
-                    row.method = "sticky_endpoint_confirmation"
-                    row.decided_at = utcnow()
-                    row.updated_at = utcnow()
-                    self._promote_unknown_endpoints(endpoint_rows, LADIES_CONFIRMED, "sticky_endpoint_confirmation")
-                    continue
-                if self._person_is_ladies(db, thread.person_id):
-                    row.status = LADIES_CONFIRMED
-                    row.method = "persisted_ladies_identity"
-                    row.decided_at = utcnow()
-                    row.updated_at = utcnow()
-                    self._promote_unknown_endpoints(endpoint_rows, LADIES_CONFIRMED, "persisted_ladies_identity")
+            for thread in db.scalars(select(ChatThread)).all():
+                reconcile_thread_in_session(db, thread)
 
     def set_thread(self, thread_id: int, status: str, *, method: str) -> dict[str, Any]:
         status = str(status or "").upper()
         if status not in VALID_STATUSES:
             raise ValueError("Ungültige Chat-Klassifizierung")
-        method = str(method or "manual")[:48]
 
         with self.database.session() as db:
             thread = db.get(ChatThread, int(thread_id))
             if thread is None:
                 raise KeyError(thread_id)
-            if status == LADIES_CONFIRMED and not self._person_is_ladies(db, thread.person_id):
+            if status == LADIES_CONFIRMED and not person_is_ladies(db, thread.person_id):
                 raise ValueError("Ein Ladies-Chat muss einer Person mit Ladies.de-Provenienz zugeordnet sein")
-
-            row = self._ensure_thread_row(db, thread)
-            row.status = status
-            row.method = method
-            row.decided_at = utcnow()
-            row.updated_at = utcnow()
-
-            for endpoint_id in self._endpoint_ids(db, thread.thread_id):
-                endpoint_row = self._ensure_endpoint_row(db, endpoint_id)
-                endpoint_row.status = status
-                endpoint_row.method = method
-                endpoint_row.decided_at = utcnow()
-                endpoint_row.updated_at = utcnow()
-
+            row = set_thread_classification_in_session(
+                db,
+                thread,
+                status,
+                method=method,
+                force_endpoints=True,
+            )
             return {
                 "thread_id": int(thread.thread_id),
                 "person_id": int(thread.person_id) if thread.person_id is not None else None,
@@ -178,13 +274,24 @@ class MessagingClassifier:
 
     def classify_person_thread(self, person_id: int, *, method: str) -> dict[str, Any] | None:
         with self.database.session() as db:
-            if not self._person_is_ladies(db, int(person_id)):
+            if not person_is_ladies(db, int(person_id)):
                 raise ValueError("Person besitzt keine Ladies.de-Provenienz")
             thread = db.scalar(select(ChatThread).where(ChatThread.person_id == int(person_id)).limit(1))
-            thread_id = int(thread.thread_id) if thread is not None else None
-        if thread_id is None:
-            return None
-        return self.set_thread(thread_id, LADIES_CONFIRMED, method=method)
+            if thread is None:
+                return None
+            row = set_thread_classification_in_session(
+                db,
+                thread,
+                LADIES_CONFIRMED,
+                method=method,
+                force_endpoints=True,
+            )
+            return {
+                "thread_id": int(thread.thread_id),
+                "person_id": int(person_id),
+                "classification": row.status,
+                "classification_method": row.method,
+            }
 
     def _classification_map(self, thread_ids: list[int]) -> dict[int, ChatClassification]:
         if not thread_ids:
@@ -196,7 +303,6 @@ class MessagingClassifier:
             return {int(row.thread_id): row for row in rows}
 
     def filter_items(self, items: list[dict[str, Any]], *, view: str) -> list[dict[str, Any]]:
-        self.reconcile()
         view = str(view or "INBOX").upper()
         thread_ids = [int(item.get("thread_id") or 0) for item in items if item.get("thread_id")]
         rows = self._classification_map(thread_ids)
@@ -218,7 +324,6 @@ class MessagingClassifier:
         return output
 
     def summary(self) -> dict[str, int]:
-        self.reconcile()
         with self.database.session() as db:
             rows = db.scalars(select(ChatClassification)).all()
         counts = {LADIES_CONFIRMED: 0, UNKNOWN: 0, NON_LADIES: 0}
@@ -236,4 +341,11 @@ __all__ = [
     "LADIES_CONFIRMED",
     "UNKNOWN",
     "NON_LADIES",
+    "LADIES_SOURCE",
+    "person_is_ladies",
+    "endpoint_ids_for_thread",
+    "endpoint_status_in_session",
+    "thread_status_in_session",
+    "set_thread_classification_in_session",
+    "reconcile_thread_in_session",
 ]
