@@ -142,7 +142,7 @@ export function reducer(state=initialState, action={}) {
     }
 
     case 'LIST_TAB':
-      return updateSlice(state, 'lists', {tab: action.tab});
+      return updateSlice(state, 'lists', {tab: action.tab, items: [], loading: true});
     case 'LIST_SORT':
       return updateSlice(state, 'lists', {sort: action.value || 'DATE'});
     case 'LIST_ITEMS':
