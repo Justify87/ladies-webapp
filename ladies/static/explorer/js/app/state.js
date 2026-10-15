@@ -9,7 +9,7 @@ export const initialState = Object.freeze({
     filterQuery:'', preview:{status:'idle',count:null,error:null}, recent:[], results:[], meta:null, loading:false, error:null
   },
   savedSearches:{items:[],resultsById:{},loadingById:{}},
-  discover:{mode:'swipe',index:0,mediaIndex:{},history:[]},
+  discover:{mode:'swipe',index:0,mediaIndex:{},history:[],map:{key:null,points:null,loading:false,error:null}},
   profiles:{bundles:{},details:{},loading:{}},
   lists:{tab:'FAVORITE',sort:'DATE',items:[],loading:false,statusCheck:{running:false,done:0,total:0,checkedAt:null}},
   dashboard:{counts:{},usage:{},recent_changes:[]},
