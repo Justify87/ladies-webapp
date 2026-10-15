@@ -98,6 +98,10 @@ function destroyMap(){
   if(active?.map){try{active.map.remove();}catch{}}
 }
 
+function ownsMap(token,instance,target){
+  return token===runtimeGeneration&&runtime?.map===instance&&runtime.container===target&&target.isConnected;
+}
+
 function fitData(instance,state,data){
   if(!instance||!runtime?.lib?.LngLatBounds||!data.features.length)return;
   const key=String(state.discover.map?.key||'');
@@ -231,14 +235,21 @@ function installLayers(instance,target,getState){
 
 function waitUntilLoaded(instance,token,target,getState){
   return new Promise((resolve,reject)=>{
-    const timeout=setTimeout(()=>reject(new Error('Die Kartenbasis konnte nicht rechtzeitig geladen werden.')),MAP_LOAD_TIMEOUT_MS);
+    const timeout=setTimeout(()=>{
+      if(!ownsMap(token,instance,target)){resolve(null);return;}
+      reject(new Error('Die Kartenbasis konnte nicht rechtzeitig geladen werden.'));
+    },MAP_LOAD_TIMEOUT_MS);
     instance.once('load',()=>{
       clearTimeout(timeout);
-      if(token!==runtimeGeneration||runtime?.map!==instance||runtime.container!==target||!target.isConnected){resolve(null);return;}
-      installLayers(instance,target,getState);
-      runtime.loaded=true;
-      queueResize(instance,target);
-      resolve(instance);
+      if(!ownsMap(token,instance,target)){resolve(null);return;}
+      try{
+        installLayers(instance,target,getState);
+        runtime.loaded=true;
+        queueResize(instance,target);
+        resolve(instance);
+      }catch(error){
+        reject(error);
+      }
     });
   });
 }
