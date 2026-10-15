@@ -1,10 +1,9 @@
 from .profile_requests import install_profile_requests
 from .routes import install_messaging as _install_messaging
-from .service import MessagingService, jid_phone
+from .service_v2 import MessagingService, jid_phone
 
-# Baileys includes ``last_seen`` on presence events. The canonical service
-# intentionally normalizes the browser event, so retain this optional provider
-# value without changing the persistent messaging schema.
+# Baileys includes ``last_seen`` on presence events. Preserve it as transient
+# provider state without coupling it to persistent profile/discovery state.
 _original_presence_browser_event = MessagingService._presence_browser_event
 
 
