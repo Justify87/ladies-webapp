@@ -25,6 +25,11 @@ def _person_is_ladies(db, person_id: int | None) -> bool:
     ) is not None
 
 
+def person_is_ladies_scoped(database, person_id: int | None) -> bool:
+    with database.session() as db:
+        return _person_is_ladies(db, int(person_id or 0))
+
+
 def _phone_person_ids(db, phone: str | None) -> set[int]:
     if not phone:
         return set()
@@ -185,6 +190,17 @@ def _merge_provider_endpoint(service, db, target: ContactEndpoint, other: Contac
             add_system_message=False,
         )
     if other.person_id != target.person_id:
+        return False
+    if (
+        target.normalized_phone
+        and other.normalized_phone
+        and target.normalized_phone != other.normalized_phone
+    ):
+        LOGGER.warning(
+            "Refusing provider merge across different phones target=%s other=%s",
+            target.normalized_phone,
+            other.normalized_phone,
+        )
         return False
 
     provider_address = other.provider_address
