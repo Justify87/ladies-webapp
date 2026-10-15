@@ -142,3 +142,34 @@ class ChatReaction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     message: Mapped[ChatMessage] = relationship(back_populates="reactions")
+
+
+class ChatClassification(Base):
+    """Sticky product classification for a persisted conversation.
+
+    This state intentionally lives outside discovery/search state. Automatic
+    reconciliation may promote UNKNOWN to LADIES_CONFIRMED, but it never
+    overwrites an explicit LADIES_CONFIRMED or NON_LADIES decision.
+    """
+
+    __tablename__ = "chat_classifications"
+    thread_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_threads.thread_id", ondelete="CASCADE"), primary_key=True
+    )
+    status: Mapped[str] = mapped_column(String(24), default="UNKNOWN", nullable=False, index=True)
+    method: Mapped[str] = mapped_column(String(48), default="bootstrap", nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class EndpointClassification(Base):
+    """Sticky disposition for a WhatsApp endpoint across thread merges."""
+
+    __tablename__ = "endpoint_classifications"
+    endpoint_id: Mapped[int] = mapped_column(
+        ForeignKey("contact_endpoints.endpoint_id", ondelete="CASCADE"), primary_key=True
+    )
+    status: Mapped[str] = mapped_column(String(24), default="UNKNOWN", nullable=False, index=True)
+    method: Mapped[str] = mapped_column(String(48), default="bootstrap", nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
