@@ -24,4 +24,14 @@
 .requested-price-revision-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px}.requested-price-revision-head small{display:block;color:var(--color-text-muted,#707789);margin-top:2px}
 .requested-data-card>.price-list-block{margin-top:7px!important}.requested-data-note{margin:0 0 8px!important;line-height:1.35!important}
 .requested-encounter-form{padding-top:8px!important;display:grid!important;gap:8px!important}.requested-encounter-form>label{margin:0!important}.requested-encounter-form .field-grid{gap:8px!important}.requested-encounter-form textarea{min-height:66px!important}.requested-encounter-form .choice-field,.requested-encounter-form .rating-row{gap:5px!important}.requested-encounter-form .choice-field button{min-height:32px!important;padding:5px 8px!important;font-size:11px!important}.requested-encounter-form .rating-row button{width:34px!important;height:34px!important}
+
+/* Messages only show connection state when WhatsApp is unavailable. */
+.messages-heading h1{display:none}
+.messages-heading:has(.wa-status-dot.connected){display:none}
+.messages-heading:not(:has(.wa-status-dot.connected)){display:block;margin:-20px calc(-1 * var(--screen-x)) 14px;padding:8px var(--screen-x);border-bottom:1px solid #f0df9a;background:#fff8d9;box-sizing:border-box}
+.messages-heading:not(:has(.wa-status-dot.connected))>div{width:100%}
+.messages-heading:not(:has(.wa-status-dot.connected)) small{display:flex;margin:0;align-items:center;min-height:22px;color:#866b22;font-size:0;font-weight:650;line-height:1.3}
+.messages-heading:not(:has(.wa-status-dot.connected)) small::after{content:"WhatsApp nicht verbunden";font-size:11px}
+.messages-heading:not(:has(.wa-status-dot.connected)) .wa-status-dot{display:none}
+
 @media(max-width:430px){.header-actions.discovery-header-actions{gap:5px}.header-discovery-modes{padding:2px}.header-discovery-modes button{min-width:39px;height:32px;padding:0 8px;font-size:12px}.view-switch{width:36px!important;height:36px!important}}
