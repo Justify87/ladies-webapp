@@ -30,12 +30,6 @@ export function renderSwipeScreen(state){
   return `<div class="screen-view discover-screen">${renderDiscoverSwitcher('swipe')}<div class="discover-view-body"><div class="swipe-shell">${swipe}<button class="swipe-undo" data-action="discover-undo" ${state.discover.history.length?'':'disabled'} title="Letzte Entscheidung zurücknehmen">${icon('undo')}</button></div></div></div>`;
 }
 
-export function renderMapScreen(state){
-  const mapState=state.discover.map||{};
-  const rows=S.visibleSearchRows(state);
-  let status='';
-  if(!rows.length)status=`<div class="discover-map-state">${icon('users')}<span>Keine Treffer für die aktuellen Filter.</span></div>`;
-  else if(mapState.loading&&!mapState.points)status='<div class="discover-map-state"><span class="spinner"></span><span>Karte wird vorbereitet …</span></div>';
-  else if(mapState.error&&!mapState.points)status=`<div class="discover-map-state">${icon('info')}<span>${e(mapState.error)}</span></div>`;
-  return `<div class="screen-view discover-screen map-screen">${renderDiscoverSwitcher('map')}<div class="discover-view-body"><div class="discover-map-shell"><div id="discoverMap" class="discover-map" aria-label="Kartenansicht der Profile"></div>${status}<div class="discover-map-preview-host" aria-live="polite"></div></div></div></div>`;
+export function renderMapScreen(){
+  return `<div class="screen-view discover-screen map-screen">${renderDiscoverSwitcher('map')}<div class="discover-view-body"><div class="discover-map-shell"><div id="discoverMap" class="discover-map" aria-label="Kartenansicht der Profile"></div><div class="discover-map-state-host" aria-live="polite"></div><div class="discover-map-preview-host" aria-live="polite"></div></div></div></div>`;
 }
