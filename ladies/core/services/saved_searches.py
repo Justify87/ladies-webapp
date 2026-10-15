@@ -139,9 +139,10 @@ def search_payload_from_filters(filters: dict[str, Any]) -> dict[str, Any]:
 class SavedSearchService:
     """Owns saved-search state, execution and race-safe mutation."""
 
-    def __init__(self, settings_repository, search_service):
+    def __init__(self, settings_repository, search_service, *, business_classifier=None):
         self.settings = settings_repository
         self.search = search_service
+        self.business_classifier = business_classifier
         self._lock = threading.RLock()
         self._run_locks: dict[str, threading.Lock] = {}
 
@@ -150,6 +151,27 @@ class SavedSearchService:
 
     def _store(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return copy.deepcopy(self.settings.set_saved_searches(items[:MAX_SAVED_SEARCHES]))
+
+    def _classify_business_results(
+        self,
+        results: list[dict[str, Any]],
+        filters: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        local = filters.get("local") if isinstance(filters.get("local"), dict) else {}
+        if local.get("hideBusinessProfiles") is False or self.business_classifier is None:
+            return results
+
+        enriched: list[dict[str, Any]] = []
+        for row in results:
+            current = dict(row)
+            if not bool(current.get("business_profile_known")):
+                advert_id = _result_key(current)
+                if advert_id:
+                    classification = self.business_classifier(advert_id)
+                    if isinstance(classification, dict):
+                        current.update(classification)
+            enriched.append(current)
+        return enriched
 
     def list(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -249,7 +271,8 @@ class SavedSearchService:
                 filters = copy.deepcopy(snapshot.get("filters") or {})
 
             data = self.search.execute_transient(search_payload_from_filters(filters))
-            visible_results = filter_saved_search_results(data.get("results") or [], filters)
+            canonical_results = self._classify_business_results(data.get("results") or [], filters)
+            visible_results = filter_saved_search_results(canonical_results, filters)
             completed_at = _now_iso()
             baseline = baseline_from_results(visible_results, completed_at)
             delta = compute_result_delta(snapshot, visible_results, completed_at)
