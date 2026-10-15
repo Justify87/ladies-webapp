@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from sqlalchemy import desc, or_, select
+from sqlalchemy import or_, select
 
 from ladies_v9.database import Database
 from ladies_v9.models import Listing, ListingSnapshot, PriceItem, PriceList
@@ -58,12 +58,15 @@ class MapRepository:
                         PriceItem.item_type == "BASE",
                         PriceItem.duration_minutes == 60,
                     )
-                    .order_by(
-                        desc(PriceList.observed_at),
-                        desc(PriceList.price_list_id),
-                        PriceItem.price_item_id,
-                    )
                 ).all()
+                price_rows.sort(
+                    key=lambda row: (
+                        row[0].observed_at,
+                        int(row[0].price_list_id),
+                        -int(row[1].price_item_id),
+                    ),
+                    reverse=True,
+                )
                 for price_list, price_item in price_rows:
                     person_id = int(price_list.person_id)
                     if price_list.listing_id is None:
