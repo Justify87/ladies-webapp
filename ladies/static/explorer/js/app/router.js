@@ -4,7 +4,9 @@ export function createRouter(store) {
   let suppressPop = false;
   const update = stack => store.dispatch({type:'NAV_SET',navigation:{stack,seq:store.getState().navigation.seq + 1}});
   const current = () => store.getState().navigation.stack.at(-1);
+  const discoveryRoot = name => name==='swipe' ? (store.getState().discover?.mode || 'swipe') : name;
   const replaceRoot = (name,params={}) => {
+    name=discoveryRoot(name);
     const nav = store.getState().navigation; const key = `route-${nav.seq + 1}`;
     update([route(key,name,params)]);
     history.pushState({ladiesRoute:true},'',`#${name}`);
