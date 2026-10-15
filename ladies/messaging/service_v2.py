@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import desc, select
@@ -11,6 +12,7 @@ from .models import ChatMessage, ChatThread, ContactEndpoint
 from .service import (
     MEDIA_TYPES,
     MessagingService as _BaseMessagingService,
+    _json,
     _load,
     jid_phone,
 )
@@ -269,6 +271,122 @@ class MessagingService(_BaseMessagingService):
         )
         return payload or {}
 
+    def _ingest_history_message(self, payload: dict[str, Any]) -> bool:
+        """Persist a rehydrated provider message without emitting per-message UI events."""
+        self.history_cache.store([payload])
+        provider_id = payload.get("provider_message_id")
+        if not provider_id:
+            return False
+        with self.database.session() as db:
+            if db.scalar(
+                select(ChatMessage.message_id).where(ChatMessage.provider_message_id == str(provider_id))
+            ) is not None:
+                return False
+
+        payload = self.media_store.archive_incoming(payload)
+        provider_address = str(payload.get("jid") or "") or None
+        phone_jid = str(payload.get("phone_jid") or "") or None
+        phone = (
+            jid_phone(phone_jid)
+            if phone_jid
+            else (
+                jid_phone(provider_address)
+                if provider_address and provider_address.endswith("@s.whatsapp.net")
+                else None
+            )
+        )
+        quote = payload.get("quote") if isinstance(payload.get("quote"), dict) else None
+
+        with self.database.session() as db:
+            endpoint = None
+            if provider_address:
+                endpoint = db.scalar(
+                    select(ContactEndpoint).where(
+                        ContactEndpoint.provider == "WHATSAPP",
+                        ContactEndpoint.provider_address == provider_address,
+                    )
+                )
+            if endpoint is None and phone:
+                endpoint = db.scalar(
+                    select(ContactEndpoint).where(
+                        ContactEndpoint.provider == "WHATSAPP",
+                        ContactEndpoint.normalized_phone == phone,
+                    )
+                )
+            if endpoint is None:
+                person_ids = self._phone_person_ids(db, phone)
+                person_id = next(iter(person_ids)) if len(person_ids) == 1 else None
+                endpoint = ContactEndpoint(
+                    person_id=person_id,
+                    normalized_phone=phone,
+                    display_phone=payload.get("display_phone") or (phone if phone else "Nummer nicht verfügbar"),
+                    provider_address=provider_address,
+                    state="ACTIVE",
+                )
+                db.add(endpoint)
+                db.flush()
+                if person_id is not None and phone:
+                    self._ensure_phone_identifier(db, int(person_id), phone, endpoint.display_phone)
+            else:
+                if phone:
+                    endpoint = self._resolve_discovered_phone(
+                        db,
+                        endpoint,
+                        phone,
+                        payload.get("display_phone"),
+                    )
+                if provider_address and endpoint.state != "IDENTITY_CONFLICT":
+                    endpoint.provider_address = provider_address
+                endpoint.last_seen_at = utcnow()
+                endpoint.updated_at = utcnow()
+                if endpoint.person_id is None and phone and endpoint.state != "IDENTITY_CONFLICT":
+                    person_ids = self._phone_person_ids(db, phone)
+                    if len(person_ids) == 1:
+                        self._assign_endpoint_in_session(
+                            db,
+                            endpoint,
+                            int(next(iter(person_ids))),
+                            add_system_message=False,
+                        )
+
+            thread = self._get_thread(db, person_id=endpoint.person_id, endpoint=endpoint)
+            provider_ts = payload.get("timestamp")
+            timestamp = datetime.fromtimestamp(float(provider_ts), timezone.utc) if provider_ts else utcnow()
+            message = ChatMessage(
+                thread_id=thread.thread_id,
+                endpoint_id=endpoint.endpoint_id,
+                provider_message_id=str(provider_id),
+                direction="OUT" if payload.get("from_me") else "IN",
+                message_type=payload.get("message_type") or "TEXT",
+                text=payload.get("text"),
+                media_json=_json(payload.get("media")),
+                timestamp=timestamp,
+                provider_timestamp=timestamp,
+                status="SENT" if payload.get("from_me") else "RECEIVED",
+            )
+            db.add(message)
+            db.flush()
+            meta = self._ensure_meta(db, message)
+            if payload.get("provider_key"):
+                meta.provider_key_json = _json(payload.get("provider_key"))
+            meta.view_once = bool(payload.get("view_once"))
+            if quote:
+                meta.quote_provider_message_id = quote.get("provider_message_id")
+                meta.quote_snapshot_json = _json(quote.get("snapshot"))
+                if quote.get("provider_message_id"):
+                    quoted = db.scalar(
+                        select(ChatMessage).where(
+                            ChatMessage.provider_message_id == quote.get("provider_message_id")
+                        )
+                    )
+                    if quoted is not None and quoted.thread_id == message.thread_id:
+                        message.reply_to_message_id = quoted.message_id
+            meta.updated_at = utcnow()
+            if thread.last_message_at is None or timestamp > thread.last_message_at:
+                thread.last_message_at = timestamp
+            thread.updated_at = utcnow()
+        return True
+
     def _worker_event(self, event: dict[str, Any]) -> None:
         event_type = event.get("type")
         if event_type == "history_batch":
@@ -277,8 +395,8 @@ class MessagingService(_BaseMessagingService):
                 if not isinstance(payload, dict):
                     continue
                 try:
-                    self._ingest_message(payload)
-                    ingested += 1
+                    if self._ingest_history_message(payload):
+                        ingested += 1
                 except Exception:
                     LOGGER.exception("Failed to ingest WhatsApp history message")
             if ingested:
