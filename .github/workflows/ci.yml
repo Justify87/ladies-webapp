@@ -84,14 +84,31 @@ jobs:
           assert detector.detect('100', previous_outgoing='Was kostet 30 Minuten?').is_price_message
           assert detector.detect('10045 Minuten').is_price_message
           assert not detector.detect('Bin gegen 18 Uhr da').is_price_message
+          assert not detector.detect('Treffen 60 Minuten um 18 Uhr').is_price_message
+          assert not detector.detect('30.10. um 18:30').is_price_message
 
           model_source = Path('ladies/pricing/model_runtime.py').read_text(encoding='utf-8')
           assert 'extract_price_proposal' in model_source
           assert '"-j"' in model_source
           assert '.find("{")' not in model_source
+          assert 'subprocess.TimeoutExpired' in model_source
           assert not Path('ladies/pricing/normalize.py').exists()
           assert not Path('ladies/pricing/rules.py').exists()
           assert not Path('ladies/pricing/signal.py').exists()
+
+          grounding_source = Path('ladies/pricing/grounding.py').read_text(encoding='utf-8')
+          assert 'import re' not in grounding_source
+          assert '_amount_is_grounded' in grounding_source
+          assert '_duration_is_grounded' in grounding_source
+          pricing_models_source = Path('ladies/pricing/models.py').read_text(encoding='utf-8')
+          assert 'class PriceExtractionLocation' in pricing_models_source
+          assert 'class PriceListLocationSnapshot' in pricing_models_source
+          pricing_service_source = Path('ladies/pricing/service.py').read_text(encoding='utf-8')
+          assert '"listing_id" in data' in pricing_service_source
+          assert 'extraction.base_price_list_id = base_price_list_id' in pricing_service_source
+          assert '_current_proposal_for_listing' in pricing_service_source
+          pricing_web_source = Path('ladies/pricing/web.py').read_text(encoding='utf-8')
+          assert 'ExternalServiceError' in pricing_web_source
 
           class ValidationError(ValueError):
               pass
@@ -164,6 +181,10 @@ jobs:
           assert.ok(messagingSource.includes('PRICING_DURATIONS=[15,20,30,45,60,90,120]'));
           assert.ok(messagingSource.includes('data-pricing-field="duration"'));
           assert.ok(messagingSource.includes('data-pricing-location'));
+          assert.ok(messagingSource.includes('Kein Ort'));
+          assert.ok(messagingSource.includes('Bitte prüfen'));
+          const overlaysSource=fs.readFileSync('./ladies/static/explorer/js/ui/screens/overlays.js','utf8');
+          assert.ok(overlaysSource.includes('pricingLocationLabel'));
 
           function hostWithRoots(roots,nextRoots=[]){
             let writes=0;
