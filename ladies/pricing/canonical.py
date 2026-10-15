@@ -12,13 +12,7 @@ CANONICAL_PRICE_SOURCE = "WHATSAPP_EXTRACTED"
 
 
 class CanonicalPriceIntelligenceService(PriceIntelligenceService):
-    """Pricing service whose canonical revisions come from accepted chat extraction.
-
-    Historic/manual ``PriceList`` rows stay in the database for backwards
-    compatibility, but they are deliberately excluded from the pricing source
-    of truth. This keeps proposal baselines, current pricing and pricing history
-    aligned with the data users actually confirm from WhatsApp messages.
-    """
+    """Pricing service whose canonical revisions come from accepted chat extraction."""
 
     def _canonical_price_list(self, db, person_id: int) -> PriceList | None:
         return db.scalar(
@@ -44,6 +38,8 @@ class CanonicalPriceIntelligenceService(PriceIntelligenceService):
                 return {
                     "person_id": int(person_id),
                     "price_list_id": None,
+                    "listing_id": None,
+                    "location": None,
                     "observed_at": None,
                     "source": CANONICAL_PRICE_SOURCE,
                     "proposal": None,
@@ -51,6 +47,8 @@ class CanonicalPriceIntelligenceService(PriceIntelligenceService):
             return {
                 "person_id": int(person_id),
                 "price_list_id": row.price_list_id,
+                "listing_id": row.listing_id,
+                "location": self._location_payload(db, row.listing_id),
                 "observed_at": row.observed_at.isoformat() if row.observed_at else None,
                 "source": row.source,
                 "proposal": self._proposal_from_price_list(db, row),
