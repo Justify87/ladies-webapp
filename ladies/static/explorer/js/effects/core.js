@@ -4,9 +4,68 @@ import { filterPayload, profileBundleVm, formEnumWireValue } from '../data/adapt
 
 const SEARCH_RADII=[5,10,20,30,50,70,100];
 const normalizeRadius=value=>SEARCH_RADII.includes(Number(value))?Number(value):20;
+const SWIPE_READY_TIMEOUT_MS=1800;
+const MEDIA_WARM_TIMEOUT_MS=1200;
+const warmedMedia=new Set();
 
-export function createCoreEffects({store,router}) {
-  let previewAbort=null, previewTimer=null, previewSeq=0, businessScanSeq=0;
+function mediaUrls(profile){
+  const media=Array.isArray(profile?.media)?profile.media:[];
+  return [...new Set(media.flatMap(item=>[item?.kind==='IMAGE'?item?.src:null,item?.poster].filter(Boolean)).map(String))];
+}
+
+function withTimeout(promise,timeoutMs,fallback=null){
+  return new Promise(resolve=>{
+    let settled=false;
+    const timer=setTimeout(()=>{if(settled)return;settled=true;resolve(fallback);},timeoutMs);
+    Promise.resolve(promise).then(value=>{
+      if(settled)return;
+      settled=true;
+      clearTimeout(timer);
+      resolve(value);
+    },()=>{
+      if(settled)return;
+      settled=true;
+      clearTimeout(timer);
+      resolve(fallback);
+    });
+  });
+}
+
+function warmImage(url,{timeoutMs=MEDIA_WARM_TIMEOUT_MS}={}){
+  if(!url||warmedMedia.has(url)||typeof Image==='undefined')return Promise.resolve(Boolean(url));
+  return new Promise(resolve=>{
+    const image=new Image();
+    let settled=false;
+    const timer=setTimeout(()=>{
+      if(settled)return;
+      settled=true;
+      resolve(false);
+    },timeoutMs);
+    const finish=ok=>{
+      if(ok)warmedMedia.add(url);
+      if(settled)return;
+      settled=true;
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    image.decoding='async';
+    image.onload=()=>finish(true);
+    image.onerror=()=>finish(false);
+    image.src=url;
+    if(image.complete)finish(Boolean(image.naturalWidth||image.width));
+  });
+}
+
+async function warmProfileMedia(profile){
+  const urls=mediaUrls(profile);
+  if(!urls.length)return false;
+  const primaryReady=await warmImage(urls[0]);
+  for(const url of urls.slice(1))void warmImage(url);
+  return primaryReady;
+}
+
+export function createCoreEffects({store,router,onPrefetchedProfile=null}) {
+  let previewAbort=null, previewTimer=null, previewSeq=0, businessScanSeq=0, swipePrefetch=null;
   const toast=message=>store.dispatch({type:'TOAST',value:message});
   const state=()=>store.getState();
   const searchPayload=()=>{const payload=filterPayload(state().search.filters);payload.radius=normalizeRadius(payload.radius);return payload;};
@@ -14,6 +73,54 @@ export function createCoreEffects({store,router}) {
 
   function rawSearchRowAt(index=state().discover.index) {
     return S.discoverQueueRows(state())[index] || null;
+  }
+
+  function swipeWindowKey(){
+    const start=state().discover.index;
+    return [0,1,2].map(offset=>rawSearchRowAt(start+offset)?.advertId||'').filter(Boolean).join('|');
+  }
+
+  function startSwipePrefetch(){
+    const key=swipeWindowKey();
+    if(!key)return null;
+    if(swipePrefetch?.key===key)return swipePrefetch;
+
+    const currentReady=(async()=>{
+      const seen=new Set();
+      while(true){
+        const row=rawSearchRowAt();
+        if(!row||seen.has(row.advertId))return null;
+        seen.add(row.advertId);
+        await loadBundle(row,{detail:true,quiet:true});
+        const current=rawSearchRowAt();
+        if(!businessFilterEnabled()||current?.advertId===row.advertId)break;
+      }
+      const row=rawSearchRowAt();
+      if(!row)return null;
+      const vm=await loadBundle(row,{detail:true,quiet:true});
+      if(!vm)return null;
+      const profile=S.detailFor(state(),vm.personId)||vm;
+      await warmProfileMedia(profile);
+      return vm;
+    })();
+
+    const prefetch={key,currentReady,allReady:null};
+    swipePrefetch=prefetch;
+    prefetch.allReady=(async()=>{
+      const currentVm=await currentReady;
+      if(swipeWindowKey()!==key)return currentVm?[currentVm]:[];
+      const start=state().discover.index;
+      const windowRows=[0,1,2].map(offset=>rawSearchRowAt(start+offset)).filter(Boolean);
+      const vms=(await Promise.all(windowRows.map(row=>loadBundle(row,{detail:true,quiet:true})))).filter(Boolean);
+      await Promise.all(vms.map(vm=>warmProfileMedia(S.detailFor(state(),vm.personId)||vm)));
+      if(typeof onPrefetchedProfile==='function'){
+        await Promise.allSettled(vms.filter(vm=>vm.personId).map(vm=>onPrefetchedProfile(vm.personId)));
+      }
+      return vms;
+    })().catch(()=>[]).finally(()=>{
+      if(swipePrefetch===prefetch)swipePrefetch=null;
+    });
+    return prefetch;
   }
 
   async function loadSettings() {
@@ -81,11 +188,11 @@ export function createCoreEffects({store,router}) {
       const data=await api.search(searchPayload());
       const meta=data?.meta || null;
       store.dispatch({type:'SEARCH_RESULTS',results:data?.results || [],meta});
+      void loadRecentSearches();
+      if(state().discover.mode==='swipe')await prefetchCurrent({waitForPrimary:true});
       store.dispatch({type:'SEARCH_LOADING',value:false});
-      await loadRecentSearches();
       router.replaceRoot('discover');
       if(meta?.radius_auto_expanded)toast(`Ladies hat den Umkreis automatisch von ${meta.requested_radius_km} auf ${meta.effective_radius_km} km erweitert.`);
-      if(state().discover.mode==='swipe')await prefetchCurrent();
       void classifyBusinessProfiles();
     } catch(error) {
       store.dispatch({type:'SEARCH_LOADING',value:false,error:error.message}); toast(error.message);
@@ -146,17 +253,13 @@ export function createCoreEffects({store,router}) {
     }
   }
 
-  async function prefetchCurrent() {
-    const seen=new Set();
-    while(true){
-      const row=rawSearchRowAt();
-      if(!row||seen.has(row.advertId))return;
-      seen.add(row.advertId);
-      await loadBundle(row,{detail:true,quiet:true});
-      const current=rawSearchRowAt();
-      if(!businessFilterEnabled()||current?.advertId===row.advertId)break;
-    }
-    [1,2].forEach((offset)=>{const next=rawSearchRowAt(state().discover.index+offset);if(next)setTimeout(()=>loadBundle(next,{detail:false,quiet:true}),offset*300);});
+  async function prefetchCurrent({waitForPrimary=false}={}) {
+    const prefetch=startSwipePrefetch();
+    if(!prefetch)return [];
+    void prefetch.allReady;
+    if(!waitForPrimary)return [];
+    const vm=await withTimeout(prefetch.currentReady,SWIPE_READY_TIMEOUT_MS,null);
+    return vm?[vm]:[];
   }
 
   async function mutatePerson(personId,patch) {
@@ -206,9 +309,16 @@ export function createCoreEffects({store,router}) {
     const current=state().lists.statusCheck;if(current.running)return;
     try {
       const d=await api.statusTargets(); const items=d?.items || [];
-      store.dispatch({type:'STATUS_CHECK',patch:{running:true,done:0,total:items.length,checkedAt:null}});
-      for(let i=0;i<items.length;i+=1){try{await api.profileStatus(items[i].advert_id);}catch{}store.dispatch({type:'STATUS_CHECK',patch:{done:i+1}});}
-      store.dispatch({type:'STATUS_CHECK',patch:{running:false,checkedAt:new Date().toISOString()}});toast(`${items.length} Anzeigen geprüft`);await Promise.all([loadList(),loadDashboard()]);
+      let succeeded=0,failed=0;
+      store.dispatch({type:'STATUS_CHECK',patch:{running:true,done:0,total:items.length,succeeded:0,failed:0,checkedAt:null}});
+      for(let i=0;i<items.length;i+=1){
+        try{await api.profileStatus(items[i].advert_id);succeeded+=1;}
+        catch{failed+=1;}
+        store.dispatch({type:'STATUS_CHECK',patch:{done:i+1,succeeded,failed}});
+      }
+      store.dispatch({type:'STATUS_CHECK',patch:{running:false,checkedAt:new Date().toISOString(),succeeded,failed}});
+      toast(failed?`${succeeded} von ${items.length} Anzeigen aktualisiert · ${failed} fehlgeschlagen`:`${succeeded} Anzeigen geprüft`);
+      await Promise.all([loadList(),loadDashboard()]);
     } catch(error){store.dispatch({type:'STATUS_CHECK',patch:{running:false}});toast(error.message);}
   }
 

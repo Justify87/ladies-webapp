@@ -14,19 +14,24 @@ async function logClient(level, scope, message, extra={}) {
 
 export async function request(url, options={}) {
   const opts = {...options, headers:{...DEFAULT_HEADERS, ...(options.headers || {})}};
+  delete opts.expectedStatuses;
   if (options.body && !(options.body instanceof FormData) && typeof options.body !== 'string') {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(options.body);
   }
   let response;
   try { response = await fetch(url, opts); }
-  catch (error) { await logClient('error','api-network',error?.message || String(error),{url}); throw error; }
+  catch (error) {
+    if(error?.name!=='AbortError')await logClient('error','api-network',error?.message || String(error),{url});
+    throw error;
+  }
   let payload = null;
   const type = response.headers.get('content-type') || '';
   if (type.includes('application/json')) { try { payload = await response.json(); } catch {} }
   if (!response.ok) {
     const message = payload?.error || payload?.message || `HTTP ${response.status}`;
-    await logClient('error','api',message,{url,status:response.status});
+    const expected=Array.isArray(options.expectedStatuses)&&options.expectedStatuses.includes(response.status);
+    if(!expected)await logClient('error','api',message,{url,status:response.status});
     throw new ApiError(message,{status:response.status,payload,url});
   }
   return payload ?? response;
@@ -74,7 +79,7 @@ export const api = Object.freeze({
   messagingConnect: () => request('/api/messaging/connect',{method:'POST'}),
   messagingDisconnect: () => request('/api/messaging/disconnect',{method:'POST'}),
   messagingLogout: () => request('/api/messaging/logout',{method:'POST'}),
-  messagingQr: () => request('/api/messaging/qr'),
+  messagingQr: () => request('/api/messaging/qr',{expectedStatuses:[404]}),
   threads: () => request('/api/messaging/threads?filter=ALL'),
   thread: (threadId,{limit=100,before=null}={}) => request(`/api/messaging/threads/${threadId}?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`),
   ensurePersonThread: (personId,listingId=null) => request(`/api/messaging/person/${personId}/thread`,{method:'POST',body:{listing_id:listingId}}),

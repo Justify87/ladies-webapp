@@ -3,7 +3,7 @@ import { icon } from '../../shared/icons.js';
 import * as S from '../../app/selectors.js';
 import { renderSwipe } from '../profile.js';
 
-const DISCOVER_VIEWS=[['swipe','cards','Swipe'],['grid','grid','Raster'],['map','pin','Karte']];
+const DISCOVER_VIEWS=[['swipe','cards','Swipe'],['grid','grid','Grid'],['map','pin','Karte']];
 
 function renderDiscoverSwitcher(active){
   return `<nav class="discover-view-switcher" aria-label="Entdecken-Ansicht">${DISCOVER_VIEWS.map(([mode,ico,label])=>`<button type="button" class="${active===mode?'selected':''}" data-action="discover-view" data-mode="${mode}" aria-pressed="${active===mode}">${icon(ico)}<span>${e(label)}</span></button>`).join('')}</nav>`;
@@ -22,11 +22,18 @@ function renderSwipeScreen(state){
     return `<div class="discover-view-body"><div class="empty-state">${icon('users')}<h2>${searched?'Du hast alle Profile angeschaut.':'Keine Profile gefunden.'}</h2><button data-action="root-route" data-route="search">Filter anpassen</button>${searched?'<button data-action="discover-reset">Von vorn</button>':''}</div></div>`;
   }
   const bundle=state.profiles.bundles[row.advertId];
+  const knownPid=Number(row.personId||0)||null;
+  const knownDetail=knownPid?S.detailFor(state,knownPid):null;
+  if(!bundle&&!knownDetail){
+    return `<div class="discover-view-body"><div class="swipe-shell"><div class="loading-state"><span class="spinner"></span><span>Profil wird vorbereitet …</span></div></div></div>`;
+  }
   const vm=bundle?S.currentProfileBundle({...state,search:{...state.search,results:[row]},discover:{...state.discover,index:0}}):row;
   const pid=vm?.personId||row.personId;
-  const detail=pid?S.detailFor(state,pid):null;
+  const resolvedDetail=pid?S.detailFor(state,pid):knownDetail;
+  const detail=resolvedDetail?{...resolvedDetail,advertId:row.advertId}:null;
+  const requestState=pid?(state.messaging.profileRequests?.[String(pid)] ?? null):null;
   const index=Number(state.profileUi.mediaByPerson[String(pid)] ?? state.discover.mediaIndex[row.advertId] ?? 0);
-  const swipe=renderSwipe(vm,detail,{activeTab:S.profileTab(state,pid),mediaIndex:index,filters:state.search.filters,autoplay:!!state.settings.values.autoplay_videos,showDescriptionChanges:!!state.settings.values.show_description_changes});
+  const swipe=renderSwipe(vm,detail,{activeTab:S.profileTab(state,pid),mediaIndex:index,filters:state.search.filters,autoplay:!!state.settings.values.autoplay_videos,showDescriptionChanges:!!state.settings.values.show_description_changes,requestState});
   return `<div class="discover-view-body"><div class="swipe-shell">${swipe}<button class="swipe-undo" data-action="discover-undo" ${state.discover.history.length?'':'disabled'} title="Letzte Entscheidung zurücknehmen">${icon('undo')}</button></div></div>`;
 }
 

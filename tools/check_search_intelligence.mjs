@@ -267,7 +267,7 @@ const requestedSource=readFileSync(new URL('../ladies/static/explorer/js/request
 const canonicalPricingSource=readFileSync(new URL('../ladies/pricing/canonical.py',import.meta.url),'utf8');
 const pricingWebSource=readFileSync(new URL('../ladies/pricing/web.py',import.meta.url),'utf8');
 
-assert.match(discoverSource,/\['swipe','cards','Swipe'\].*\['grid','grid','Raster'\].*\['map','pin','Karte'\]/s,'Entdecken must expose explicit Swipe, Raster and Karte modes');
+assert.match(discoverSource,/\['swipe','cards','Swipe'\].*\['grid','grid','Grid'\].*\['map','pin','Karte'\]/s,'Entdecken must expose explicit Swipe, Grid and Karte modes');
 assert.match(discoverSource,/data-action="discover-view"/,'view mode switching must use the normal command boundary');
 assert.match(discoverSource,/grid-card-heart[^>]+data-action="grid-like"/s,'visible Grid heart must trigger Like');
 assert.doesNotMatch(discoverSource,/discover-mode-pills/,'availability controls must not be duplicated inside discovery content');
@@ -283,6 +283,7 @@ assert.match(discoverMapSource,/clusterProperties:\{profile_total/,'cluster labe
 assert.match(discoverMapSource,/discover-map-location-sheet/,'same-location profiles must open an explicit list instead of overlapping');
 assert.match(mapEffectsSource,/mapRequestDescriptor\(store\.getState\(\)\)/,'map requests must derive from the active result set');
 assert.match(mapEffectsSource,/sequence!==generation\|\|latest\.key!==requested\.key/,'stale map responses must be rejected');
+assert.match(mapEffectsSource,/validCoordinatePair/,'frontend must reject invalid map coordinates before MapLibre sees them');
 assert.doesNotMatch(mapEffectsSource,/recentSearches|search_run_id|runId/,'map must not fall back to historical search runs');
 assert.match(clientSource,/mapPoints:\s*payload\s*=>\s*request\('\/api\/map-points'/,'frontend must use the local map API');
 assert.match(mapViewSource,/@app\.post\("\/api\/map-points"\)/,'map API must be POST-only');
@@ -292,6 +293,7 @@ assert.doesNotMatch(mapViewSource,/search_run_id/,'map API must not depend on Se
 assert.match(mapRepositorySource,/ListingSnapshot\.snapshot_id == Listing\.current_snapshot_id/,'map repository must join only the canonical current snapshot');
 assert.doesNotMatch(mapRepositorySource,/order_by\(|captured_at/,'map repository must not load full snapshot history');
 assert.match(mapServiceSource,/active_city_by_listing/,'map service must use each active row city only when canonical snapshot location is absent');
+assert.match(mapServiceSource,/_valid_coordinates/,'map service must validate coordinates before caching or emitting GeoJSON');
 assert.match(mapServiceSource,/0 if spec\["kind"\] == "postal" else 1/,'postal geocoding must be prioritized over city fallback');
 assert.match(mapServiceSource,/postal_record\.get\("status"\) == "NOT_FOUND"/,'city fallback must wait for a definitively unresolved postcode');
 assert.match(mapServiceSource,/background\.submit/,'missing geocodes must run in a background executor');
@@ -343,6 +345,8 @@ assert.match(encounterSource,/querySelector\('\[data-encounter-service-row\]'\)\
 assert.match(profileSource,/function renderProfileBody\(/,'standalone and swipe profiles must share one profile body renderer');
 assert.match(profileSource,/screen-view standalone-profile swipe-profile/,'Swipe must use the canonical standalone profile surface');
 assert.doesNotMatch(profileSource,/swipe-details/,'retired Swipe-only detail markup must not return');
+assert.match(profileSource,/data-action="profile-request"/,'profile action rail must expose the request action');
+assert.doesNotMatch(profileSource,/profile-share/,'retired share action must not return');
 assert.doesNotMatch(requestedSource,/cleanSwipe|requested-swipe-identity|requested-profile-availability|availabilityMode/,'legacy Swipe DOM rewriting must stay removed');
 assert.match(prototypeSource,/\.swipe-profile \.screen-scroll/,'Swipe keeps its media-sized scroll surface through the canonical Swipe profile class');
 assert.doesNotMatch(prototypeSource,/swipe-details|profile-media::after/,'legacy Swipe detail styling and dark media overlay must stay removed');

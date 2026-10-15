@@ -10,8 +10,9 @@ import { createRequestedEffects } from '../requested_fixes.js';
 
 export function createEffects({store,router}) {
   let effects=null;
+  let profileRequests=null;
   const getEffects=()=>effects;
-  const core=createCoreEffects({store,router});
+  const core=createCoreEffects({store,router,onPrefetchedProfile:personId=>profileRequests?.loadProfileRequest(personId,{quiet:true})});
   const map=createMapEffects({store});
   const regressions=createRegressionEffects({store,router,core});
   const requested=createRequestedEffects({store,core});
@@ -19,7 +20,7 @@ export function createEffects({store,router}) {
   const pricing=createPricingEffects({store,getEffects});
   const messaging=createMessagingEffects({store,router,getEffects});
   const encounters=createEncounterEffects({store,getEffects});
-  const profileRequests=createProfileRequestEffects({store});
+  profileRequests=createProfileRequestEffects({store});
   const openProfile=async args=>{
     await regressions.openProfile(args);
     const route=store.getState().navigation.stack.at(-1);
