@@ -24,6 +24,21 @@ class WhatsAppConnectionLifecycle:
         self._qr_source: str | None = None
         self._qr_rendered: str | None = None
 
+        # MessagingService historically starts the worker whenever creds.json
+        # merely exists. Baileys creates that file before a device is paired,
+        # so an interrupted first pairing must not become an implicit startup
+        # connection on the next app launch.
+        if self.has_saved_session():
+            threading.Thread(
+                target=self._resume_saved_session,
+                daemon=True,
+                name="wa-resume-session",
+            ).start()
+        else:
+            self.service.gateway.stop()
+            self.service.gateway.state = "NOT_CONFIGURED"
+            self.service.gateway.detail = None
+
     @property
     def auth_dir(self) -> Path:
         return Path(self.service.auth_dir)
@@ -37,6 +52,12 @@ class WhatsAppConnectionLifecycle:
         except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError):
             return False
         return payload.get("registered") is True
+
+    def _resume_saved_session(self) -> None:
+        try:
+            self.service.gateway.command("connect", timeout=15)
+        except Exception:
+            LOGGER.warning("Could not resume registered WhatsApp session", exc_info=True)
 
     def _clear_qr(self) -> None:
         self._qr_source = None
@@ -80,6 +101,15 @@ class WhatsAppConnectionLifecycle:
                 detail = "Die WhatsApp-Anmeldung ist nicht mehr gültig." if has_saved_session else None
             elif raw_state == "DISCONNECTED" and not has_saved_session:
                 state = "NOT_CONFIGURED"
+            elif raw_state == "ERROR" and self._pairing_requested and str(detail or "").startswith("pairing_failed_code_"):
+                code = str(detail).removeprefix("pairing_failed_code_")
+                self._pairing_requested = False
+                self._clear_qr()
+                detail = (
+                    f"WhatsApp hat den Kopplungsaufbau abgelehnt (Code {code}). Bitte erneut verbinden."
+                    if code and code != "unknown"
+                    else "WhatsApp hat den Kopplungsaufbau abgelehnt. Bitte erneut verbinden."
+                )
 
             raw_qr = self.service.qr() if self._pairing_requested and state == "QR_REQUIRED" else None
             visible_qr = self._qr_data_uri(raw_qr)
@@ -95,14 +125,29 @@ class WhatsAppConnectionLifecycle:
 
     def connect(self) -> dict[str, Any]:
         with self._lock:
-            if self.service.gateway.state == "CONNECTED":
+            gateway = self.service.gateway
+            if gateway.state == "CONNECTED":
                 self._pairing_requested = False
                 return self.status()
             # Existing registered credentials mean reconnect, not pairing.
             self._pairing_requested = not self.has_saved_session()
             if self._pairing_requested:
                 self._clear_qr()
-            self.service.connect()
+            ok, detail = gateway.dependency_status()
+            if not ok:
+                gateway.state = "DEPENDENCY_MISSING"
+                gateway.detail = detail
+                self._pairing_requested = False
+                return self.status()
+            try:
+                # The worker itself stays idle after process start. Only this
+                # explicit lifecycle operation is allowed to begin pairing.
+                gateway.command("connect", timeout=15)
+            except Exception:
+                LOGGER.warning("WhatsApp connect command failed", exc_info=True)
+                gateway.state = "ERROR"
+                gateway.detail = "WhatsApp-Verbindung konnte nicht gestartet werden."
+                self._pairing_requested = False
             return self.status()
 
     def disconnect(self) -> dict[str, Any]:
