@@ -900,7 +900,6 @@ class MessagingService:
                 payload["favorite"] = bool(state.favorite) if state else False
                 payload["preference"] = state.preference if state else None
                 out.append(payload)
-            out.sort(key=lambda item: (0 if item.get("favorite") else 1, 0 if item.get("preference") == "LIKE" else 1))
             return out
 
     def message(self, message_id: int) -> dict[str, Any]:
