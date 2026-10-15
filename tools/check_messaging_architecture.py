@@ -129,6 +129,9 @@ def check_frontend() -> None:
     require("api.threads(filter)" not in messaging_effects, "server subset fetch removed")
     require("async function resetWhatsapp()" in messaging_effects, "WhatsApp reset effect")
     require("api.messagingReset()" in messaging_effects, "reset uses canonical API")
+    reset_effect = messaging_effects.split("async function resetWhatsapp()", 1)[1].split("async function loadThreads()", 1)[0]
+    require("api.messagingConnect()" not in reset_effect, "reset does not immediately recreate a WhatsApp session")
+    require("keine neue Verbindung automatisch gestartet" in reset_effect, "reset confirmation explains clean-slate behavior")
     require("showQr" not in messaging_effects, "QR popup effect removed")
 
     client = source("ladies/static/explorer/js/api/client.js")
@@ -138,6 +141,8 @@ def check_frontend() -> None:
 
     settings = source("ladies/static/explorer/js/ui/screens/settings.js")
     require('data-action="wa-reset"' in settings, "settings reset action")
+    require("Verbindungsdaten vollständig löschen" in settings, "settings exposes explicit full connection-data reset")
+    require('actions.push(`<button class="danger" data-action="wa-reset">Verbindungsdaten vollständig löschen</button>`)'' in settings, "reset action is unconditional across connection states")
     require('data-action="wa-qr"' not in settings, "settings QR button removed")
     require('data-action="wa-logout"' not in settings, "settings logout action removed")
     require("wa?.pairing_requested" in settings, "settings pair intent rendering")
