@@ -36,7 +36,7 @@ def _phone_person_ids(db, phone: str | None) -> set[int]:
     return set(
         db.scalars(
             select(PersonIdentifier.person_id)
-            .join(Listing, Listing.person_id == PersonIdentifier.person_id)
+            .join(Listing, Listing.listing_id == PersonIdentifier.listing_id)
             .where(
                 PersonIdentifier.kind == "PHONE",
                 PersonIdentifier.normalized_value == phone,
@@ -52,7 +52,11 @@ def _provider_person_map(db) -> dict[str, set[int]]:
         select(ChatMessageMeta.provider_key_json, ChatThread.person_id)
         .join(ChatMessage, ChatMessage.message_id == ChatMessageMeta.message_id)
         .join(ChatThread, ChatThread.thread_id == ChatMessage.thread_id)
-        .where(ChatThread.person_id.is_not(None), ChatMessageMeta.provider_key_json.is_not(None))
+        .where(
+            ChatThread.person_id.is_not(None),
+            ChatMessage.direction == "OUT",
+            ChatMessageMeta.provider_key_json.is_not(None),
+        )
     ).all()
     ladies_cache: dict[int, bool] = {}
     result: dict[str, set[int]] = {}
@@ -182,15 +186,6 @@ def thread_is_ladies_scoped(database, thread_id: int | None) -> bool:
 def _merge_provider_endpoint(service, db, target: ContactEndpoint, other: ContactEndpoint) -> bool:
     if target.person_id is None:
         return False
-    if other.person_id is None:
-        service._assign_endpoint_in_session(
-            db,
-            other,
-            int(target.person_id),
-            add_system_message=False,
-        )
-    if other.person_id != target.person_id:
-        return False
     if (
         target.normalized_phone
         and other.normalized_phone
@@ -201,6 +196,15 @@ def _merge_provider_endpoint(service, db, target: ContactEndpoint, other: Contac
             target.normalized_phone,
             other.normalized_phone,
         )
+        return False
+    if other.person_id is None:
+        service._assign_endpoint_in_session(
+            db,
+            other,
+            int(target.person_id),
+            add_system_message=False,
+        )
+    if other.person_id != target.person_id:
         return False
 
     provider_address = other.provider_address
@@ -227,15 +231,22 @@ def _merge_provider_endpoint(service, db, target: ContactEndpoint, other: Contac
 
 
 def refresh_endpoint_identity(service, endpoint_id: int | None) -> str | None:
-    """Resolve PN -> LID and persist the provider address on the existing Ladies endpoint."""
+    """Resolve PN -> LID and persist it without ever blocking the actual message flow."""
     endpoint_id = int(endpoint_id or 0)
     if not endpoint_id or service.gateway.state != "CONNECTED":
         return None
-    with service.database.session() as db:
-        endpoint = db.get(ContactEndpoint, endpoint_id)
-        if endpoint is None or endpoint.state != "ACTIVE" or not endpoint.normalized_phone:
-            return None
-        phone_jid = endpoint.normalized_phone.lstrip("+") + "@s.whatsapp.net"
+    try:
+        with service.database.session() as db:
+            endpoint = db.get(ContactEndpoint, endpoint_id)
+            if endpoint is None or endpoint.state != "ACTIVE" or not endpoint.normalized_phone:
+                return None
+            if endpoint.provider_address and str(endpoint.provider_address).endswith("@lid"):
+                return str(endpoint.provider_address)
+            phone_jid = endpoint.normalized_phone.lstrip("+") + "@s.whatsapp.net"
+    except Exception:
+        LOGGER.warning("WhatsApp identity preflight failed endpoint_id=%s", endpoint_id, exc_info=True)
+        return None
+
     try:
         event = service.gateway.command(
             "contact_info",
@@ -253,29 +264,33 @@ def refresh_endpoint_identity(service, endpoint_id: int | None) -> str | None:
     if not provider_address:
         return None
 
-    with service.database.session() as db:
-        target = db.get(ContactEndpoint, endpoint_id)
-        if target is None or target.state != "ACTIVE":
-            return None
-        other = db.scalar(
-            select(ContactEndpoint).where(
-                ContactEndpoint.provider == "WHATSAPP",
-                ContactEndpoint.provider_address == provider_address,
-                ContactEndpoint.endpoint_id != target.endpoint_id,
-            ).limit(1)
-        )
-        if other is not None:
-            if target.person_id is None or (other.person_id is not None and other.person_id != target.person_id):
-                LOGGER.warning(
-                    "WhatsApp provider address conflict address=%s target_person=%s other_person=%s",
-                    provider_address,
-                    target.person_id,
-                    other.person_id,
-                )
+    try:
+        with service.database.session() as db:
+            target = db.get(ContactEndpoint, endpoint_id)
+            if target is None or target.state != "ACTIVE":
                 return None
-            if not _merge_provider_endpoint(service, db, target, other):
-                return None
-        target.provider_address = provider_address
-        target.last_seen_at = utcnow()
-        target.updated_at = utcnow()
+            other = db.scalar(
+                select(ContactEndpoint).where(
+                    ContactEndpoint.provider == "WHATSAPP",
+                    ContactEndpoint.provider_address == provider_address,
+                    ContactEndpoint.endpoint_id != target.endpoint_id,
+                ).limit(1)
+            )
+            if other is not None:
+                if target.person_id is None or (other.person_id is not None and other.person_id != target.person_id):
+                    LOGGER.warning(
+                        "WhatsApp provider address conflict address=%s target_person=%s other_person=%s",
+                        provider_address,
+                        target.person_id,
+                        other.person_id,
+                    )
+                    return None
+                if not _merge_provider_endpoint(service, db, target, other):
+                    return None
+            target.provider_address = provider_address
+            target.last_seen_at = utcnow()
+            target.updated_at = utcnow()
+    except Exception:
+        LOGGER.warning("WhatsApp identity persistence failed endpoint_id=%s", endpoint_id, exc_info=True)
+        return None
     return provider_address
