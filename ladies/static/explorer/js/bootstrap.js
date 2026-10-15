@@ -8,6 +8,7 @@ import { installRegressionUi } from './regressions.js';
 import { installUxPatch } from './ux_patch.js';
 import { installSearchIntelligence } from './search_intelligence.js';
 import { installRequestedFixes } from './requested_fixes.js';
+import { installDiscoverMap } from './ui/discover_map_install.js';
 
 const store=createStore();
 const router=createRouter(store);
@@ -15,6 +16,7 @@ const effects=createEffects({store,router});
 const commands=createCommands({store,router,effects});
 installUxPatch({store});
 createController({store,router,effects,commands});
+installDiscoverMap({store,effects,router});
 installSearchIntelligence({store,effects,router});
 installRegressionUi({store,effects});
 installRequestedFixes({store,effects});
