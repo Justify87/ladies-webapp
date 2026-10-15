@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import unicodedata
 from typing import Iterable
 
+from .schema import PRICE_DURATION_OPTIONS
+
 
 PRICE_WORDS = {
     "preis", "preise", "preisliste", "kostet", "kosten", "kost", "nehme", "nimm", "nimmst",
@@ -20,6 +22,9 @@ STATUS_WORDS = {
     "nicht", "ausgeschlossen", "anfrage", "absprache", "wunsch", "verhandelbar", "vb",
 }
 CURRENCY_WORDS = {"eur", "euro", "€"}
+DURATION_PHRASES = (
+    "halbe stunde", "halbe std", "eine stunde", "eine std", "ne stunde", "ne std", "zwei stunden", "zwei std",
+)
 
 
 @dataclass(frozen=True)
@@ -96,9 +101,9 @@ def _duration_numbers(tokens: tuple[str, ...]) -> list[float]:
         if value is not None:
             values.append(value)
     text = " ".join(tokens)
-    if "halbe stunde" in text or "eine halbe stunde" in text:
+    if "halbe stunde" in text or "halbe std" in text or "eine halbe stunde" in text:
         values.append(0.5)
-    if "eine stunde" in text or "1 stunde" in text:
+    if "eine stunde" in text or "eine std" in text or "1 stunde" in text:
         values.append(1.0)
     return values
 
@@ -113,6 +118,25 @@ def _has_price_word(tokens: tuple[str, ...]) -> bool:
 
 def _has_status_word(tokens: tuple[str, ...]) -> bool:
     return any(token in STATUS_WORDS for token in tokens)
+
+
+def _has_plus_amount(tokens: tuple[str, ...]) -> bool:
+    return any(token.startswith("+") and _number_value(token) is not None for token in tokens)
+
+
+def _has_duration_phrase(text: str) -> bool:
+    return any(phrase in text for phrase in DURATION_PHRASES)
+
+
+def _looks_like_numeric_price_table(tokens: tuple[str, ...], numbers: list[float]) -> bool:
+    if len(tokens) > 12 or len(numbers) < 2:
+        return False
+    durations = set(PRICE_DURATION_OPTIONS)
+    has_duration_value = any(value in durations for value in numbers)
+    has_price_value = any(20 <= value <= 5000 and value not in durations for value in numbers)
+    if len(numbers) >= 4 and has_duration_value:
+        return True
+    return has_duration_value and has_price_value
 
 
 def _has_service(text: str, service_terms: Iterable[str]) -> bool:
@@ -136,14 +160,13 @@ def _is_price_question(value: str | None) -> bool:
 class PriceMessageDetector:
     """High-recall, no-training classifier for selecting messages for FunctionGemma.
 
-    The detector intentionally does not extract prices. It only decides whether
-    a short incoming message is likely price-related using token-level signals
-    and the immediately preceding outgoing price question. Ambiguous messages
-    are delegated to FunctionGemma instead of being interpreted here.
+    The detector never extracts or assigns prices. It only decides whether an
+    incoming message is likely price-related. Ambiguous messages are deliberately
+    delegated to FunctionGemma instead of being interpreted here.
     """
 
     name = "token-price-detector"
-    version = "2"
+    version = "3"
 
     def __init__(self, service_terms: Iterable[str] = ()) -> None:
         self.service_terms = tuple(dict.fromkeys(str(term) for term in service_terms if str(term).strip()))
@@ -163,6 +186,9 @@ class PriceMessageDetector:
         has_price_word = _has_price_word(tokens)
         has_status_word = _has_status_word(tokens)
         has_service = _has_service(normalized, self.service_terms)
+        has_plus_amount = _has_plus_amount(tokens)
+        has_duration_phrase = _has_duration_phrase(normalized)
+        numeric_price_table = _looks_like_numeric_price_table(tokens, numbers)
         question_context = _is_price_question(previous_outgoing)
         malformed_duration = any(value > 240 for value in durations)
 
@@ -171,12 +197,16 @@ class PriceMessageDetector:
             reasons.append("currency")
         if has_price_word:
             reasons.append("price_word")
-        if durations:
+        if durations or has_duration_phrase:
             reasons.append("duration")
         if has_service:
             reasons.append("service")
         if has_status_word:
             reasons.append("service_status")
+        if has_plus_amount:
+            reasons.append("surcharge_amount")
+        if numeric_price_table:
+            reasons.append("numeric_price_table")
         if question_context:
             reasons.append("price_question_context")
         if malformed_duration:
@@ -191,11 +221,15 @@ class PriceMessageDetector:
             relevant = True
         elif durations and len(numbers) >= 2:
             relevant = True
+        elif has_duration_phrase and len(numbers) >= 1:
+            relevant = True
+        elif numeric_price_table:
+            relevant = True
         elif malformed_duration:
             relevant = True
         elif question_context and (numbers or has_service or has_status_word):
             relevant = True
-        elif has_service and has_status_word:
+        elif has_service and (has_status_word or has_plus_amount):
             relevant = True
         elif has_image and (has_currency or has_price_word or (durations and numbers)):
             relevant = True
