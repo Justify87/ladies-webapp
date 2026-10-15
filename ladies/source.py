@@ -12,8 +12,10 @@ import requests
 from .domain import SearchProfile
 from .parser import parse_search_cards, parse_search_config
 from .search_catalog import (
+    CATEGORY_MAP,
     FILTER_GROUP_MAP,
     FILTER_GROUP_ORDER,
+    FILTER_VALUE_MAP,
     canonical_category,
     filter_value_slug,
 )
@@ -59,15 +61,11 @@ class BatchRateLimiter:
             if self._used >= self.batch_size:
                 remaining = self._next_batch_at - now
                 if remaining > 0:
-                    time.sleep(remaining)
-                    waited = remaining
-                self._used = 0
-                now = time.monotonic()
+                    time.sleep(remaining); waited = remaining
+                self._used = 0; now = time.monotonic()
             elif self._used == 0 and now < self._next_batch_at:
                 remaining = self._next_batch_at - now
-                time.sleep(remaining)
-                waited = remaining
-                now = time.monotonic()
+                time.sleep(remaining); waited = remaining; now = time.monotonic()
             self._used += 1
             if self._used >= self.batch_size:
                 self._next_batch_at = now + self.pause_seconds
@@ -75,43 +73,27 @@ class BatchRateLimiter:
 
 
 def build_session() -> requests.Session:
-    session = requests.Session()
-    session.headers.update({
+    s = requests.Session()
+    s.headers.update({
         "User-Agent": USER_AGENT,
         "Accept-Language": "de-DE,de;q=0.9,en;q=0.7",
         "DNT": "1",
     })
-    return session
+    return s
 
 
-def http_get(
-    session: requests.Session,
-    url: str,
-    *,
-    context: str,
-    timeout: float = 30,
-    headers: dict[str, str] | None = None,
-    params: dict[str, Any] | None = None,
-    expected_statuses: tuple[int, ...] = (200,),
-) -> requests.Response:
-    started = time.monotonic()
+def http_get(session: requests.Session, url: str, *, context: str, timeout: float = 30,
+             headers: dict[str,str] | None = None, params: dict[str,Any] | None = None,
+             expected_statuses: tuple[int,...] = (200,)) -> requests.Response:
+    started=time.monotonic()
     try:
-        response = session.get(url, headers=headers, params=params, timeout=timeout)
+        r=session.get(url, headers=headers, params=params, timeout=timeout)
     except requests.RequestException:
-        LOGGER.exception("HTTP failed context=%s url=%s", context, url)
-        raise
-    elapsed = (time.monotonic() - started) * 1000
-    level = logging.DEBUG if response.status_code in expected_statuses else logging.WARNING
-    LOGGER.log(
-        level,
-        "HTTP context=%s status=%s elapsed_ms=%.0f bytes=%s url=%s",
-        context,
-        response.status_code,
-        elapsed,
-        len(response.content or b""),
-        response.url,
-    )
-    return response
+        LOGGER.exception("HTTP failed context=%s url=%s", context, url); raise
+    elapsed=(time.monotonic()-started)*1000
+    level=logging.DEBUG if r.status_code in expected_statuses else logging.WARNING
+    LOGGER.log(level,"HTTP context=%s status=%s elapsed_ms=%.0f bytes=%s url=%s",context,r.status_code,elapsed,len(r.content or b""),r.url)
+    return r
 
 
 def build_search_url(
@@ -130,14 +112,16 @@ def build_search_url(
     query = urlencode((("umkreis", radius_km), ("page", page)))
     return f"{BASE}{path}?{query}"
 
-
 def resolve_location(session: requests.Session, raw: str) -> tuple[str, str]:
-    """Resolve a user-entered city/region/address through the site's location API."""
+    """
+    Resolve a user-entered city/region/address through the site's own location API.
+    This runs only after the user presses the search button.
+    """
     raw = clean_text(raw)
     if not raw:
         return DEFAULT_CITY, "Leipzig"
     try:
-        response = http_get(
+        r = http_get(
             session,
             f"{BASE}/api/location",
             context="location-resolve",
@@ -145,26 +129,24 @@ def resolve_location(session: requests.Session, raw: str) -> tuple[str, str]:
             headers={"Accept": "application/json,*/*", "Referer": f"{BASE}/"},
             timeout=20,
         )
-        response.raise_for_status()
-        data = response.json()
+        r.raise_for_status()
+        data = r.json()
 
         candidates: list[dict[str, Any]] = []
-
         def walk(obj: Any):
             if isinstance(obj, dict):
                 candidates.append(obj)
-                for value in obj.values():
-                    walk(value)
+                for v in obj.values():
+                    walk(v)
             elif isinstance(obj, list):
-                for value in obj:
-                    walk(value)
-
+                for v in obj:
+                    walk(v)
         walk(data)
 
         lowered = raw.lower()
         scored: list[tuple[int, dict[str, Any]]] = []
         for item in candidates:
-            keys = {str(key).lower(): value for key, value in item.items()}
+            keys = {str(k).lower(): v for k, v in item.items()}
             slug = keys.get("slug") or keys.get("seoslug") or keys.get("urlslug")
             name = keys.get("name") or keys.get("title") or keys.get("ort") or keys.get("locationname")
             if not slug or not name:
@@ -180,8 +162,8 @@ def resolve_location(session: requests.Session, raw: str) -> tuple[str, str]:
             scored.append((score, item))
 
         if scored:
-            _, item = sorted(scored, key=lambda value: value[0], reverse=True)[0]
-            keys = {str(key).lower(): value for key, value in item.items()}
+            _, item = sorted(scored, key=lambda x: x[0], reverse=True)[0]
+            keys = {str(k).lower(): v for k, v in item.items()}
             slug = clean_text(str(keys.get("slug") or keys.get("seoslug") or keys.get("urlslug")))
             name = clean_text(str(keys.get("name") or keys.get("title") or keys.get("ort") or keys.get("locationname")))
             if slug:
@@ -192,7 +174,6 @@ def resolve_location(session: requests.Session, raw: str) -> tuple[str, str]:
     fallback = slugify_location_input(raw)
     LOGGER.warning("Location resolution produced no exact candidate input=%r fallback_slug=%s", raw, fallback)
     return fallback, raw
-
 
 def build_filter_path(
     category: str,
@@ -237,7 +218,6 @@ def build_filter_path(
     parts = [part for part in (category_slug, filter_segment) if part]
     return "/".join(parts)
 
-
 def fetch_search_configured(
     session: requests.Session,
     city_slug: str,
@@ -255,24 +235,15 @@ def fetch_search_configured(
         category, age_min, age_max, height_min, height_max, selected
     )
     first_url = build_search_url(
-        city_slug=city_slug,
-        radius_km=radius_km,
-        page=1,
-        filter_path=filter_path,
-        api=False,
+        city_slug=city_slug, radius_km=radius_km, page=1,
+        filter_path=filter_path, api=False,
     )
     LOGGER.info(
         "Search start city=%s radius=%s filter_path=%s url=%s",
-        city_slug,
-        radius_km,
-        filter_path or "<none>",
-        first_url,
+        city_slug, radius_km, filter_path or "<none>", first_url,
     )
     first_response = http_get(
-        session,
-        first_url,
-        context="search-page-1",
-        expected_statuses=(200, 404),
+        session, first_url, context="search-page-1", expected_statuses=(200, 404)
     )
     if first_response.status_code == 404:
         LOGGER.info(
@@ -280,16 +251,10 @@ def fetch_search_configured(
             first_url,
         )
         return [], {
-            "city": city_slug,
-            "city_display": city_display,
-            "radius_km": radius_km,
-            "filter_path": filter_path,
-            "first_url": first_url,
-            "total_pages": 0,
-            "server_advert_count": 0,
-            "distance_searched": str(radius_km),
-            "pagination_source": "page-1-404-empty",
-            "radius_boundary_stopped": False,
+            "city": city_slug, "city_display": city_display, "radius_km": radius_km,
+            "filter_path": filter_path, "first_url": first_url, "total_pages": 0,
+            "server_advert_count": 0, "distance_searched": str(radius_km),
+            "pagination_source": "page-1-404-empty", "radius_boundary_stopped": False,
             "unique_count": 0,
         }
     first_response.raise_for_status()
@@ -325,40 +290,32 @@ def fetch_search_configured(
         LOGGER.debug(
             "Search page-1 metadata total_pages=%s current_page=%s advert_count=%s "
             "distance_searched=%s parsed_cards=%s",
-            total_pages,
-            first_config.get("current_page"),
-            server_count,
-            first_distance,
-            len(profiles),
+            total_pages, first_config.get("current_page"), server_count,
+            first_distance, len(profiles),
         )
     else:
         LOGGER.warning(
             "SearchConfig pagination metadata missing on page 1; using guarded API fallback url=%s",
             first_url,
         )
-        # Compatibility fallback for a future site markup change. The response is
+        # Compatibility fallback for a future site markup change.  The response is
         # inspected before any cards are accepted; a widened radius ends pagination
         # rather than turning the whole search into an error.
         time.sleep(max(0.0, page_delay))
         second_url = build_search_url(
-            city_slug=city_slug,
-            radius_km=radius_km,
-            page=2,
-            filter_path=filter_path,
-            api=True,
+            city_slug=city_slug, radius_km=radius_km, page=2,
+            filter_path=filter_path, api=True,
         )
-        response = http_get(
-            session,
-            second_url,
-            context="search-api-page-2-fallback",
+        r = http_get(
+            session, second_url, context="search-api-page-2-fallback",
             headers={"Accept": "*/*", "Referer": f"{BASE}/"},
             expected_statuses=(200, 404),
         )
-        if response.status_code == 404:
+        if r.status_code == 404:
             total_pages = 1
         else:
-            response.raise_for_status()
-            payload = response.json()
+            r.raise_for_status()
+            payload = r.json()
             for flag in ("snapshotUpdatedDueToNewDay", "snapshotUpdatedDueToNewIndex"):
                 if flag in payload:
                     meta[flag] = payload.get(flag)
@@ -367,8 +324,7 @@ def fetch_search_configured(
                 LOGGER.info(
                     "Hard-radius boundary reached during fallback page=2 requested_radius=%s "
                     "server_radius=%s; keeping page-1 results only",
-                    radius_km,
-                    distance,
+                    radius_km, distance,
                 )
                 total_pages = 1
                 meta["radius_boundary_stopped"] = True
@@ -381,50 +337,41 @@ def fetch_search_configured(
                     profiles.extend(parse_search_cards(payload.get("content") or ""))
         meta["total_pages"] = total_pages
 
-    # Page 1 is already in the HTML. Only request pages that page 1 itself says
-    # belong to the exact-radius result set. This is the key hard-radius guard.
+    # Page 1 is already in the HTML.  Only request pages that page 1 itself says
+    # belong to the exact-radius result set.  This is the key hard-radius guard.
     first_api_page = 2 if metadata_available else 3
     for page in range(first_api_page, total_pages + 1):
         time.sleep(max(0.0, page_delay))
         url = build_search_url(
-            city_slug=city_slug,
-            radius_km=radius_km,
-            page=page,
-            filter_path=filter_path,
-            api=True,
+            city_slug=city_slug, radius_km=radius_km, page=page,
+            filter_path=filter_path, api=True,
         )
-        response = http_get(
-            session,
-            url,
-            context=f"search-api-page-{page}",
+        r = http_get(
+            session, url, context=f"search-api-page-{page}",
             headers={"Accept": "*/*", "Referer": f"{BASE}/"},
             expected_statuses=(200, 404),
         )
-        if response.status_code == 404:
+        if r.status_code == 404:
             LOGGER.warning(
                 "Search pagination ended early with 404 page=%s expected_total_pages=%s url=%s",
-                page,
-                total_pages,
-                url,
+                page, total_pages, url,
             )
             meta["pagination_ended_early_at"] = page
             break
 
-        response.raise_for_status()
-        payload = response.json()
+        r.raise_for_status()
+        payload = r.json()
         for flag in ("snapshotUpdatedDueToNewDay", "snapshotUpdatedDueToNewIndex"):
             if flag in payload:
                 meta[flag] = payload.get(flag)
         distance = str(payload.get("distanceSearched", ""))
         if distance and distance != str(radius_km):
-            # Never accept cards from an automatically enlarged radius. Keep the
+            # Never accept cards from an automatically enlarged radius.  Keep the
             # exact-radius pages already collected instead of returning HTTP 502.
             LOGGER.warning(
                 "Hard-radius boundary reached page=%s requested_radius=%s server_radius=%s; "
                 "discarding this page and stopping pagination",
-                page,
-                radius_km,
-                distance,
+                page, radius_km, distance,
             )
             meta["radius_boundary_stopped"] = True
             meta["radius_boundary_page"] = page
@@ -443,21 +390,14 @@ def fetch_search_configured(
         LOGGER.warning(
             "Search count mismatch exact-radius parsed_unique=%s server_advert_count=%s "
             "total_pages=%s boundary_stopped=%s",
-            len(result),
-            meta["server_advert_count"],
-            meta["total_pages"],
+            len(result), meta["server_advert_count"], meta["total_pages"],
             meta.get("radius_boundary_stopped"),
         )
     LOGGER.info(
         "Search complete city=%s radius=%s filter_path=%s pages=%s unique=%s "
         "server_count=%s pagination_source=%s boundary_stopped=%s",
-        city_slug,
-        radius_km,
-        filter_path or "<none>",
-        meta["total_pages"],
-        len(result),
-        meta.get("server_advert_count"),
-        meta.get("pagination_source"),
+        city_slug, radius_km, filter_path or "<none>", meta["total_pages"], len(result),
+        meta.get("server_advert_count"), meta.get("pagination_source"),
         meta.get("radius_boundary_stopped"),
     )
     return result, meta
