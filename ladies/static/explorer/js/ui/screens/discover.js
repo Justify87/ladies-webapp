@@ -24,7 +24,8 @@ function renderSwipeScreen(state){
   const bundle=state.profiles.bundles[row.advertId];
   const vm=bundle?S.currentProfileBundle({...state,search:{...state.search,results:[row]},discover:{...state.discover,index:0}}):row;
   const pid=vm?.personId||row.personId;
-  const detail=pid?S.detailFor(state,pid):null;
+  const resolvedDetail=pid?S.detailFor(state,pid):null;
+  const detail=resolvedDetail?{...resolvedDetail,advertId:row.advertId}:null;
   const requestState=pid?(state.messaging.profileRequests?.[String(pid)] ?? null):null;
   const index=Number(state.profileUi.mediaByPerson[String(pid)] ?? state.discover.mediaIndex[row.advertId] ?? 0);
   const swipe=renderSwipe(vm,detail,{activeTab:S.profileTab(state,pid),mediaIndex:index,filters:state.search.filters,autoplay:!!state.settings.values.autoplay_videos,showDescriptionChanges:!!state.settings.values.show_description_changes,requestState});
