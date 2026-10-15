@@ -36,7 +36,7 @@ def _phone_person_ids(db, phone: str | None) -> set[int]:
     return set(
         db.scalars(
             select(PersonIdentifier.person_id)
-            .join(Listing, Listing.listing_id == PersonIdentifier.listing_id)
+            .join(Listing, Listing.person_id == PersonIdentifier.person_id)
             .where(
                 PersonIdentifier.kind == "PHONE",
                 PersonIdentifier.normalized_value == phone,
