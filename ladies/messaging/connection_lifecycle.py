@@ -101,7 +101,7 @@ class WhatsAppConnectionLifecycle:
                 detail = "Die WhatsApp-Anmeldung ist nicht mehr gültig." if has_saved_session else None
             elif raw_state == "DISCONNECTED" and not has_saved_session:
                 state = "NOT_CONFIGURED"
-            elif raw_state == "ERROR" and self._pairing_requested and str(detail or "").startswith("pairing_failed_code_"):
+            elif raw_state == "ERROR" and str(detail or "").startswith("pairing_failed_code_"):
                 code = str(detail).removeprefix("pairing_failed_code_")
                 self._pairing_requested = False
                 self._clear_qr()
@@ -110,6 +110,7 @@ class WhatsAppConnectionLifecycle:
                     if code and code != "unknown"
                     else "WhatsApp hat den Kopplungsaufbau abgelehnt. Bitte erneut verbinden."
                 )
+                self.service.gateway.detail = detail
 
             raw_qr = self.service.qr() if self._pairing_requested and state == "QR_REQUIRED" else None
             visible_qr = self._qr_data_uri(raw_qr)
