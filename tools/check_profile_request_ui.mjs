@@ -21,8 +21,17 @@ assert.equal(profileRequestRefreshDelay(new Date(base-250).toISOString(),base),0
 assert.equal(profileRequestRefreshDelay(null,base),null);
 
 const effectsSource=readFileSync(new URL('../ladies/static/explorer/js/app/effects.js',import.meta.url),'utf8');
+const backendSource=readFileSync(new URL('../ladies/messaging/profile_requests.py',import.meta.url),'utf8');
+const integrationSource=readFileSync(new URL('../ladies/messaging/integration.py',import.meta.url),'utf8');
 assert.match(effectsSource,/await regressions\.openProfile\(args\)/,'profile request loading must extend the canonical regression-safe profile opener');
 assert.doesNotMatch(effectsSource,/await core\.openProfile\(args\)/,'profile request integration must not bypass canonical person resolution');
+assert.match(backendSource,/status="PREPARED"/,'request metadata and local message must be committed before provider dispatch');
+assert.match(backendSource,/self\.messaging\._dispatch_text\(message_id\)/,'automatic requests must reuse the canonical text dispatcher');
+assert.match(backendSource,/row\.status = "FAILED" if retryable else "UNCERTAIN"/,'ambiguous provider outcomes must never become immediately retryable');
+assert.match(backendSource,/message\.status = "PENDING"[\s\S]*erneuter Versand ist vorerst gesperrt/,'ambiguous sends must close the normal chat retry path');
+assert.match(backendSource,/self\.messaging\.retry\(message_id\)/,'definite pre-send failures must reuse the canonical retry path and existing message');
+assert.match(integrationSource,/update\(ProfileRequest\)[\s\S]*person_id=int\(target_id\)/,'person merges must move profile-request ownership');
+assert.match(integrationSource,/ProfileRequest\.thread_id == int\(source_thread_id\)[\s\S]*thread_id=int\(target_thread_id\)/,'thread merges must preserve profile-request thread references');
 
 const state={
   navigation:{stack:[{name:'profile',params:{personId:7,advertId:'advert-b'}}]},
