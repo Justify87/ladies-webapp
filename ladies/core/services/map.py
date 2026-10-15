@@ -44,6 +44,15 @@ def _postal_key(postal_code: str) -> str:
     return f"postal:DE:{postal_code}"
 
 
+def _valid_coordinates(lat: Any, lng: Any) -> bool:
+    try:
+        latitude = float(lat)
+        longitude = float(lng)
+    except (TypeError, ValueError):
+        return False
+    return -90.0 <= latitude <= 90.0 and -180.0 <= longitude <= 180.0
+
+
 class MapService:
     """Build cached, privacy-conscious map data for the current active results.
 
@@ -71,9 +80,31 @@ class MapService:
     def _read_cache(self) -> dict[str, dict[str, Any]]:
         try:
             value = orjson.loads(self.cache_path.read_bytes())
-            return value if isinstance(value, dict) else {}
         except (OSError, ValueError, TypeError, orjson.JSONDecodeError):
             return {}
+        if not isinstance(value, dict):
+            return {}
+
+        valid: dict[str, dict[str, Any]] = {}
+        invalid_keys: list[str] = []
+        for raw_key, raw_record in value.items():
+            key = str(raw_key)
+            if not isinstance(raw_record, dict):
+                invalid_keys.append(key)
+                continue
+            record = dict(raw_record)
+            if record.get("status") == "RESOLVED" and not _valid_coordinates(record.get("lat"), record.get("lng")):
+                invalid_keys.append(key)
+                continue
+            valid[key] = record
+
+        if invalid_keys:
+            LOGGER.warning(
+                "Discarded %d invalid map cache record(s): %s",
+                len(invalid_keys),
+                ", ".join(invalid_keys[:8]),
+            )
+        return valid
 
     def _save_cache(self) -> None:
         with self._lock:
@@ -89,20 +120,35 @@ class MapService:
             value = self._cache.get(key)
             return dict(value) if isinstance(value, dict) else None
 
+    def _drop_invalid_cached_location(self, key: str, value: dict[str, Any]) -> None:
+        LOGGER.warning(
+            "Discarding invalid resolved map coordinate key=%s lat=%r lng=%r",
+            key,
+            value.get("lat"),
+            value.get("lng"),
+        )
+        with self._lock:
+            current = self._cache.get(key)
+            if current == value:
+                self._cache.pop(key, None)
+
     def _resolved_location(self, key: str | None) -> dict[str, Any] | None:
         value = self._cached_record(key)
         if not value or value.get("status") != "RESOLVED":
             return None
-        try:
-            return {
-                **value,
-                "lat": float(value["lat"]),
-                "lng": float(value["lng"]),
-            }
-        except (KeyError, TypeError, ValueError):
+        if not _valid_coordinates(value.get("lat"), value.get("lng")):
+            if key:
+                self._drop_invalid_cached_location(key, value)
             return None
+        return {
+            **value,
+            "lat": float(value["lat"]),
+            "lng": float(value["lng"]),
+        }
 
     def _remember(self, key: str, *, lat: float, lng: float, precision: str, source: str) -> None:
+        if not _valid_coordinates(lat, lng):
+            raise ValueError(f"Ungültige Kartenkoordinate für {key}: lat={lat!r} lng={lng!r}")
         with self._lock:
             self._cache[key] = {
                 "status": "RESOLVED",
@@ -132,9 +178,19 @@ class MapService:
         coordinates: list[tuple[float, float]] = []
         for place in data.get("places") or []:
             try:
-                coordinates.append((float(place["latitude"]), float(place["longitude"])))
+                lat = float(place["latitude"])
+                lng = float(place["longitude"])
             except (KeyError, TypeError, ValueError):
                 continue
+            if _valid_coordinates(lat, lng):
+                coordinates.append((lat, lng))
+            else:
+                LOGGER.warning(
+                    "Ignoring invalid ZIPPOPOTAM coordinate postal=%s lat=%r lng=%r",
+                    postal_code,
+                    place.get("latitude"),
+                    place.get("longitude"),
+                )
         if not coordinates:
             self._remember_not_found(spec["key"], source="ZIPPOPOTAM")
             return False
@@ -164,10 +220,12 @@ class MapService:
         if not items:
             self._remember_not_found(spec["key"], source="NOMINATIM_CITY")
             return
+        lat = float(items[0]["lat"])
+        lng = float(items[0]["lon"])
         self._remember(
             spec["key"],
-            lat=float(items[0]["lat"]),
-            lng=float(items[0]["lon"]),
+            lat=lat,
+            lng=lng,
             precision="SEARCH_AREA",
             source="NOMINATIM_CITY",
         )
@@ -240,18 +298,47 @@ class MapService:
                         spec["fallback_city_key"] = city_key
                         spec["fallback_city"] = item["city"]
                     specs[postal_key] = spec
-                elif postal_record.get("status") == "NOT_FOUND" and city_key and self._cached_record(city_key) is None:
+                elif postal_record.get("status") == "RESOLVED" and not _valid_coordinates(postal_record.get("lat"), postal_record.get("lng")):
+                    self._drop_invalid_cached_location(postal_key, postal_record)
+                    spec = {
+                        "key": postal_key,
+                        "kind": "postal",
+                        "value": item["postal"],
+                    }
+                    if city_key and item["city"]:
+                        spec["fallback_city_key"] = city_key
+                        spec["fallback_city"] = item["city"]
+                    specs[postal_key] = spec
+                elif postal_record.get("status") == "NOT_FOUND" and city_key:
+                    city_record = self._cached_record(city_key)
+                    if city_record is None:
+                        specs[city_key] = {
+                            "key": city_key,
+                            "kind": "city",
+                            "value": item["city"],
+                        }
+                    elif city_record.get("status") == "RESOLVED" and not _valid_coordinates(city_record.get("lat"), city_record.get("lng")):
+                        self._drop_invalid_cached_location(city_key, city_record)
+                        specs[city_key] = {
+                            "key": city_key,
+                            "kind": "city",
+                            "value": item["city"],
+                        }
+            elif city_key:
+                city_record = self._cached_record(city_key)
+                if city_record is None:
                     specs[city_key] = {
                         "key": city_key,
                         "kind": "city",
                         "value": item["city"],
                     }
-            elif city_key and self._cached_record(city_key) is None:
-                specs[city_key] = {
-                    "key": city_key,
-                    "kind": "city",
-                    "value": item["city"],
-                }
+                elif city_record.get("status") == "RESOLVED" and not _valid_coordinates(city_record.get("lat"), city_record.get("lng")):
+                    self._drop_invalid_cached_location(city_key, city_record)
+                    specs[city_key] = {
+                        "key": city_key,
+                        "kind": "city",
+                        "value": item["city"],
+                    }
         return specs
 
     def feature_collection(self, active_items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -333,6 +420,15 @@ class MapService:
 
         features = []
         for location_key, group in groups.items():
+            if not _valid_coordinates(group["lat"], group["lng"]):
+                LOGGER.error(
+                    "Skipping invalid map feature key=%s lat=%r lng=%r",
+                    location_key,
+                    group["lat"],
+                    group["lng"],
+                )
+                unresolved += len(group["profiles"])
+                continue
             profiles = group["profiles"]
             features.append({
                 "type": "Feature",
