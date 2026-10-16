@@ -864,9 +864,16 @@ class MessagingService(_BaseMessagingService):
                 ingested = self._ingest_provider_batch(payloads, rehydrated=True)
             except Exception:
                 LOGGER.exception("Failed to ingest WhatsApp history batch")
-                return
+                raise
             if ingested:
                 self.events.publish({"type": "history_batch", "count": ingested})
+            return
+        if event_type == "message":
+            try:
+                self._ingest_message(event.get("payload") or {})
+            except Exception:
+                LOGGER.exception("Failed to ingest WhatsApp message")
+                raise
             return
         if event_type == "history_metadata":
             try:

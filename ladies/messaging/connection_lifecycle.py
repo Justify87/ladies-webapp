@@ -13,6 +13,7 @@ from typing import Any
 import qrcode
 
 LOGGER = logging.getLogger("ladies_explorer.messaging.connection")
+AUTO_RESUME_DELAYS = (0.0, 1.0, 2.0)
 
 
 class WhatsAppConnectionLifecycle:
@@ -29,13 +30,23 @@ class WhatsAppConnectionLifecycle:
         if self.service.gateway.state == "DEPENDENCY_MISSING":
             return
 
-        # Establish lifecycle ownership before scheduling any saved-session resume.
         self.service.gateway.stop()
         self.service.gateway.state = "NOT_CONFIGURED"
         self.service.gateway.detail = None
 
         if self.has_saved_session():
             generation = self._intent_generation
+            gateway = self.service.gateway
+            try:
+                activate = getattr(gateway, "activate", None)
+                if callable(activate):
+                    activate()
+            except Exception:
+                gateway.stop()
+                gateway.state = "ERROR"
+                gateway.detail = "Gespeicherte WhatsApp-Verbindung konnte nicht gestartet werden."
+                LOGGER.warning("Could not activate registered WhatsApp session", exc_info=True)
+                return
             threading.Thread(
                 target=self._resume_saved_session,
                 args=(generation,),
@@ -64,26 +75,40 @@ class WhatsAppConnectionLifecycle:
             return False
 
     def _resume_saved_session(self, generation: int) -> None:
-        # Serialize resume with explicit connect/disconnect/reset. If reset wins
-        # first, the generation changes and this stale task becomes a no-op. If
-        # resume wins first, reset waits and then deterministically wins last.
+        last_error: Exception | None = None
+        for delay in AUTO_RESUME_DELAYS:
+            if delay:
+                time.sleep(delay)
+            with self._lock:
+                if generation != self._intent_generation or not self.has_saved_session():
+                    return
+                gateway = self.service.gateway
+
+            ok, detail = gateway.dependency_status()
+            if not ok:
+                with self._lock:
+                    if generation != self._intent_generation or not self.has_saved_session():
+                        return
+                    gateway.stop()
+                    gateway.state = "DEPENDENCY_MISSING"
+                    gateway.detail = detail
+                return
+
+            try:
+                gateway.command("connect", timeout=15)
+                return
+            except Exception as exc:
+                last_error = exc
+                LOGGER.info("Registered WhatsApp session resume attempt failed", exc_info=True)
+
         with self._lock:
             if generation != self._intent_generation or not self.has_saved_session():
                 return
             gateway = self.service.gateway
-            ok, detail = gateway.dependency_status()
-            if not ok:
-                gateway.state = "DEPENDENCY_MISSING"
-                gateway.detail = detail
-                return
-            try:
-                gateway.command("connect", timeout=15)
-            except Exception:
-                if generation == self._intent_generation:
-                    gateway.stop()
-                    gateway.state = "ERROR"
-                    gateway.detail = "Gespeicherte WhatsApp-Verbindung konnte nicht wiederhergestellt werden."
-                LOGGER.warning("Could not resume registered WhatsApp session", exc_info=True)
+            gateway.stop()
+            gateway.state = "ERROR"
+            gateway.detail = "Gespeicherte WhatsApp-Verbindung konnte nicht wiederhergestellt werden."
+        LOGGER.warning("Could not resume registered WhatsApp session: %s", last_error)
 
     def _clear_qr(self) -> None:
         self._qr_source = None
@@ -116,8 +141,6 @@ class WhatsAppConnectionLifecycle:
             state = raw_state
             detail = payload.get("detail")
 
-            # QR material is never surfaced unless this process recorded an
-            # explicit user request to establish a new pairing.
             if raw_state == "QR_REQUIRED" and not self._pairing_requested:
                 state = "AUTH_REQUIRED"
                 detail = "Die gespeicherte WhatsApp-Anmeldung muss neu eingerichtet werden."
@@ -159,7 +182,6 @@ class WhatsAppConnectionLifecycle:
                 self._pairing_requested = False
                 return self.status()
 
-            # Existing registered credentials mean reconnect, not new pairing.
             self._pairing_requested = not self.has_saved_session()
             if self._pairing_requested:
                 self._clear_qr()
@@ -190,8 +212,6 @@ class WhatsAppConnectionLifecycle:
             try:
                 self.service.disconnect()
             finally:
-                # Also invalidates every process-restart watcher, including one
-                # that is currently sleeping after a worker crash.
                 gateway.stop()
             gateway.detail = None
             gateway.state = "DISCONNECTED" if had_saved_session else "NOT_CONFIGURED"
@@ -224,12 +244,11 @@ class WhatsAppConnectionLifecycle:
             raise RuntimeError("WhatsApp-Verbindungsdaten konnten nicht vollständig gelöscht werden") from last_error
 
     def reset(self) -> dict[str, Any]:
-        """Stop all connection intent and delete the complete local auth state.
+        """Stop connection intent and delete the complete local Baileys auth state.
 
-        Baileys credentials, Signal keys and app-state material form one session,
-        so reset removes the complete auth tree. Messages, media and chat history
-        live in separate stores and are intentionally preserved. No connection is
-        started again until a later explicit connect request.
+        Messages, media and chat history live outside the Baileys auth state and
+        are preserved. Session-bound pending ingress is quarantined before auth
+        deletion so it can never be replayed into a newly paired account.
         """
         with self._lock:
             self._intent_generation += 1
@@ -245,9 +264,12 @@ class WhatsAppConnectionLifecycle:
                         "WhatsApp remote logout failed; local auth state will still be reset",
                         exc_info=True,
                     )
-            # Hard stop even when proc is already None. Gateway.stop() invalidates
-            # sleeping crash watchers through desired-state + generation changes.
             gateway.stop()
+            abandon = getattr(gateway, "discard_pending_ingress", None)
+            if callable(abandon):
+                moved = abandon(reason="reset")
+                if moved:
+                    LOGGER.warning("Quarantined %s pending WhatsApp ingress event(s) during reset", moved)
 
             try:
                 self._delete_auth_state()

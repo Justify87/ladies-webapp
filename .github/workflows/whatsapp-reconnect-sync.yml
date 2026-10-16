@@ -1,0 +1,29 @@
+name: WhatsApp reconnect sync
+
+on:
+  pull_request:
+    paths:
+      - 'ladies/messaging/**'
+      - 'tools/check_whatsapp_reconnect_sync.py'
+      - '.github/workflows/whatsapp-reconnect-sync.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reconnect-sync:
+    name: Reconnect and catch-up regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python syntax
+        run: python -m compileall -q ladies/messaging tools/check_whatsapp_reconnect_sync.py
+      - name: Worker syntax
+        run: node --check ladies/messaging/whatsapp_worker/worker_v2.mjs
+      - name: Verify reconnect and durable catch-up
+        run: python tools/check_whatsapp_reconnect_sync.py
