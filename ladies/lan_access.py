@@ -16,13 +16,7 @@ SESSION_TOUCH_INTERVAL = timedelta(minutes=5)
 
 
 class LanAccessManager:
-    """Pair LAN devices without reusing the pairing secret as session cookie.
-
-    Existing V9.5 ``lan_access_token`` cookies remain valid as a migration-only
-    legacy session. The raw legacy token is replaced by its hash and the old file
-    is removed. New pairings receive independent random device sessions. The
-    pairing token rotates on every server start while device sessions survive.
-    """
+    """Pair LAN devices with process-scoped pairing tokens and persistent device sessions."""
 
     def __init__(self, data_dir: str | Path):
         self.root = Path(data_dir)
@@ -72,14 +66,12 @@ class LanAccessManager:
             else:
                 state.setdefault("legacy_session_hash", None)
 
-        # Pairing credentials are per application start and are not browser
-        # sessions. A new process always gets a fresh pairing token.
+        # Pairing tokens are process-scoped, not browser sessions.
         state["pairing_token"] = secrets.token_urlsafe(32)
         self._trim_sessions(state)
         self._write(state)
 
-        # Once the legacy value has been persisted as a one-way hash, keeping the
-        # original reusable token on disk only increases credential exposure.
+        # Remove reusable plaintext credentials after storing their one-way hash.
         if legacy:
             try:
                 self.legacy_path.unlink()
@@ -129,7 +121,7 @@ class LanAccessManager:
 
     def pair(self, token: str) -> str | None:
         with self._lock:
-            if not hmac.compare_digest(str(token), str(self._state["pairing_token"])):
+            if not token or not hmac.compare_digest(token, str(self._state.get("pairing_token") or "")):
                 return None
             session = secrets.token_urlsafe(48)
             digest = self._hash(session)
@@ -142,34 +134,31 @@ class LanAccessManager:
             self._write(self._state)
             return session
 
-    def validate_session(self, session: str | None) -> bool:
-        if not session:
+    def valid_session(self, token: str | None) -> bool:
+        if not token:
             return False
-        digest = self._hash(str(session))
+        digest = self._hash(token)
         with self._lock:
-            legacy = self._state.get("legacy_session_hash")
-            if legacy and hmac.compare_digest(digest, str(legacy)):
-                return True
-            sessions = self._state.get("sessions") or {}
-            row = sessions.get(digest)
-            if not isinstance(row, dict):
-                return False
-
-            now = datetime.now(timezone.utc)
-            previous = None
-            try:
-                previous_raw = str(row.get("last_seen_at") or "")
-                if previous_raw:
-                    previous = datetime.fromisoformat(previous_raw.replace("Z", "+00:00"))
-                    if previous.tzinfo is None:
-                        previous = previous.replace(tzinfo=timezone.utc)
-            except ValueError:
+            sessions = self._state.get("sessions")
+            if isinstance(sessions, dict) and digest in sessions:
+                row = sessions[digest]
+                now = datetime.now(timezone.utc)
                 previous = None
+                try:
+                    previous_raw = str(row.get("last_seen_at") or "")
+                    if previous_raw:
+                        previous = datetime.fromisoformat(previous_raw)
+                except (TypeError, ValueError):
+                    previous = None
+                if previous is None or now - previous >= SESSION_TOUCH_INTERVAL:
+                    row["last_seen_at"] = now.isoformat()
+                    self._write(self._state)
+                return True
+            legacy_hash = self._state.get("legacy_session_hash")
+            return bool(legacy_hash and hmac.compare_digest(digest, str(legacy_hash)))
 
-            # Keep the in-memory timestamp equal to the last persisted touch.
-            # Otherwise frequent requests would continuously move the comparison
-            # point and a busy session might never be written again.
-            if previous is None or now - previous.astimezone(timezone.utc) >= SESSION_TOUCH_INTERVAL:
-                row["last_seen_at"] = now.isoformat()
-                self._write(self._state)
-            return True
+    def revoke_all(self) -> None:
+        with self._lock:
+            self._state["sessions"] = {}
+            self._state["legacy_session_hash"] = None
+            self._write(self._state)
