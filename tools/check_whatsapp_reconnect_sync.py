@@ -88,6 +88,45 @@ def check_durable_catch_up() -> None:
         require(gateway.state == "CONNECTING", "non-final READY cannot complete reconnect")
 
 
+def check_catch_up_timeout_restarts() -> None:
+    namespace = gateway_namespace()
+    gateway_cls = namespace["WhatsAppGateway"]
+    globals_ = gateway_cls._watch_catch_up.__globals__
+    previous_timeout = globals_["CATCH_UP_TIMEOUT_SECONDS"]
+    previous_restarts = globals_["CATCH_UP_MAX_RESTARTS"]
+    globals_["CATCH_UP_TIMEOUT_SECONDS"] = 0.01
+    globals_["CATCH_UP_MAX_RESTARTS"] = 2
+
+    class Proc:
+        def __init__(self):
+            self.terminated = threading.Event()
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated.set()
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            gateway = gateway_cls(Path(tmp), Path(tmp) / "whatsapp" / "auth", lambda event: None)
+            proc = Proc()
+            gateway.proc = proc
+            gateway._desired_running = True
+            gateway._stopping = False
+            gateway._catch_up_active = True
+            gateway._transport_open = True
+            gateway._pending_sync_ready = False
+            gateway._catch_up_token = 7
+            gateway._arm_catch_up_watchdog(proc, 7)
+            wait_for(proc.terminated.is_set)
+            require(gateway._catch_up_restarts == 1, "missing READY causes a bounded reconnect attempt")
+            require(gateway.state == "RECONNECTING", "timeout never exposes an unverified CONNECTED state")
+    finally:
+        globals_["CATCH_UP_TIMEOUT_SECONDS"] = previous_timeout
+        globals_["CATCH_UP_MAX_RESTARTS"] = previous_restarts
+
+
 def check_service_propagates_persistence_failures() -> None:
     service = (ROOT / "ladies/messaging/service_v2.py").read_text(encoding="utf-8")
     history = service.split('if event_type == "history_batch":', 1)[1].split('if event_type == "history_metadata":', 1)[0]
@@ -188,6 +227,7 @@ def check_saved_session_resume() -> None:
 if __name__ == "__main__":
     check_worker_batch_contract()
     check_durable_catch_up()
+    check_catch_up_timeout_restarts()
     check_service_propagates_persistence_failures()
     check_saved_session_resume()
     print("WhatsApp reconnect/sync checks passed")

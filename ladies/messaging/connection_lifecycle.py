@@ -39,7 +39,9 @@ class WhatsAppConnectionLifecycle:
             generation = self._intent_generation
             gateway = self.service.gateway
             try:
-                gateway.activate()
+                activate = getattr(gateway, "activate", None)
+                if callable(activate):
+                    activate()
             except Exception:
                 gateway.stop()
                 gateway.state = "ERROR"

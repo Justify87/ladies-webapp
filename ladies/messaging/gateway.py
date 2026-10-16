@@ -15,7 +15,21 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Callable
 
-from .provider_inbox import DURABLE_EVENT_TYPES, DurableProviderInbox
+try:
+    from .provider_inbox import DURABLE_EVENT_TYPES, DurableProviderInbox
+except ImportError:  # architecture checks execute this file directly via runpy
+    import importlib.util
+
+    _inbox_spec = importlib.util.spec_from_file_location(
+        "ladies_messaging_provider_inbox",
+        Path(__file__).with_name("provider_inbox.py"),
+    )
+    if _inbox_spec is None or _inbox_spec.loader is None:
+        raise
+    _inbox_module = importlib.util.module_from_spec(_inbox_spec)
+    _inbox_spec.loader.exec_module(_inbox_module)
+    DURABLE_EVENT_TYPES = _inbox_module.DURABLE_EVENT_TYPES
+    DurableProviderInbox = _inbox_module.DurableProviderInbox
 
 LOGGER = logging.getLogger("ladies_explorer.messaging.gateway")
 ALLOWED_STATES = {
