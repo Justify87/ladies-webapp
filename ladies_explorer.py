@@ -281,7 +281,7 @@ def ensure_javascript_dependencies(npm: str) -> None:
 
 
 def migrate_legacy_paths() -> None:
-    """One-time rename of local versioned defaults without losing user data."""
+    """Migrate local data paths without overwriting existing targets."""
     old_db = SCRIPT_DIR / "ladies_v9.sqlite3"
     new_db = SCRIPT_DIR / "ladies.sqlite3"
     if old_db.exists() and not new_db.exists():
