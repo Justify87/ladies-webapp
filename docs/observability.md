@@ -18,7 +18,7 @@ OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces
 
 Automatic instrumentation is limited to Flask requests and SQLAlchemy on the shared application engine. The existing application logs receive trace/span IDs for correlation, but OpenTelemetry log export is not enabled.
 
-Outbound HTTP is traced only at the three application-owned network boundaries (Ladies source access, map geocoding and media archive access). These manual `http.client` spans keep method, logical operation, scheme, host, status and safe error type only. They do not export URL paths/query strings, headers, bodies or exception messages/stack traces.
+Outbound HTTP is traced only at the application-owned network boundaries (Ladies source access, map geocoding and media archive access). These manual client spans keep method, a normalized low-cardinality operation name, scheme, host, status and safe error type only. They do not export URL paths/query strings, headers, bodies or exception messages/stack traces.
 
 `BackgroundTasks` captures the current trace context explicitly when a job is submitted and creates one `background.task` child span with only task type and queue wait time. OpenTelemetry does not globally patch `threading` or `ThreadPoolExecutor`, so long-lived WhatsApp and scheduler threads cannot inherit an unrelated request trace.
 
