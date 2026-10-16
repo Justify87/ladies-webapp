@@ -1,0 +1,95 @@
+name: Rebase observability onto current main
+
+on:
+  push:
+    branches: [feat/minimal-observability-rebase]
+
+permissions:
+  contents: write
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/minimal-observability-rebase
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v10.3.0
+      - name: Reapply observability on current main
+        shell: bash
+        run: |
+          git fetch origin feat/minimal-observability
+          for file in \
+            .github/workflows/observability.yml \
+            docs/observability.md \
+            ladies/app.py \
+            ladies/background.py \
+            ladies/media.py \
+            ladies/messaging/gateway.py \
+            ladies/observability.py \
+            ladies/pricing/model_runtime.py \
+            ladies/profiling.py \
+            ladies/source.py \
+            ladies_explorer.py \
+            pyproject.toml \
+            tools/check_observability.py
+          do
+            git show "origin/feat/minimal-observability:${file}" > "${file}"
+          done
+
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"Expected snippet missing in {path}: {old[:120]!r}")
+              file.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          path = Path("tools/check_observability.py")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace(
+              'map_service = (ROOT / "ladies/core/services/map.py").read_text(encoding="utf-8")',
+              'map_service = (ROOT / "ladies/core/services/map_locations.py").read_text(encoding="utf-8")',
+          )
+          path.write_text(text, encoding="utf-8")
+
+          replace(
+              "ladies/core/services/map_locations.py",
+              "from ladies_v9.source import FixedRateLimiter\n",
+              "from ladies_v9.observability import traced_http_call\nfrom ladies_v9.source import FixedRateLimiter\n",
+          )
+          replace(
+              "ladies/core/services/map_locations.py",
+              "        response = self._http.get(ZIPPOPOTAM_URL.format(postal_code=postal_code), timeout=6)\n",
+              "        url = ZIPPOPOTAM_URL.format(postal_code=postal_code)\n        response = traced_http_call(\n            \"GET\",\n            url,\n            operation=\"map.postal\",\n            call=lambda: self._http.get(url, timeout=6),\n        )\n",
+          )
+          replace(
+              "ladies/core/services/map_locations.py",
+              "        response = self._http.get(\n            NOMINATIM_URL,\n            params={\n                \"q\": f\"{spec['value']}, Germany\",\n                \"format\": \"jsonv2\",\n                \"limit\": 1,\n                \"countrycodes\": \"de\",\n            },\n            timeout=8,\n        )\n",
+              "        response = traced_http_call(\n            \"GET\",\n            NOMINATIM_URL,\n            operation=\"map.city\",\n            call=lambda: self._http.get(\n                NOMINATIM_URL,\n                params={\n                    \"q\": f\"{spec['value']}, Germany\",\n                    \"format\": \"jsonv2\",\n                    \"limit\": 1,\n                    \"countrycodes\": \"de\",\n                },\n                timeout=8,\n            ),\n        )\n",
+          )
+          PY
+
+          uv lock
+          uv run --locked python -m compileall -q ladies tools/check_observability.py
+          uv run --locked python tools/check_observability.py
+          uv run --locked python tools/check_map_view.py
+
+      - name: Commit rebased implementation
+        shell: bash
+        run: |
+          git add .github/workflows/observability.yml docs/observability.md ladies ladies_explorer.py pyproject.toml tools/check_observability.py uv.lock
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Rebase minimal observability onto current main"
+          git push
