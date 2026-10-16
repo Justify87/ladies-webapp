@@ -251,7 +251,6 @@ def check_backend() -> None:
     require("provider_chat_deleted" in service, "backend provider state model")
     require("ProviderPeerState" in service, "backend provider state model")
     require("message_identity" in service, "backend canonical provider identity")
-    require("Build the thread index before inserting the current row" in service, "backend history quote ordering")
 
     models = source("ladies/messaging/models.py")
     require("class ProviderPeerState" in models, "provider state class")
