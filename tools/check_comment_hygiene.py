@@ -135,7 +135,8 @@ def code_files() -> list[Path]:
     for path in ROOT.rglob("*"):
         if not path.is_file():
             continue
-        if any(part in EXCLUDED_PARTS for part in path.parts):
+        relative = path.relative_to(ROOT)
+        if any(part in EXCLUDED_PARTS for part in relative.parts):
             continue
         if path.suffix.lower() in CODE_SUFFIXES or _is_shebang_script(path):
             files.append(path)
