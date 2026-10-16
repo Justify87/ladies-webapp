@@ -16,8 +16,10 @@ from .map_view import install_map_view
 from .messaging import install_messaging
 from .messaging.integration import merge_messaging_person, reconcile_identity_events as reconcile_messaging_identity_events
 from .messaging.scope import hydrate_ladies_history, reconcile_ladies_endpoints
+from .observability import init_observability
 from .pricing import install_pricing
 from .pricing.integration import merge_pricing_person, reconcile_identity_events as reconcile_pricing_identity_events
+from .profiling import install_request_profiling
 from .saved_searches import install_saved_searches
 from .search_preview import install_search_preview
 from .web import create_app as create_core_app
@@ -142,6 +144,13 @@ def create_app(
     app.config["APP_VERSION"] = public_config["version"]
     app.config["FRONTEND_CONFIG"] = public_config
 
+    database = app.extensions["ladies_database"]
+    init_observability(app, database.engine, service_version=public_config["version"])
+    install_request_profiling(
+        app,
+        default_dir=Path(data_dir).resolve().parent / "logs" / "profiles",
+    )
+
     @app.get("/api/config")
     def api_config():
         return jsonify(public_config)
@@ -197,7 +206,6 @@ def create_app(
         )
         return response
 
-    database = app.extensions["ladies_database"]
     repositories = app.extensions["ladies_repositories"]
     saved_search_scheduler = install_saved_searches(
         app,

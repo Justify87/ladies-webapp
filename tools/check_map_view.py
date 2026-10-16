@@ -22,6 +22,8 @@ class FixedRateLimiter:
 
 
 source.FixedRateLimiter = FixedRateLimiter
+observability = types.ModuleType("ladies_v9.observability")
+observability.traced_http_call = lambda _method, _url, *, operation, call: call()
 ladies_v9 = types.ModuleType("ladies_v9")
 
 orjson = types.ModuleType("orjson")
@@ -54,6 +56,7 @@ requests.RequestException = RequestException
 requests.Session = Session
 sys.modules.update({
     "ladies_v9": ladies_v9,
+    "ladies_v9.observability": observability,
     "ladies_v9.source": source,
     "orjson": orjson,
     "requests": requests,
