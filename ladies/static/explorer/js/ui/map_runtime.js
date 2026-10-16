@@ -212,7 +212,7 @@ export function createDiscoverMapRuntime({target,onSelectLocation,onClearSelecti
 
   const mount=()=>{
     if(mountPromise)return mountPromise;
-    mountPromise=lifecycle.run(target,async scope=>{
+    const attempt=lifecycle.run(target,async scope=>{
       const runtime={map:null,lib:null,resizeObserver:null,lastSignature:null,userOwnsCamera:false};
       current=runtime;
       scope.cleanup(()=>{
@@ -262,6 +262,10 @@ export function createDiscoverMapRuntime({target,onSelectLocation,onClearSelecti
           return runtime;
         },
       });
+    });
+    mountPromise=attempt.catch(error=>{
+      mountPromise=null;
+      throw error;
     });
     return mountPromise;
   };
