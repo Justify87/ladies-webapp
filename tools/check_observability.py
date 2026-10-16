@@ -199,7 +199,7 @@ def check_tracing() -> None:
             "observability-success",
             "profile",
         }
-        assert all(str(span.kind.name) == "CLIENT" for span in http_spans)
+        assert all(span.kind.name == "CLIENT" for span in http_spans)
         failed_span = next(
             span for span in http_spans if span.attributes.get("http.operation") == "profile"
         )
@@ -215,8 +215,9 @@ def check_tracing() -> None:
             "failed-secret",
             "header-secret",
             "inbound-header-secret",
+            "profile-123456",
         ):
-            assert secret not in captured, f"Sensitive value leaked into spans/events: {secret}"
+            assert secret not in captured, f"Sensitive/high-cardinality value leaked into spans/events: {secret}"
         assert "observability-log" in log_stream.getvalue()
         assert "[trace=" in log_stream.getvalue() and " span=" in log_stream.getvalue()
 
