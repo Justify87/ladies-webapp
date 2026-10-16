@@ -96,17 +96,11 @@ export function reducer(state=initialState, action={}) {
     case 'PROFILE_LOADING':
       return updateMappedSlice(state, 'profiles', 'loading', {[String(action.key)]: Boolean(action.value)});
     case 'PROFILE_TAB':
-      return updateMappedSlice(state, 'profileUi', 'tabByPerson', {
-        [String(action.personId)]: action.tab,
-      });
+      return updateMappedSlice(state, 'profileUi', 'tabByPerson', {[String(action.personId)]: action.tab});
     case 'PROFILE_MEDIA':
-      return updateMappedSlice(state, 'profileUi', 'mediaByPerson', {
-        [String(action.personId)]: Number(action.index || 0),
-      });
+      return updateMappedSlice(state, 'profileUi', 'mediaByPerson', {[String(action.personId)]: Number(action.index || 0)});
     case 'PROFILE_EXPANDED':
-      return updateMappedSlice(state, 'profileUi', 'expandedByPerson', {
-        [String(action.personId)]: Boolean(action.value),
-      });
+      return updateMappedSlice(state, 'profileUi', 'expandedByPerson', {[String(action.personId)]: Boolean(action.value)});
     case 'PERSON_STATE_SYNC': {
       const pid=Number(action.personId);
       const patch=action.userState || {};
