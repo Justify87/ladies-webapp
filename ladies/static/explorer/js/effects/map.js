@@ -23,7 +23,12 @@ function errorBackoff(attempt){
   return Math.min(ERROR_RETRY_MAX_MS,ERROR_RETRY_MIN_MS*(2**Math.min(3,Math.max(0,attempt-1))));
 }
 
-export function createMapEffects({store,mapPoints=api.mapPoints}) {
+export function createMapEffects({
+  store,
+  mapPoints=api.mapPoints,
+  setTimer=setTimeout,
+  clearTimer=clearTimeout,
+}={}) {
   let generation=0;
   let timer=null;
   let timerKey=null;
@@ -31,23 +36,23 @@ export function createMapEffects({store,mapPoints=api.mapPoints}) {
   let errorAttempts=0;
   const unsubscribeProjection=subscribeMapProjectionChanges(()=>invalidateMapProjection(store));
 
-  const clearTimer=()=>{
-    clearTimeout(timer);
+  const clearScheduledRetry=()=>{
+    if(timer!==null)clearTimer(timer);
     timer=null;
     timerKey=null;
   };
 
   const cancel=()=>{
     generation+=1;
-    clearTimer();
+    clearScheduledRetry();
     partialAttempts=0;
     errorAttempts=0;
   };
 
   const scheduleRetry=(requested,revision,delay)=>{
-    clearTimer();
+    clearScheduledRetry();
     timerKey=requested.key;
-    timer=setTimeout(()=>{
+    timer=setTimer(()=>{
       timer=null;
       timerKey=null;
       const state=store.getState();
@@ -75,10 +80,10 @@ export function createMapEffects({store,mapPoints=api.mapPoints}) {
     const sameKey=current.key===requested.key;
     if(!force&&sameKey&&current.loading)return current.points||null;
     if(!force&&sameKey&&!current.stale&&current.points&&!pending&&!current.error)return current.points;
-    if(!force&&sameKey&&timer&&timerKey===requested.key&&(pending>0||current.error))return current.points||null;
+    if(!force&&sameKey&&!current.stale&&timer!==null&&timerKey===requested.key&&(pending>0||current.error))return current.points||null;
 
     const sequence=++generation;
-    clearTimer();
+    clearScheduledRetry();
     store.dispatch({type:'DISCOVER_MAP_LOADING',key:requested.key,value:true});
 
     try{
