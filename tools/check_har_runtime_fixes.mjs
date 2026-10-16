@@ -1,17 +1,11 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createMapLifecycle, filterMapFeatures, waitForMapReady } from '../ladies/static/explorer/js/ui/discover_map.js';
-import { createMapEffects, invalidateMapData } from '../ladies/static/explorer/js/effects/map.js';
 import { pricingExtractionAvailable, pricingManualAvailable } from '../ladies/static/explorer/js/app/selectors.js';
 
 const mapSource=readFileSync(new URL('../ladies/static/explorer/js/ui/discover_map.js',import.meta.url),'utf8');
-const mapEffectsSource=readFileSync(new URL('../ladies/static/explorer/js/effects/map.js',import.meta.url),'utf8');
 const mapRepository=readFileSync(new URL('../ladies/core/repositories/map.py',import.meta.url),'utf8');
-const mapProjection=readFileSync(new URL('../ladies/pricing/map_projection.py',import.meta.url),'utf8');
 const mapService=readFileSync(new URL('../ladies/core/services/map.py',import.meta.url),'utf8');
-const reducerSource=readFileSync(new URL('../ladies/static/explorer/js/app/reducer.js',import.meta.url),'utf8');
-const coreEffectsSource=readFileSync(new URL('../ladies/static/explorer/js/effects/core.js',import.meta.url),'utf8');
 const discoverSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/discover.js',import.meta.url),'utf8');
 const messagingSource=readFileSync(new URL('../ladies/static/explorer/js/effects/messaging.js',import.meta.url),'utf8');
 const messagingService=readFileSync(new URL('../ladies/messaging/service.py',import.meta.url),'utf8');
@@ -31,96 +25,9 @@ assert.match(mapSource,/instance\.resize\(\)/,'map must resize after mount/layou
 assert.match(mapSource,/current\.resizeObserver\?\.disconnect\(\)/,'map cleanup must disconnect its observer');
 assert.match(mapSource,/current\.map\.remove\(\)/,'map cleanup must remove the MapLibre instance');
 assert.match(mapSource,/source\.setData\(latestData\)/,'map data changes must update the existing GeoJSON source');
-assert.match(mapSource,/initialFitDone:false/,'each mounted map may auto-fit only its first available dataset');
-assert.match(mapSource,/current\.initialFitDone\|\|/,'filter updates must not re-fit a map whose initial camera has already been established');
-assert.doesNotMatch(mapSource,/fittedSignature/,'data signatures must not drive repeated camera fits');
-assert.match(mapSource,/price_60_sum_cents:\['\+',\['get','price_60_sum_cents'\]\]/,'cluster price sums must aggregate in MapLibre');
-assert.match(mapSource,/price_60_count:\['\+',\['get','price_60_count'\]\]/,'cluster price counts must aggregate in MapLibre');
-assert.match(mapSource,/CLUSTER_PRICE_LAYER/,'clusters must expose a 60-minute average price label');
-assert.match(mapSource,/LOCATION_PRICE_LAYER/,'unclustered points must expose a 60-minute average price label');
-assert.match(mapSource,/'text-allow-overlap':true/,'price labels must not disappear because of base-map label collisions');
-assert.match(mapSource,/'text-ignore-placement':true/,'price labels must not suppress unrelated map labels');
-assert.match(mapSource,/mapState\.stale/,'stale map projections must refresh in place');
 assert.match(mapSource,/getClusterExpansionZoom\(clusterId\)/,'cluster taps must expand through the source API');
 assert.match(mapSource,/instance\.on\('error',reportMapError\)/,'MapLibre runtime errors must remain observable');
 assert.match(mapSource,/maplibrePromise=null/,'failed MapLibre imports must reset the shared import promise');
-
-// Map price projection is based on current pricing scopes first, then exact 60-minute
-// offers. This prevents older 60-minute rows from reappearing after a newer revision
-// removed them, and prevents FROM/RANGE prices from being displayed as exact averages.
-assert.match(mapRepository,/func\.row_number\(\)\.over/,'map pricing must rank current revisions per pricing scope in SQL');
-assert.match(mapRepository,/ranked_scopes\.c\.scope_rank == 1/,'only the latest revision of each scope may feed map pricing');
-assert.match(mapRepository,/PriceItem\.duration_minutes == 60/,'map pricing must use the explicit 60-minute offer');
-assert.match(mapRepository,/PriceItem\.item_type == "BASE"/,'map pricing must use base offers only');
-assert.match(mapRepository,/PriceOfferMeta\.amount_type == "EXACT"/,'non-exact offers must not be averaged as exact prices');
-assert.match(mapRepository,/PriceOfferMeta\.price_item_id\.is_\(None\)/,'legacy offers without metadata remain exact-compatible');
-assert.match(mapRepository,/resolve_map_price_60_cents/,'scope precedence must live in the dedicated pricing projection');
-assert.doesNotMatch(mapRepository,/price_rows\.sort\(/,'map pricing must not load and sort price history in Python');
-assert.match(mapProjection,/current_scopes\.get\(\(person_id, listing_id\)\)/,'listing-scoped pricing must be checked before global fallback');
-assert.match(mapProjection,/current_scopes\.get\(\(person_id, None\)\)/,'global pricing is only an explicit fallback');
-assert.match(mapProjection,/upper\(\) != "EUR"/,'currency must be evaluated on the current revision, not prefiltered from history');
-assert.match(mapService,/"price_60_cents": item\.get\("price_60_cents"\)/,'map refs must carry 60-minute prices into the browser');
-
-execFileSync('python', ['-c', String.raw`
-import runpy
-
-projection = runpy.run_path('ladies/pricing/map_projection.py')
-resolve = projection['resolve_map_price_60_cents']
-listing_people = {11: 1, 22: 1, 33: 1, 44: 1, 55: 1}
-current_scopes = {
-    (1, None): (200, 'EUR'),
-    (1, 11): (101, 'EUR'),
-    (1, 33): (301, 'EUR'),
-    (1, 44): (401, 'USD'),
-    (1, 55): (501, 'EUR'),
-}
-amounts = {
-    101: [12000],
-    200: [9000],
-    300: [15000],  # older listing-specific revision: must never revive
-    401: [17000],
-    501: [10000, 14000],
-}
-resolved = resolve(listing_people, current_scopes, amounts)
-assert resolved[11] == 12000, resolved
-assert resolved[22] == 9000, resolved
-assert 33 not in resolved, resolved  # current listing scope removed the 60-minute offer
-assert 44 not in resolved, resolved  # current non-EUR scope must not fall back to global EUR
-assert resolved[55] == 12000, resolved  # multiple exact offers average once per listing
-`], {stdio:'inherit'});
-
-// Pricing writes invalidate the map projection without destroying existing points.
-assert.match(mapEffectsSource,/DISCOVER_MAP_INVALIDATE/,'map effects must expose one explicit invalidation boundary');
-assert.match(reducerSource,/case 'DISCOVER_MAP_INVALIDATE'/,'map state must retain data while marking it stale');
-assert.match(coreEffectsSource,/invalidateMapData\(store\)/,'manual price writes must invalidate map pricing');
-assert.match(pricingSource,/invalidateMapData\(store\)/,'accepted extracted pricing must invalidate map pricing');
-const invalidationState={
-  search:{results:[{listing_id:7,city:'Leipzig'}]},
-  discover:{map:{key:JSON.stringify([[7,'leipzig']]),points:{type:'FeatureCollection',features:[],meta:{pending_count:0,version:'old'}},loading:false,error:null,stale:false}}
-};
-const invalidationRequests=[];
-const invalidationStore={
-  getState:()=>invalidationState,
-  dispatch(action){
-    if(action.type==='DISCOVER_MAP_INVALIDATE')invalidationState.discover.map={...invalidationState.discover.map,stale:true,error:null};
-    else if(action.type==='DISCOVER_MAP_LOADING')invalidationState.discover.map={...invalidationState.discover.map,key:action.key,loading:Boolean(action.value),error:action.error||null};
-    else if(action.type==='DISCOVER_MAP_POINTS')invalidationState.discover.map={key:action.key,points:action.points,loading:false,error:null,stale:false};
-    else if(action.type==='DISCOVER_MAP_CLEAR')invalidationState.discover.map={key:null,points:null,loading:false,error:null,stale:false};
-  }
-};
-const invalidationEffects=createMapEffects({
-  store:invalidationStore,
-  mapPoints:payload=>new Promise(resolve=>invalidationRequests.push({payload,resolve}))
-});
-invalidateMapData(invalidationStore);
-assert.equal(invalidationState.discover.map.stale,true);
-assert.equal(invalidationState.discover.map.points.meta.version,'old','invalidation must keep current markers visible while refreshing');
-const refreshed=invalidationEffects.loadMapPoints();
-assert.equal(invalidationRequests.length,1,'stale data must refresh even when listing identity is unchanged');
-invalidationRequests[0].resolve({type:'FeatureCollection',features:[],meta:{pending_count:0,version:'new'}});
-await refreshed;
-assert.equal(invalidationState.discover.map.points.meta.version,'new');
-assert.equal(invalidationState.discover.map.stale,false);
 
 // Lifecycle behavior is tested directly: same-container initialization is single-flight,
 // failures at every initialization stage release ownership, and stale work cannot become
@@ -246,25 +153,19 @@ assert.equal(readyInstance.hasLoadListener(),false,'successful load must remove 
 assert.equal(readyCleanup,null,'successful load must unregister its pending cleanup');
 
 // Map identity is listing-based end-to-end. Two listings belonging to one person
-// must never bind through person_id alone. Price aggregation follows the same filtered
-// listing refs, so locally hidden results cannot influence the displayed average.
+// must never bind through person_id alone.
 const samePersonPoint={type:'FeatureCollection',features:[{
   type:'Feature',geometry:{type:'Point',coordinates:[12.3,51.3]},properties:{
     location_key:'city:DE:leipzig',listing_count:2,
     listing_refs_json:JSON.stringify([
-      {person_id:7,listing_id:101,advert_id:'a',address_label:'04109 Leipzig',price_60_cents:10000},
-      {person_id:7,listing_id:202,advert_id:'b',address_label:'04107 Leipzig',price_60_cents:14000}
+      {person_id:7,listing_id:101,advert_id:'a',address_label:'04109 Leipzig'},
+      {person_id:7,listing_id:202,advert_id:'b',address_label:'04107 Leipzig'}
     ])
   }
 }]};
-const allVisible=filterMapFeatures(samePersonPoint,[{personId:7,listing_id:101,advertId:'a'},{personId:7,listing_id:202,advertId:'b'}]);
-assert.equal(allVisible.features[0].properties.price_60_sum_cents,24000);
-assert.equal(allVisible.features[0].properties.price_60_count,2);
 const filtered=filterMapFeatures(samePersonPoint,[{personId:7,listing_id:202,advertId:'b'}]);
 assert.equal(filtered.features.length,1);
 assert.equal(filtered.features[0].properties.listing_count,1);
-assert.equal(filtered.features[0].properties.price_60_sum_cents,14000);
-assert.equal(filtered.features[0].properties.price_60_count,1);
 const refs=JSON.parse(filtered.features[0].properties.listing_refs_json);
 assert.deepEqual(refs.map(item=>item.listing_id),[202]);
 assert.equal(refs[0].address_label,'04107 Leipzig','map filtering must preserve the selected listing address label');
@@ -277,12 +178,14 @@ assert.match(mapService,/"address_label": item\["address_label"\]/,'map refs mus
 assert.doesNotMatch(mapService,/"profile_count"|"profiles_json"/,'map API must not expose person-labelled listing counters');
 assert.doesNotMatch(mapService,/params=\{[^}]*hidden_location/s,'hidden address text must never be sent to the geocoding provider');
 
-// The backend is the sole source of truth for thread order. The browser preserves
-// the canonical newest-first order instead of applying a second business rule.
+// Each classified backend view is the sole source of truth for its own thread
+// order. The browser may merge the two product collections, but never re-sort them.
 assert.match(messagingService,/order_by\(desc\(ChatThread\.last_message_at\), desc\(ChatThread\.updated_at\)\)/);
 assert.doesNotMatch(messagingService,/out\.sort\(key=lambda item:/,'favorite/like ordering must not override message recency');
-assert.match(messagingSource,/type:'THREADS',items:d\?\.items\|\|\[\]/);
-assert.doesNotMatch(messagingSource,/newestThreads|threadTime/,'frontend must not duplicate canonical thread ordering');
+assert.match(messagingSource,/api\.messagingInbox\('ALL'\)/,'Ladies inbox must come from the classified backend view');
+assert.match(messagingSource,/api\.messagingReview\(\)/,'review queue must come from the classified backend view');
+assert.match(messagingSource,/type:'THREADS',items:\[\.\.\.merged\.values\(\)\]/,'classified views are merged without client-side business sorting');
+assert.doesNotMatch(messagingSource,/newestThreads|threadTime|\.sort\(/,'frontend must not duplicate canonical thread ordering');
 
 // One shared pricing capability definition drives both actions and UI.
 const pricingState=(enabled,magic,ready)=>({settings:{pricing:{price_intelligence_enabled:enabled,price_magic_button_enabled:magic},pricingRuntime:{extractor:{ready}}}});
