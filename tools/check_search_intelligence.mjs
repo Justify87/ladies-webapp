@@ -217,14 +217,15 @@ assert opened['person_id']==99 and search.materialized==['10']
 
 execFileSync('python', ['tools/check_map_view.py'], {stdio:'inherit'});
 
-// Message filters are local views over one canonical all-thread collection.
+// Message views project one classified product collection. UNKNOWN and NON_LADIES
+// must never contribute to the global Ladies unread badge.
 const messageState={messaging:{query:'',viewFilter:'UNASSIGNED',threads:[
-  {thread_id:1,person_id:11,display_name:'A',unread_count:2},
-  {thread_id:2,person_id:22,display_name:'B',unread_count:3},
-  {thread_id:3,person_id:null,display_name:'C',unread_count:1}
+  {thread_id:1,person_id:11,classification:'LADIES_CONFIRMED',display_name:'A',unread_count:2},
+  {thread_id:2,person_id:22,classification:'LADIES_CONFIRMED',display_name:'B',unread_count:3},
+  {thread_id:3,person_id:null,classification:'UNKNOWN',display_name:'C',unread_count:1}
 ]}};
-assert.deepEqual(threadRows(messageState).map(row=>row.threadId),[3],'UNASSIGNED must only filter the visible list locally');
-assert.equal(unreadTotal(messageState),6,'global unread count must still include threads hidden by the active view filter');
+assert.deepEqual(threadRows(messageState).map(row=>row.threadId),[3],'UNASSIGNED must only filter the visible review queue locally');
+assert.equal(unreadTotal(messageState),5,'global unread count must include confirmed Ladies chats only');
 
 // Profile pricing must render every monetary component from the canonical proposal.
 const canonicalRows=canonicalPriceRows({

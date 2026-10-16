@@ -1,10 +1,10 @@
-"""Compatibility import for the canonical messaging router.
+"""Public messaging router entry point.
 
-The previous router coupled conversation access to current Ladies listing
-identity. The active implementation lives in routes_v2 and treats persisted
-messaging resources as authoritative.
+The canonical WhatsApp/internal conversation service remains independent from
+search/discovery state. Product visibility is applied by the durable
+classification layer in routes_classified.
 """
 
-from .routes_v2 import install_messaging
+from .routes_classified import install_messaging
 
 __all__ = ["install_messaging"]

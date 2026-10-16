@@ -1,6 +1,7 @@
 from .profile_requests import install_profile_requests
 from .routes import install_messaging as _install_messaging
-from .service_v2 import MessagingService, jid_phone
+from .service_classified import MessagingService
+from .service_v2 import jid_phone
 
 # Baileys includes ``last_seen`` on presence events. Preserve it as transient
 # provider state without coupling it to persistent profile/discovery state.
