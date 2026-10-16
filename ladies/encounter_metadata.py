@@ -12,13 +12,7 @@ from .models import Base
 
 
 class EncounterUserData(Base):
-    """User-entered evaluation fields that belong to one concrete encounter.
-
-    The core Encounter model already owns ratings, duration and pricing. This
-    one-to-one extension moves the formerly person-global repeat-interest and
-    private note into the same encounter aggregate without rewriting the
-    existing encounters table in portable installations.
-    """
+    """User-entered evaluation fields for one encounter."""
 
     __tablename__ = "encounter_user_data"
 
@@ -58,12 +52,7 @@ def _encounter_list(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def install_encounter_metadata(app, *, database) -> None:
-    """Attach encounter-scoped repeat-interest/private-note to existing APIs.
-
-    Existing encounter POST/PUT endpoints keep owning the main Encounter row.
-    This hook persists the two formerly person-global fields after a successful
-    write and enriches encounter responses/read models with them.
-    """
+    """Persist encounter-scoped repeat interest and private notes through the encounter API."""
 
     @app.after_request
     def encounter_user_data(response):
