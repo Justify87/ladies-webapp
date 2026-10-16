@@ -1,0 +1,40 @@
+name: Apply WhatsApp review fixes
+
+on:
+  push:
+    branches:
+      - fix/whatsapp-reconnect-sync
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/whatsapp-reconnect-sync
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply architectural fixes
+        run: python tools/_apply_whatsapp_review_fixes.py
+      - name: Validate focused architecture
+        run: |
+          python -m compileall -q ladies/messaging tools/check_whatsapp_reconnect_sync.py
+          node --check ladies/messaging/whatsapp_worker/worker_v2.mjs
+          python tools/check_whatsapp_reconnect_sync.py
+          python tools/check_messaging_architecture.py backend
+          python tools/check_messaging_architecture.py worker
+      - name: Commit clean result
+        run: |
+          rm tools/_apply_whatsapp_review_fixes.py
+          rm .github/workflows/_apply-whatsapp-review-fixes.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Complete durable WhatsApp catch-up barrier'
+          git push origin HEAD:fix/whatsapp-reconnect-sync
