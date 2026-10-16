@@ -1,7 +1,6 @@
 import { api } from '../api/client.js';
 import * as S from '../app/selectors.js';
 import { filterPayload, profileBundleVm, formEnumWireValue } from '../data/adapters.js';
-import { invalidateMapData } from './map.js';
 
 const SEARCH_RADII=[5,10,20,30,50,70,100];
 const normalizeRadius=value=>SEARCH_RADII.includes(Number(value))?Number(value):20;
@@ -343,7 +342,7 @@ export function createCoreEffects({store,router,onPrefetchedProfile=null}) {
 
   async function addPrice(form) {
     const personId=Number(form.dataset.personId),fd=new FormData(form);
-    try { await api.addPriceList(personId,{source:'USER_ENTERED',items:[{item_type:'BASE',duration_minutes:fd.get('minutes')||null,amount_eur:fd.get('amount'),label:fd.get('label')||null}]});invalidateMapData(store);store.dispatch({type:'SHEET',value:null});await Promise.all([loadPerson(personId,{force:true}),loadDashboard()]);toast('Preisliste gespeichert'); }
+    try { await api.addPriceList(personId,{source:'USER_ENTERED',items:[{item_type:'BASE',duration_minutes:fd.get('minutes')||null,amount_eur:fd.get('amount'),label:fd.get('label')||null}]});store.dispatch({type:'SHEET',value:null});await Promise.all([loadPerson(personId,{force:true}),loadDashboard()]);toast('Preisliste gespeichert'); }
     catch(error){toast(error.message);}
   }
 
