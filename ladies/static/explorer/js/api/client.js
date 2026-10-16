@@ -1,3 +1,5 @@
+import { notifyMapProjectionChanged } from '../shared/domain_events.js';
+
 const DEFAULT_HEADERS = Object.freeze({'Accept':'application/json'});
 
 export class ApiError extends Error {
@@ -37,6 +39,12 @@ export async function request(url, options={}) {
   return payload ?? response;
 }
 
+async function mapMutation(url,options={},reason='domain-mutation'){
+  const result=await request(url,options);
+  notifyMapProjectionChanged(reason);
+  return result;
+}
+
 export const api = Object.freeze({
   config: () => request('/api/config'),
   dashboard: () => request('/api/dashboard'),
@@ -48,7 +56,7 @@ export const api = Object.freeze({
   deleteSavedSearch: id => request(`/api/saved-searches/${encodeURIComponent(id)}`,{method:'DELETE'}),
   runSavedSearch: id => request(`/api/saved-searches/${encodeURIComponent(id)}/run`,{method:'POST'}),
   savedSearchResults: id => request(`/api/saved-searches/${encodeURIComponent(id)}/results`),
-  openSavedSearchResult: (id,resultKey) => request(`/api/saved-searches/${encodeURIComponent(id)}/results/${encodeURIComponent(resultKey)}/open`,{method:'POST'}),
+  openSavedSearchResult: (id,resultKey) => mapMutation(`/api/saved-searches/${encodeURIComponent(id)}/results/${encodeURIComponent(resultKey)}/open`,{method:'POST'},'saved-search-materialized'),
   acknowledgeSavedSearches: () => request('/api/saved-searches/acknowledge',{method:'POST'}),
   storage: () => request('/api/storage'),
   settings: () => request('/api/settings'),
@@ -56,19 +64,19 @@ export const api = Object.freeze({
   searchPreview: (payload, signal) => request('/api/search-preview',{method:'POST',body:payload,signal}),
   search: payload => request('/api/search',{method:'POST',body:payload}),
   mapPoints: payload => request('/api/map-points',{method:'POST',body:payload}),
-  profile: advertId => request(`/api/profile/${encodeURIComponent(advertId)}`),
+  profile: advertId => mapMutation(`/api/profile/${encodeURIComponent(advertId)}`,{},'profile-ingested'),
   profileClassification: advertId => request(`/api/profile-classification/${encodeURIComponent(advertId)}`),
   listing: advertId => request(`/api/listing/${encodeURIComponent(advertId)}`),
   person: personId => request(`/api/person/${encodeURIComponent(personId)}`),
   personState: (personId, patch) => request(`/api/person/${personId}/state`,{method:'POST',body:patch}),
-  addPriceList: (personId, payload) => request(`/api/person/${personId}/prices`,{method:'POST',body:payload}),
+  addPriceList: (personId, payload) => mapMutation(`/api/person/${personId}/prices`,{method:'POST',body:payload},'price-list-changed'),
   addEncounter: (personId, payload) => request(`/api/person/${personId}/encounters`,{method:'POST',body:payload}),
   updateEncounter: (personId, encounterId, payload) => request(`/api/person/${personId}/encounters/${encounterId}`,{method:'PUT',body:payload}),
   list: tab => request(`/api/lists/${encodeURIComponent(tab)}`),
   statusTargets: () => request('/api/status-targets'),
-  profileStatus: advertId => request(`/api/profile-status/${encodeURIComponent(advertId)}`,{method:'POST'}),
-  merge: (sourcePersonId,targetPersonId) => request('/api/identity/merge',{method:'POST',body:{source_person_id:sourcePersonId,target_person_id:targetPersonId}}),
-  split: listingId => request(`/api/listing-id/${listingId}/split`,{method:'POST'}),
+  profileStatus: advertId => mapMutation(`/api/profile-status/${encodeURIComponent(advertId)}`,{method:'POST'},'listing-status-refreshed'),
+  merge: (sourcePersonId,targetPersonId) => mapMutation('/api/identity/merge',{method:'POST',body:{source_person_id:sourcePersonId,target_person_id:targetPersonId}},'identity-merged'),
+  split: listingId => mapMutation(`/api/listing-id/${listingId}/split`,{method:'POST'},'identity-split'),
   snapshot: id => request(`/api/snapshot/${id}`),
   archiveMedia: (kind='',limit=100) => request(`/api/archive/media?kind=${encodeURIComponent(kind)}&limit=${encodeURIComponent(limit)}`),
   clearVisual: () => request('/api/visual-analysis',{method:'DELETE'}),
@@ -107,7 +115,7 @@ export const api = Object.freeze({
   pricingTimeline: (threadId,limit=100) => request(`/api/pricing/threads/${threadId}/timeline?limit=${limit}`),
   createPriceProposal: (threadId,payload) => request(`/api/pricing/threads/${threadId}/proposals`,{method:'POST',body:payload}),
   priceProposal: id => request(`/api/pricing/proposals/${id}`),
-  acceptPriceProposal: (id,payload) => request(`/api/pricing/proposals/${id}/accept`,{method:'POST',body:payload}),
+  acceptPriceProposal: (id,payload) => mapMutation(`/api/pricing/proposals/${id}/accept`,{method:'POST',body:payload},'pricing-accepted'),
   revisePriceProposal: id => request(`/api/pricing/proposals/${id}/revise`,{method:'POST'}),
   rejectPriceProposal: id => request(`/api/pricing/proposals/${id}/reject`,{method:'POST'}),
   currentPricing: personId => request(`/api/pricing/person/${personId}/current`),
