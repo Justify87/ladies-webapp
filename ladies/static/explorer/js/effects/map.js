@@ -10,7 +10,6 @@ const ERROR_RETRY_MAX_MS=15000;
 export { mapRequestDescriptor } from '../data/map_model.js';
 
 export function invalidateMapProjection(store){
-  if(store.getState().discover.map?.stale)return;
   store.dispatch({type:'DISCOVER_MAP_INVALIDATE'});
 }
 
