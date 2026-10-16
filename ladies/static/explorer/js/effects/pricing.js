@@ -1,5 +1,6 @@
 import { api } from '../api/client.js';
 import * as S from '../app/selectors.js';
+import { invalidateMapData } from './map.js';
 
 export function createPricingEffects({store,getEffects}) {
   const toast=message=>store.dispatch({type:'TOAST',value:message});
@@ -42,6 +43,7 @@ export function createPricingEffects({store,getEffects}) {
     const proposal=structuredClone(extraction.proposal),location=form.querySelector('[data-pricing-location]'),listingId=location?.value?Number(location.value):null;
     try{
       await api.acceptPriceProposal(id,{proposal,listing_id:Number.isFinite(listingId)?listingId:null});
+      invalidateMapData(store);
       const t=S.currentThread(state());
       if(t)await loadPricingForThread(t.threadId);
       store.dispatch({type:'PRICING_PROPOSAL',value:null});

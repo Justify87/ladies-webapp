@@ -268,9 +268,43 @@ with tempfile.TemporaryDirectory() as tmp:
     assert city_key("Leipzig") in saved
     assert city_key("Grimma") in saved
 
+
+# Map price projection is independent from persistence details. A current listing scope
+# owns its listing even when it removes a formerly available 60-minute offer; only when
+# that scope does not exist may a person-wide scope be used as fallback.
+projection = runpy.run_path("ladies/pricing/map_projection.py")
+resolve_map_price_60_cents = projection["resolve_map_price_60_cents"]
+resolved = resolve_map_price_60_cents(
+    {11: 1, 22: 1, 33: 1, 44: 1, 55: 1},
+    {
+        (1, None): (200, "EUR"),
+        (1, 11): (101, "EUR"),
+        (1, 33): (301, "EUR"),
+        (1, 44): (401, "USD"),
+        (1, 55): (501, "EUR"),
+    },
+    {
+        101: [12000],
+        200: [9000],
+        300: [15000],  # older listing revision: must never revive
+        401: [17000],
+        501: [10000, 14000],
+    },
+)
+assert resolved[11] == 12000
+assert resolved[22] == 9000
+assert 33 not in resolved
+assert 44 not in resolved
+assert resolved[55] == 12000
+
+
 # Keep the already-executed smoke-suite entry point stable while extending it with
 # browser-facing regression checks. CI configuration stays untouched.
-for check in ("tools/check_profile_request_ui.mjs", "tools/check_favorites_redesign.mjs"):
+for check in (
+    "tools/check_profile_request_ui.mjs",
+    "tools/check_favorites_redesign.mjs",
+    "tools/check_map_price_persistence.mjs",
+):
     subprocess.run(
         ["node", "--experimental-default-type=module", check],
         check=True,

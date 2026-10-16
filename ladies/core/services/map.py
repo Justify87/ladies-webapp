@@ -428,6 +428,7 @@ class MapService:
                 "listing_id": int(item["listing_id"]),
                 "advert_id": str(item["advert_id"]),
                 "address_label": item["address_label"],
+                "price_60_cents": item.get("price_60_cents"),
             })
 
         features = []

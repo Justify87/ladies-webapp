@@ -34,7 +34,7 @@ export function reducer(state=initialState, action={}) {
           ...state.discover,
           index: 0,
           history: [],
-          map: {key:null,points:null,loading:false,error:null},
+          map: {key:null,points:null,loading:false,error:null,stale:false,revision:0},
         },
       };
     case 'SEARCH_RESULT_PATCH': {
@@ -80,10 +80,14 @@ export function reducer(state=initialState, action={}) {
       });
     case 'DISCOVER_MAP_POINTS':
       return updateSlice(state, 'discover', {
-        map:{key:action.key||null,points:action.points||null,loading:false,error:null}
+        map:{key:action.key||null,points:action.points||null,loading:false,error:null,stale:false,revision:Number(state.discover.map?.revision||0)}
+      });
+    case 'DISCOVER_MAP_INVALIDATE':
+      return updateSlice(state, 'discover', {
+        map:{...state.discover.map,stale:true,loading:false,error:null,revision:Number(state.discover.map?.revision||0)+1}
       });
     case 'DISCOVER_MAP_CLEAR':
-      return updateSlice(state, 'discover', {map:{key:null,points:null,loading:false,error:null}});
+      return updateSlice(state, 'discover', {map:{key:null,points:null,loading:false,error:null,stale:false,revision:0}});
 
     case 'PROFILE_BUNDLE':
       return updateMappedSlice(state, 'profiles', 'bundles', {[String(action.advertId)]: action.bundle});

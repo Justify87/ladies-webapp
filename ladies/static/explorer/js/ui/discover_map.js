@@ -8,15 +8,16 @@ const MAP_STYLE='https://tiles.openfreemap.org/styles/liberty';
 const SOURCE_ID='discover-locations';
 const CLUSTER_LAYER='discover-clusters';
 const CLUSTER_COUNT_LAYER='discover-cluster-count';
+const CLUSTER_PRICE_LAYER='discover-cluster-price';
 const LOCATION_LAYER='discover-locations';
 const LOCATION_COUNT_LAYER='discover-location-count';
+const LOCATION_PRICE_LAYER='discover-location-price';
 const EMPTY=Object.freeze({type:'FeatureCollection',features:[]});
 const MAP_LOAD_TIMEOUT_MS=15000;
 
 let maplibrePromise=null;
 let runtime=null;
 let latestData=EMPTY;
-let fittedSignature='';
 let selectedLocationKey=null;
 let closeListenerInstalled=false;
 let wasActive=false;
@@ -108,6 +109,20 @@ function rowMatchesRef(row,ref){
   return Boolean(refKey&&rowRefKey(row)===refKey);
 }
 
+function priceStats(refs){
+  let sumCents=0;
+  let count=0;
+  for(const ref of refs){
+    const raw=ref?.price_60_cents;
+    if(raw===null||raw===undefined||raw==='')continue;
+    const cents=Number(raw);
+    if(!Number.isFinite(cents)||cents<0)continue;
+    sumCents+=cents;
+    count+=1;
+  }
+  return {sumCents,count};
+}
+
 export function filterMapFeatures(points,rows){
   if(!points?.features?.length||!rows?.length)return EMPTY;
   const visibleKeys=new Set(rows.map(rowRefKey).filter(Boolean));
@@ -115,11 +130,14 @@ export function filterMapFeatures(points,rows){
   for(const feature of points.features){
     const refs=listingRefs(feature).filter(ref=>visibleKeys.has(listingRefKey(ref)));
     if(!refs.length)continue;
+    const prices=priceStats(refs);
     features.push({
       ...feature,
       properties:{
         ...(feature.properties||{}),
         listing_count:refs.length,
+        price_60_sum_cents:prices.sumCents,
+        price_60_count:prices.count,
         listing_refs_json:JSON.stringify(refs),
       }
     });
@@ -150,22 +168,19 @@ function destroyMap(){
   mapLifecycle.destroy();
   runtime=null;
   latestData=EMPTY;
-  fittedSignature='';
   selectedLocationKey=null;
   reportedMapErrors.clear();
 }
 
-function fitData(instance,state,data){
-  if(!instance||!runtime?.lib?.LngLatBounds||!data.features.length)return;
-  const key=String(state.discover.map?.key||'');
-  const signature=`${key}|${data.features.map(item=>item.properties?.location_key||'').sort().join(',')}`;
-  if(signature===fittedSignature)return;
-  fittedSignature=signature;
+function fitInitialData(instance,data){
+  const current=runtime;
+  if(!instance||current?.map!==instance||current.initialFitDone||!current.lib?.LngLatBounds||!data.features.length)return;
+  current.initialFitDone=true;
   if(data.features.length===1){
     instance.easeTo({center:data.features[0].geometry.coordinates,zoom:12.8,duration:280});
     return;
   }
-  const bounds=new runtime.lib.LngLatBounds();
+  const bounds=new current.lib.LngLatBounds();
   data.features.forEach(feature=>bounds.extend(feature.geometry.coordinates));
   instance.fitBounds(bounds,{padding:{top:42,right:42,bottom:42,left:42},maxZoom:13,duration:300});
 }
@@ -222,6 +237,22 @@ function styleTextFont(instance){
   return null;
 }
 
+function priceLabelExpression(){
+  return ['concat','Ø ',['to-string',['round',['/',['/',['get','price_60_sum_cents'],['max',1,['get','price_60_count']]],100]]],' €'];
+}
+
+function priceLabelLayout(textFont,offset){
+  return {
+    'text-field':priceLabelExpression(),
+    'text-size':11,
+    'text-font':textFont,
+    'text-offset':offset,
+    'text-anchor':'top',
+    'text-allow-overlap':true,
+    'text-ignore-placement':true
+  };
+}
+
 function reportMapError(event){
   const error=event?.error;
   const message=String(error?.message||event?.message||'MapLibre-Laufzeitfehler');
@@ -249,7 +280,10 @@ function installLayers(instance,target,getState){
     cluster:true,
     clusterMaxZoom:13,
     clusterRadius:48,
-    clusterProperties:{listing_total:['+',['get','listing_count']]}
+    clusterProperties:{listing_total:['+',['get','listing_count']],
+      price_60_sum_cents:['+',['get','price_60_sum_cents']],
+      price_60_count:['+',['get','price_60_count']]
+    }
   });
   instance.addLayer({id:CLUSTER_LAYER,type:'circle',source:SOURCE_ID,filter:['has','point_count'],paint:{'circle-color':'#cc2d7c','circle-radius':['step',['get','listing_total'],18,10,22,30,27,75,32],'circle-stroke-color':'#ffffff','circle-stroke-width':2,'circle-opacity':.92}});
   instance.addLayer({id:LOCATION_LAYER,type:'circle',source:SOURCE_ID,filter:['!', ['has','point_count']],paint:{'circle-color':'#cc2d7c','circle-radius':['case',['>', ['get','listing_count'],1],13,8],'circle-stroke-color':'#ffffff','circle-stroke-width':3}});
@@ -257,10 +291,12 @@ function installLayers(instance,target,getState){
   const textFont=styleTextFont(instance);
   if(textFont){
     instance.addLayer({id:CLUSTER_COUNT_LAYER,type:'symbol',source:SOURCE_ID,filter:['has','point_count'],layout:{'text-field':['to-string',['get','listing_total']],'text-size':12,'text-font':textFont},paint:{'text-color':'#ffffff'}});
+    instance.addLayer({id:CLUSTER_PRICE_LAYER,type:'symbol',source:SOURCE_ID,filter:['all',['has','point_count'],['>', ['get','price_60_count'],0]],layout:priceLabelLayout(textFont,[0,3]),paint:{'text-color':'#8f1f5a','text-halo-color':'#ffffff','text-halo-width':2}});
     instance.addLayer({id:LOCATION_COUNT_LAYER,type:'symbol',source:SOURCE_ID,filter:['all',['!', ['has','point_count']],['>', ['get','listing_count'],1]],layout:{'text-field':['to-string',['get','listing_count']],'text-size':10,'text-font':textFont},paint:{'text-color':'#ffffff'}});
+    instance.addLayer({id:LOCATION_PRICE_LAYER,type:'symbol',source:SOURCE_ID,minzoom:10,filter:['all',['!', ['has','point_count']],['>', ['get','price_60_count'],0]],layout:priceLabelLayout(textFont,[0,1.7]),paint:{'text-color':'#8f1f5a','text-halo-color':'#ffffff','text-halo-width':2}});
   }
 
-  instance.on('click',CLUSTER_LAYER,async event=>{
+  const expandCluster=async event=>{
     const feature=event.features?.[0]||instance.queryRenderedFeatures(event.point,{layers:[CLUSTER_LAYER]})[0];
     const clusterId=Number(feature?.properties?.cluster_id);
     if(!Number.isFinite(clusterId))return;
@@ -272,18 +308,25 @@ function installLayers(instance,target,getState){
     }catch(error){
       void logClient('warning','map-cluster',error?.message||String(error),{cluster_id:clusterId});
     }
-  });
-  instance.on('click',LOCATION_LAYER,event=>{
+  };
+  const selectLocation=event=>{
     const feature=event.features?.[0]||instance.queryRenderedFeatures(event.point,{layers:[LOCATION_LAYER]})[0];
     if(!feature)return;
     selectedLocationKey=String(feature.properties?.location_key||'');
     renderPreview(target.closest('.discover-map-shell')?.querySelector('.discover-map-preview-host'),getState());
-  });
-  for(const layer of [CLUSTER_LAYER,LOCATION_LAYER]){
+  };
+  for(const layer of [CLUSTER_LAYER,CLUSTER_PRICE_LAYER]){
+    if(instance.getLayer(layer))instance.on('click',layer,expandCluster);
+  }
+  for(const layer of [LOCATION_LAYER,LOCATION_PRICE_LAYER]){
+    if(instance.getLayer(layer))instance.on('click',layer,selectLocation);
+  }
+  for(const layer of [CLUSTER_LAYER,CLUSTER_PRICE_LAYER,LOCATION_LAYER,LOCATION_PRICE_LAYER]){
+    if(!instance.getLayer(layer))continue;
     instance.on('mouseenter',layer,()=>{instance.getCanvas().style.cursor='pointer';});
     instance.on('mouseleave',layer,()=>{instance.getCanvas().style.cursor='';});
   }
-  fitData(instance,current,latestData);
+  fitInitialData(instance,latestData);
 }
 
 export function waitForMapReady({instance,isActive,onReady,registerCleanup,timeoutMs=MAP_LOAD_TIMEOUT_MS}){
@@ -319,7 +362,7 @@ export function waitForMapReady({instance,isActive,onReady,registerCleanup,timeo
 
 function ensureMap(target,getState){
   return mapLifecycle.run(target,async lifecycle=>{
-    const current={container:target,map:null,lib:null,loaded:false,resizeObserver:null};
+    const current={container:target,map:null,lib:null,loaded:false,initialFitDone:false,resizeObserver:null};
     runtime=current;
     lifecycle.cleanup(()=>{
       if(runtime===current)runtime=null;
@@ -396,7 +439,8 @@ export function syncDiscoverMap({host,state,store,effects}){
   renderStatus(shell?.querySelector('.discover-map-state-host'),state,latestData);
   renderPreview(shell?.querySelector('.discover-map-preview-host'),state);
 
-  if(!state.discover.map?.points&&!state.discover.map?.loading)queueMicrotask(()=>effects.loadMapPoints({quiet:true}));
+  const mapState=state.discover.map||{};
+  if((!mapState.points||mapState.stale)&&!mapState.loading&&!mapState.error)queueMicrotask(()=>effects.loadMapPoints({quiet:true}));
 
   void ensureMap(target,()=>store.getState()).then(instance=>{
     if(!instance||runtime?.map!==instance||runtime.container!==target)return;
@@ -405,7 +449,7 @@ export function syncDiscoverMap({host,state,store,effects}){
     const source=instance.getSource(SOURCE_ID);
     if(source){
       source.setData(latestData);
-      fitData(instance,current,latestData);
+      fitInitialData(instance,latestData);
     }
     renderPreview(shell?.querySelector('.discover-map-preview-host'),current);
     queueResize(instance,target);
