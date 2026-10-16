@@ -13,11 +13,18 @@ CODE_SUFFIXES = {
     ".py",
     ".js",
     ".mjs",
+    ".jsx",
+    ".ts",
+    ".tsx",
     ".css",
+    ".scss",
     ".html",
     ".htm",
+    ".svg",
+    ".xml",
     ".sh",
     ".command",
+    ".ps1",
     ".yml",
     ".yaml",
     ".toml",
@@ -33,6 +40,9 @@ EXCLUDED_PARTS = {
     ".pytest_cache",
 }
 REQUIRED_AREAS = ("ladies", "tools", "packaging", ".github/workflows")
+SLASH_SUFFIXES = {".js", ".mjs", ".jsx", ".ts", ".tsx", ".css", ".scss"}
+MARKUP_SUFFIXES = {".html", ".htm", ".svg", ".xml"}
+JAVASCRIPT_SUFFIXES = {".js", ".mjs", ".jsx", ".ts", ".tsx"}
 
 HISTORY_PATTERNS = (
     re.compile(r"\blegacy\b", re.IGNORECASE),
@@ -215,9 +225,9 @@ def fragments(path: Path) -> list[tuple[int, str, str]]:
     if suffix == ".py":
         return python_fragments(path)
     source = path.read_text(encoding="utf-8")
-    if suffix in {".js", ".mjs", ".css"}:
+    if suffix in SLASH_SUFFIXES:
         return slash_fragments(source)
-    if suffix in {".html", ".htm"}:
+    if suffix in MARKUP_SUFFIXES:
         return html_fragments(source)
     return hash_fragments(source)
 
@@ -237,8 +247,8 @@ def violation_reason(text: str, kind: str, suffix: str) -> str | None:
     if kind == "comment":
         if suffix == ".py" and PYTHON_CODE_COMMENT.match(normalized):
             return "commented-out Python code"
-        if suffix in {".js", ".mjs"} and JS_CODE_COMMENT.match(normalized):
-            return "commented-out JavaScript code"
+        if suffix in JAVASCRIPT_SUFFIXES and JS_CODE_COMMENT.match(normalized):
+            return "commented-out JavaScript/TypeScript code"
     return None
 
 
