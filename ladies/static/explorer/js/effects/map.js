@@ -87,6 +87,7 @@ export function createMapEffects({store,mapPoints=api.mapPoints}) {
   async function loadMapPoints({force=false,quiet=true}={}) {
     const requested=mapRequestDescriptor(store.getState());
     const current=store.getState().discover.map||{};
+    const revision=Number(current.revision||0);
     if(!requested.items.length){
       cancel();
       if(current.key||current.points||current.loading||current.error||current.stale)store.dispatch({type:'DISCOVER_MAP_CLEAR'});
@@ -104,8 +105,10 @@ export function createMapEffects({store,mapPoints=api.mapPoints}) {
 
     try{
       const points=await sanitizeMapPoints(await mapPoints({items:requested.items}));
-      const latest=mapRequestDescriptor(store.getState());
-      if(sequence!==generation||latest.key!==requested.key)return null;
+      const latestState=store.getState();
+      const latest=mapRequestDescriptor(latestState);
+      const latestRevision=Number(latestState.discover.map?.revision||0);
+      if(sequence!==generation||latest.key!==requested.key||latestRevision!==revision)return null;
 
       store.dispatch({type:'DISCOVER_MAP_POINTS',key:requested.key,points});
       if(Number(points?.meta?.pending_count||0)>0&&refreshes<MAX_REFRESHES){
@@ -121,8 +124,10 @@ export function createMapEffects({store,mapPoints=api.mapPoints}) {
       return points;
     }catch(error){
       if(sequence!==generation)return null;
-      const latest=mapRequestDescriptor(store.getState());
-      if(latest.key!==requested.key)return null;
+      const latestState=store.getState();
+      const latest=mapRequestDescriptor(latestState);
+      const latestRevision=Number(latestState.discover.map?.revision||0);
+      if(latest.key!==requested.key||latestRevision!==revision)return null;
       store.dispatch({type:'DISCOVER_MAP_LOADING',key:requested.key,value:false,error:error?.message||String(error)});
       if(!quiet)store.dispatch({type:'TOAST',value:error?.message||String(error)});
       return null;
