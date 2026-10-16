@@ -13,6 +13,7 @@ from typing import Any
 import qrcode
 
 LOGGER = logging.getLogger("ladies_explorer.messaging.connection")
+AUTO_RESUME_DELAYS = (0.0, 1.0, 2.0)
 
 
 class WhatsAppConnectionLifecycle:
@@ -36,6 +37,15 @@ class WhatsAppConnectionLifecycle:
 
         if self.has_saved_session():
             generation = self._intent_generation
+            gateway = self.service.gateway
+            try:
+                gateway.activate()
+            except Exception:
+                gateway.stop()
+                gateway.state = "ERROR"
+                gateway.detail = "Gespeicherte WhatsApp-Verbindung konnte nicht gestartet werden."
+                LOGGER.warning("Could not activate registered WhatsApp session", exc_info=True)
+                return
             threading.Thread(
                 target=self._resume_saved_session,
                 args=(generation,),
@@ -64,26 +74,35 @@ class WhatsAppConnectionLifecycle:
             return False
 
     def _resume_saved_session(self, generation: int) -> None:
-        # Serialize resume with explicit connect/disconnect/reset. If reset wins
-        # first, the generation changes and this stale task becomes a no-op. If
-        # resume wins first, reset waits and then deterministically wins last.
+        last_error: Exception | None = None
+        for delay in AUTO_RESUME_DELAYS:
+            if delay:
+                time.sleep(delay)
+            with self._lock:
+                if generation != self._intent_generation or not self.has_saved_session():
+                    return
+                gateway = self.service.gateway
+                ok, detail = gateway.dependency_status()
+                if not ok:
+                    gateway.stop()
+                    gateway.state = "DEPENDENCY_MISSING"
+                    gateway.detail = detail
+                    return
+                try:
+                    gateway.command("connect", timeout=15)
+                    return
+                except Exception as exc:
+                    last_error = exc
+                    LOGGER.info("Registered WhatsApp session resume attempt failed", exc_info=True)
+
         with self._lock:
             if generation != self._intent_generation or not self.has_saved_session():
                 return
             gateway = self.service.gateway
-            ok, detail = gateway.dependency_status()
-            if not ok:
-                gateway.state = "DEPENDENCY_MISSING"
-                gateway.detail = detail
-                return
-            try:
-                gateway.command("connect", timeout=15)
-            except Exception:
-                if generation == self._intent_generation:
-                    gateway.stop()
-                    gateway.state = "ERROR"
-                    gateway.detail = "Gespeicherte WhatsApp-Verbindung konnte nicht wiederhergestellt werden."
-                LOGGER.warning("Could not resume registered WhatsApp session", exc_info=True)
+            gateway.stop()
+            gateway.state = "ERROR"
+            gateway.detail = "Gespeicherte WhatsApp-Verbindung konnte nicht wiederhergestellt werden."
+        LOGGER.warning("Could not resume registered WhatsApp session: %s", last_error)
 
     def _clear_qr(self) -> None:
         self._qr_source = None

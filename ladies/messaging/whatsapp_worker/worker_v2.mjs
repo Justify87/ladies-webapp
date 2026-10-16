@@ -639,9 +639,6 @@ async function handleConnectionUpdate(current, update) {
     context.qrSeen = true
     emit({ type: 'qr', value: update.qr })
   }
-  if (update.receivedPendingNotifications === true) {
-    emit({ type: 'sync', state: 'READY', progress: 100, is_latest: true })
-  }
   if (update.connection === 'open') {
     reconnectAttempt = 0
     manualDisconnect = false
@@ -688,7 +685,8 @@ async function handleConnectionUpdate(current, update) {
 
 async function processEvents(current, events, saveCreds) {
   if (events['creds.update']) await saveCreds()
-  if (events['connection.update']) await handleConnectionUpdate(current, events['connection.update'])
+  const connectionUpdate = events['connection.update']
+  if (connectionUpdate) await handleConnectionUpdate(current, connectionUpdate)
 
   if (events['messaging-history.set']) {
     await emitHistory(current, events['messaging-history.set'])
@@ -773,6 +771,10 @@ async function processEvents(current, events, saveCreds) {
         },
       })
     }
+  }
+
+  if (connectionUpdate?.receivedPendingNotifications === true && current === sock) {
+    emit({ type: 'sync', state: 'READY', progress: 100, is_latest: true })
   }
 }
 
