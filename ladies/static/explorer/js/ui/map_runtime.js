@@ -136,7 +136,7 @@ function priceLabelLayout(textFont,offset){
   };
 }
 
-function installLayers(instance,{onSelectLocation,onClearSelection,onClusterError}){
+function installLayers(instance,{onSelectLocation,onClearSelection,onClusterError,onCameraInteraction}){
   if(instance.getSource(SOURCE_ID))return;
   instance.addSource(SOURCE_ID,{
     type:'geojson',
@@ -168,6 +168,7 @@ function installLayers(instance,{onSelectLocation,onClearSelection,onClusterErro
     try{
       const source=instance.getSource(SOURCE_ID);
       const zoom=await source.getClusterExpansionZoom(clusterId);
+      onCameraInteraction?.();
       instance.easeTo({center:feature.geometry.coordinates,zoom,duration:280});
       onClearSelection?.();
     }catch(error){
@@ -251,7 +252,12 @@ export function createDiscoverMapRuntime({target,onSelectLocation,onClearSelecti
         isActive:()=>scope.active()&&current===runtime&&target.isConnected,
         registerCleanup:scope.cleanup,
         onReady:()=>{
-          installLayers(instance,{onSelectLocation,onClearSelection,onClusterError});
+          installLayers(instance,{
+            onSelectLocation,
+            onClearSelection,
+            onClusterError,
+            onCameraInteraction:()=>{runtime.userOwnsCamera=true;},
+          });
           requestAnimationFrame(()=>{if(current===runtime&&target.isConnected)instance.resize();});
           return runtime;
         },
