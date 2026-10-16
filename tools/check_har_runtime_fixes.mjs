@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createMapLifecycle, filterMapFeatures, waitForMapReady } from '../ladies/static/explorer/js/ui/discover_map.js';
+import { createMapEffects, invalidateMapData } from '../ladies/static/explorer/js/effects/map.js';
 import { pricingExtractionAvailable, pricingManualAvailable } from '../ladies/static/explorer/js/app/selectors.js';
 
 const mapSource=readFileSync(new URL('../ladies/static/explorer/js/ui/discover_map.js',import.meta.url),'utf8');
+const mapEffectsSource=readFileSync(new URL('../ladies/static/explorer/js/effects/map.js',import.meta.url),'utf8');
 const mapRepository=readFileSync(new URL('../ladies/core/repositories/map.py',import.meta.url),'utf8');
+const mapProjection=readFileSync(new URL('../ladies/pricing/map_projection.py',import.meta.url),'utf8');
 const mapService=readFileSync(new URL('../ladies/core/services/map.py',import.meta.url),'utf8');
+const reducerSource=readFileSync(new URL('../ladies/static/explorer/js/app/reducer.js',import.meta.url),'utf8');
+const coreEffectsSource=readFileSync(new URL('../ladies/static/explorer/js/effects/core.js',import.meta.url),'utf8');
 const discoverSource=readFileSync(new URL('../ladies/static/explorer/js/ui/screens/discover.js',import.meta.url),'utf8');
 const messagingSource=readFileSync(new URL('../ladies/static/explorer/js/effects/messaging.js',import.meta.url),'utf8');
 const messagingService=readFileSync(new URL('../ladies/messaging/service.py',import.meta.url),'utf8');
@@ -32,15 +38,89 @@ assert.match(mapSource,/price_60_sum_cents:\['\+',\['get','price_60_sum_cents'\]
 assert.match(mapSource,/price_60_count:\['\+',\['get','price_60_count'\]\]/,'cluster price counts must aggregate in MapLibre');
 assert.match(mapSource,/CLUSTER_PRICE_LAYER/,'clusters must expose a 60-minute average price label');
 assert.match(mapSource,/LOCATION_PRICE_LAYER/,'unclustered points must expose a 60-minute average price label');
+assert.match(mapSource,/'text-allow-overlap':true/,'price labels must not disappear because of base-map label collisions');
+assert.match(mapSource,/'text-ignore-placement':true/,'price labels must not suppress unrelated map labels');
+assert.match(mapSource,/mapState\.stale/,'stale map projections must refresh in place');
 assert.match(mapSource,/getClusterExpansionZoom\(clusterId\)/,'cluster taps must expand through the source API');
 assert.match(mapSource,/instance\.on\('error',reportMapError\)/,'MapLibre runtime errors must remain observable');
 assert.match(mapSource,/maplibrePromise=null/,'failed MapLibre imports must reset the shared import promise');
+
+// Map price projection is based on current pricing scopes first, then exact 60-minute
+// offers. This prevents older 60-minute rows from reappearing after a newer revision
+// removed them, and prevents FROM/RANGE prices from being displayed as exact averages.
+assert.match(mapRepository,/func\.row_number\(\)\.over/,'map pricing must rank current revisions per pricing scope in SQL');
+assert.match(mapRepository,/ranked_scopes\.c\.scope_rank == 1/,'only the latest revision of each scope may feed map pricing');
 assert.match(mapRepository,/PriceItem\.duration_minutes == 60/,'map pricing must use the explicit 60-minute offer');
 assert.match(mapRepository,/PriceItem\.item_type == "BASE"/,'map pricing must use base offers only');
-assert.match(mapRepository,/PriceList\.currency == "EUR"/,'map pricing must match the displayed euro currency');
-assert.match(mapRepository,/price_rows\.sort\(/,'latest applicable 60-minute price data must be prioritized without an ordered history query');
-assert.match(mapRepository,/row\[0\]\.observed_at/,'price recency must drive the local price-row priority');
+assert.match(mapRepository,/PriceOfferMeta\.amount_type == "EXACT"/,'non-exact offers must not be averaged as exact prices');
+assert.match(mapRepository,/PriceOfferMeta\.price_item_id\.is_\(None\)/,'legacy offers without metadata remain exact-compatible');
+assert.match(mapRepository,/resolve_map_price_60_cents/,'scope precedence must live in the dedicated pricing projection');
+assert.doesNotMatch(mapRepository,/price_rows\.sort\(/,'map pricing must not load and sort price history in Python');
+assert.match(mapProjection,/current_scopes\.get\(\(person_id, listing_id\)\)/,'listing-scoped pricing must be checked before global fallback');
+assert.match(mapProjection,/current_scopes\.get\(\(person_id, None\)\)/,'global pricing is only an explicit fallback');
+assert.match(mapProjection,/upper\(\) != "EUR"/,'currency must be evaluated on the current revision, not prefiltered from history');
 assert.match(mapService,/"price_60_cents": item\.get\("price_60_cents"\)/,'map refs must carry 60-minute prices into the browser');
+
+execFileSync('python', ['-c', String.raw`
+import runpy
+
+projection = runpy.run_path('ladies/pricing/map_projection.py')
+resolve = projection['resolve_map_price_60_cents']
+listing_people = {11: 1, 22: 1, 33: 1, 44: 1, 55: 1}
+current_scopes = {
+    (1, None): (200, 'EUR'),
+    (1, 11): (101, 'EUR'),
+    (1, 33): (301, 'EUR'),
+    (1, 44): (401, 'USD'),
+    (1, 55): (501, 'EUR'),
+}
+amounts = {
+    101: [12000],
+    200: [9000],
+    300: [15000],  # older listing-specific revision: must never revive
+    401: [17000],
+    501: [10000, 14000],
+}
+resolved = resolve(listing_people, current_scopes, amounts)
+assert resolved[11] == 12000, resolved
+assert resolved[22] == 9000, resolved
+assert 33 not in resolved, resolved  # current listing scope removed the 60-minute offer
+assert 44 not in resolved, resolved  # current non-EUR scope must not fall back to global EUR
+assert resolved[55] == 12000, resolved  # multiple exact offers average once per listing
+`], {stdio:'inherit'});
+
+// Pricing writes invalidate the map projection without destroying existing points.
+assert.match(mapEffectsSource,/DISCOVER_MAP_INVALIDATE/,'map effects must expose one explicit invalidation boundary');
+assert.match(reducerSource,/case 'DISCOVER_MAP_INVALIDATE'/,'map state must retain data while marking it stale');
+assert.match(coreEffectsSource,/invalidateMapData\(store\)/,'manual price writes must invalidate map pricing');
+assert.match(pricingSource,/invalidateMapData\(store\)/,'accepted extracted pricing must invalidate map pricing');
+const invalidationState={
+  search:{results:[{listing_id:7,city:'Leipzig'}]},
+  discover:{map:{key:JSON.stringify([[7,'leipzig']]),points:{type:'FeatureCollection',features:[],meta:{pending_count:0,version:'old'}},loading:false,error:null,stale:false}}
+};
+const invalidationRequests=[];
+const invalidationStore={
+  getState:()=>invalidationState,
+  dispatch(action){
+    if(action.type==='DISCOVER_MAP_INVALIDATE')invalidationState.discover.map={...invalidationState.discover.map,stale:true,error:null};
+    else if(action.type==='DISCOVER_MAP_LOADING')invalidationState.discover.map={...invalidationState.discover.map,key:action.key,loading:Boolean(action.value),error:action.error||null};
+    else if(action.type==='DISCOVER_MAP_POINTS')invalidationState.discover.map={key:action.key,points:action.points,loading:false,error:null,stale:false};
+    else if(action.type==='DISCOVER_MAP_CLEAR')invalidationState.discover.map={key:null,points:null,loading:false,error:null,stale:false};
+  }
+};
+const invalidationEffects=createMapEffects({
+  store:invalidationStore,
+  mapPoints:payload=>new Promise(resolve=>invalidationRequests.push({payload,resolve}))
+});
+invalidateMapData(invalidationStore);
+assert.equal(invalidationState.discover.map.stale,true);
+assert.equal(invalidationState.discover.map.points.meta.version,'old','invalidation must keep current markers visible while refreshing');
+const refreshed=invalidationEffects.loadMapPoints();
+assert.equal(invalidationRequests.length,1,'stale data must refresh even when listing identity is unchanged');
+invalidationRequests[0].resolve({type:'FeatureCollection',features:[],meta:{pending_count:0,version:'new'}});
+await refreshed;
+assert.equal(invalidationState.discover.map.points.meta.version,'new');
+assert.equal(invalidationState.discover.map.stale,false);
 
 // Lifecycle behavior is tested directly: same-container initialization is single-flight,
 // failures at every initialization stage release ownership, and stale work cannot become
