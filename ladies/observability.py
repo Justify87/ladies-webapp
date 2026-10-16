@@ -203,17 +203,20 @@ def operation_span(
     *,
     attributes: dict[str, Any] | None = None,
     parent_context=None,
+    kind: str = "internal",
 ):
     tracer = _STATE.get("tracer")
     if not _STATE["enabled"] or tracer is None:
         yield None
         return
 
-    from opentelemetry.trace import Status, StatusCode
+    from opentelemetry.trace import SpanKind, Status, StatusCode
 
+    span_kind = SpanKind.CLIENT if kind == "client" else SpanKind.INTERNAL
     with tracer.start_as_current_span(
         str(name)[:96],
         context=parent_context,
+        kind=span_kind,
         attributes=_safe_attributes(attributes),
         record_exception=False,
         set_status_on_exception=False,
@@ -252,7 +255,7 @@ def traced_http_call(
         "server.address": str(parts.hostname or "unknown")[:160],
         "url.scheme": str(parts.scheme or "")[:16],
     }
-    with operation_span("http.client", attributes=attributes) as span:
+    with operation_span("http.client", attributes=attributes, kind="client") as span:
         response = call()
         status_code = getattr(response, "status_code", None)
         if span is not None and status_code is not None:
