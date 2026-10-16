@@ -47,7 +47,7 @@ EXCLUDED_PARTS = {
     ".pytest_cache",
 }
 REQUIRED_AREAS = ("ladies", "tools", "packaging", ".github/workflows")
-SLASH_SUFFIXES = {
+LINE_SLASH_SUFFIXES = {
     ".js",
     ".mjs",
     ".cjs",
@@ -56,9 +56,9 @@ SLASH_SUFFIXES = {
     ".mts",
     ".cts",
     ".tsx",
-    ".css",
     ".scss",
 }
+BLOCK_SLASH_SUFFIXES = {".css"}
 MARKUP_SUFFIXES = {".html", ".htm", ".svg", ".xml"}
 JAVASCRIPT_SUFFIXES = {".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx"}
 BATCH_SUFFIXES = {".bat", ".cmd"}
@@ -171,7 +171,7 @@ def python_fragments(path: Path) -> list[tuple[int, str, str]]:
     return fragments
 
 
-def slash_fragments(source: str) -> list[tuple[int, str, str]]:
+def slash_fragments(source: str, *, line_comments: bool = True) -> list[tuple[int, str, str]]:
     fragments: list[tuple[int, str, str]] = []
     i = 0
     line = 1
@@ -196,7 +196,7 @@ def slash_fragments(source: str) -> list[tuple[int, str, str]]:
             elif ch == "`":
                 template_return_states.append(state)
                 state = "template"
-            elif ch == "/" and nxt == "/":
+            elif line_comments and ch == "/" and nxt == "/":
                 return_state = state
                 state = "line_comment"
                 start_line = line
@@ -293,11 +293,23 @@ def batch_fragments(source: str) -> list[tuple[int, str, str]]:
     return fragments
 
 
+def _embedded_markup_fragments(source: str, tag: str, *, line_comments: bool) -> list[tuple[int, str, str]]:
+    fragments: list[tuple[int, str, str]] = []
+    pattern = re.compile(rf"<{tag}\b[^>]*>(.*?)</{tag}\s*>", flags=re.IGNORECASE | re.DOTALL)
+    for match in pattern.finditer(source):
+        line_offset = source.count("\n", 0, match.start(1))
+        for line, text, kind in slash_fragments(match.group(1), line_comments=line_comments):
+            fragments.append((line + line_offset, text, kind))
+    return fragments
+
+
 def html_fragments(source: str) -> list[tuple[int, str, str]]:
-    fragments = slash_fragments(source)
+    fragments: list[tuple[int, str, str]] = []
     for match in re.finditer(r"<!--(.*?)-->", source, flags=re.DOTALL):
         line = source.count("\n", 0, match.start()) + 1
         fragments.append((line, match.group(1).strip(), "comment"))
+    fragments.extend(_embedded_markup_fragments(source, "script", line_comments=True))
+    fragments.extend(_embedded_markup_fragments(source, "style", line_comments=False))
     return fragments
 
 
@@ -306,8 +318,10 @@ def fragments(path: Path) -> list[tuple[int, str, str]]:
     if suffix == ".py":
         return python_fragments(path)
     source = path.read_text(encoding="utf-8")
-    if suffix in SLASH_SUFFIXES:
+    if suffix in LINE_SLASH_SUFFIXES:
         return slash_fragments(source)
+    if suffix in BLOCK_SLASH_SUFFIXES:
+        return slash_fragments(source, line_comments=False)
     if suffix in MARKUP_SUFFIXES:
         return html_fragments(source)
     if suffix in BATCH_SUFFIXES:
@@ -349,6 +363,25 @@ const rendered = `${(() => {
     js_comments = [text for _, text, _ in slash_fragments(js)]
     if js_comments != ["legacy workaround"]:
         failures.append("JavaScript template-expression comment parsing")
+
+    css = """.hero { background-image: url(https://example.test/image.png); }
+/* current layout invariant */
+"""
+    css_comments = [text for _, text, _ in slash_fragments(css, line_comments=False)]
+    if css_comments != ["current layout invariant"]:
+        failures.append("CSS block-comment parsing")
+
+    markup = """<a href=https://example.test/path>link</a>
+<script>
+// current script invariant
+</script>
+<style>
+/* current style invariant */
+</style>
+"""
+    markup_comments = [text for _, text, _ in html_fragments(markup)]
+    if markup_comments != ["current script invariant", "current style invariant"]:
+        failures.append("markup embedded-comment parsing")
 
     batch = """@echo off
 REM legacy workaround
