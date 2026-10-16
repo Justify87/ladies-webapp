@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from .domain import MediaReference
 from .identity import hash_to_hex
 from .models import MediaAsset, MediaSource, utcnow
+from .observability import traced_http_call
 
 LOGGER = logging.getLogger("ladies_explorer.media")
 
@@ -126,7 +127,17 @@ class ArchiveManager:
             # For non-archived videos retain cheap revision metadata when the CDN
             # supports HEAD; failure is intentionally non-fatal.
             try:
-                response = http.head(ref.url, headers={"Referer": "https://www.ladies.de/"}, timeout=timeout, allow_redirects=True)
+                response = traced_http_call(
+                    "HEAD",
+                    ref.url,
+                    operation="media.head",
+                    call=lambda: http.head(
+                        ref.url,
+                        headers={"Referer": "https://www.ladies.de/"},
+                        timeout=timeout,
+                        allow_redirects=True,
+                    ),
+                )
                 if response.ok:
                     source.etag = response.headers.get("ETag") or source.etag
                     source.last_modified = response.headers.get("Last-Modified") or source.last_modified
@@ -147,7 +158,12 @@ class ArchiveManager:
             headers["If-None-Match"] = source.etag
         if source.last_modified:
             headers["If-Modified-Since"] = source.last_modified
-        response = http.get(ref.url, headers=headers, timeout=timeout)
+        response = traced_http_call(
+            "GET",
+            ref.url,
+            operation="media.download",
+            call=lambda: http.get(ref.url, headers=headers, timeout=timeout),
+        )
         if response.status_code == 304 and source.media_asset_id:
             asset = db.get(MediaAsset, source.media_asset_id)
             source.last_checked_at = utcnow()

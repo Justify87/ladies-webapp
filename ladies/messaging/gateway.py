@@ -16,6 +16,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 try:
+    from ..observability import operation_span
+except ImportError:  # architecture checks execute this file directly via runpy
+    from contextlib import contextmanager
+
+    @contextmanager
+    def operation_span(*_args, **_kwargs):
+        yield None
+
+try:
     from .provider_inbox import DURABLE_EVENT_TYPES, DurableProviderInbox
 except ImportError:  # architecture checks execute this file directly via runpy
     import importlib.util
@@ -602,6 +611,16 @@ class WhatsAppGateway:
             self.event_handler(synthetic)
 
     def command(self, command_type: str, timeout: int = 15, **payload):
+        with operation_span(
+            "messaging.command",
+            attributes={
+                "messaging.command.type": str(command_type or "unknown")[:64],
+                "messaging.command.timeout_seconds": int(timeout),
+            },
+        ):
+            return self._command(command_type, timeout=timeout, **payload)
+
+    def _command(self, command_type: str, timeout: int = 15, **payload):
         guard = self._serial_lock if command_type in SERIAL_COMMANDS else nullcontext()
         with guard:
             if command_type == "connect":

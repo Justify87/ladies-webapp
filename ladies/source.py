@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 import requests
 
 from .domain import SearchProfile
+from .observability import traced_http_call
 from .parser import parse_search_cards, parse_search_config
 from .search_catalog import (
     CATEGORY_MAP,
@@ -82,12 +83,27 @@ def build_session() -> requests.Session:
     return s
 
 
+def _telemetry_operation(context: str) -> str:
+    value = str(context or "request")
+    for prefix in ("profile-", "status-"):
+        if value.startswith(prefix):
+            return prefix[:-1]
+    if value.startswith(("search-page-", "search-api-page-")):
+        return "search-page"
+    return value[:80]
+
+
 def http_get(session: requests.Session, url: str, *, context: str, timeout: float = 30,
              headers: dict[str,str] | None = None, params: dict[str,Any] | None = None,
              expected_statuses: tuple[int,...] = (200,)) -> requests.Response:
     started=time.monotonic()
     try:
-        r=session.get(url, headers=headers, params=params, timeout=timeout)
+        r = traced_http_call(
+            "GET",
+            url,
+            operation=_telemetry_operation(context),
+            call=lambda: session.get(url, headers=headers, params=params, timeout=timeout),
+        )
     except requests.RequestException:
         LOGGER.exception("HTTP failed context=%s url=%s", context, url); raise
     elapsed=(time.monotonic()-started)*1000
