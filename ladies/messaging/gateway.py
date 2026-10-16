@@ -45,7 +45,10 @@ SERIAL_COMMANDS = {
 APP_STATE_RECOVERY_WINDOW_SECONDS = 15.0
 APP_STATE_RECOVERY_COOLDOWN_SECONDS = 300.0
 APP_STATE_MISSING_KEY_RE = re.compile(r"failed to find key .* to decode mutation", re.I)
-CATCH_UP_TIMEOUT_SECONDS = 20.0
+CATCH_UP_IDLE_TIMEOUT_SECONDS = 30.0
+CATCH_UP_HISTORY_IDLE_TIMEOUT_SECONDS = 135.0
+CATCH_UP_HARD_TIMEOUT_SECONDS = 240.0
+CATCH_UP_POLL_SECONDS = 1.0
 CATCH_UP_MAX_RESTARTS = 2
 
 
@@ -79,6 +82,10 @@ class WhatsAppGateway:
         self._catch_up_active = False
         self._catch_up_token = 0
         self._catch_up_restarts = 0
+        self._catch_up_started_at = 0.0
+        self._catch_up_last_activity = 0.0
+        self._catch_up_history_waiting = False
+        self._catch_up_watchdog_token: int | None = None
         self._provider_inbox = DurableProviderInbox(self.auth_dir.parent / "pending-ingress", event_handler)
         self.state = "NOT_CONFIGURED"
         self.detail = None
@@ -88,12 +95,18 @@ class WhatsAppGateway:
         atexit.register(self.stop)
 
     def status(self) -> dict[str, Any]:
+        quarantined = self._provider_inbox.quarantined_count()
         return {
             "state": self.state,
             "detail": self.detail,
             "qr_available": bool(self.qr),
             "account": self.account,
             "last_connected_at": self.last_connected_at,
+            "ingress_quarantined": quarantined,
+            "recovery_warning": (
+                "Beschädigte oder veraltete WhatsApp-Eingangsdaten wurden isoliert."
+                if quarantined else None
+            ),
         }
 
     def _set_state(self, state: str, detail: str | None = None) -> None:
@@ -156,11 +169,18 @@ class WhatsAppGateway:
             self._transport_open = False
             self._pending_sync_ready = False
             self._catch_up_token += 1
+            now = time.monotonic()
+            self._catch_up_started_at = now
+            self._catch_up_last_activity = now
+            self._catch_up_history_waiting = False
+            self._catch_up_watchdog_token = None
             generation = self._generation
             try:
-                replayed = self._provider_inbox.drain()
+                replayed, quarantined = self._provider_inbox.drain()
                 if replayed:
                     LOGGER.info("Replayed %s durable WhatsApp ingress event(s) before reconnect", replayed)
+                if quarantined:
+                    LOGGER.error("Quarantined %s corrupt WhatsApp ingress event(s) during recovery", quarantined)
             except Exception:
                 self._set_state("ERROR", "Ausstehende WhatsApp-Nachrichten konnten nicht gespeichert werden")
                 LOGGER.exception("Could not replay durable WhatsApp ingress")
@@ -334,28 +354,41 @@ class WhatsAppGateway:
                     self._set_state("ERROR", "WhatsApp-Worker konnte nicht neu verbunden werden")
             LOGGER.warning("WhatsApp worker restart failed", exc_info=True)
 
+    def _touch_catch_up(self, *, history_waiting: bool | None = None) -> None:
+        with self._lock:
+            if not self._catch_up_active:
+                return
+            self._catch_up_last_activity = time.monotonic()
+            if history_waiting is not None:
+                self._catch_up_history_waiting = history_waiting
+
     def _begin_catch_up(self) -> int:
         with self._lock:
             self._catch_up_active = True
             self._transport_open = False
             self._pending_sync_ready = False
             self._catch_up_token += 1
+            now = time.monotonic()
+            self._catch_up_started_at = now
+            self._catch_up_last_activity = now
+            self._catch_up_history_waiting = False
+            self._catch_up_watchdog_token = None
             return self._catch_up_token
 
     def _finish_catch_up(self) -> dict[str, Any] | None:
-        # Use the gateway lock as the single catch-up barrier lock. Durable
-        # delivery and stop() use the same lock, so no provider event can slip
-        # between the final inbox-empty check and the CONNECTED transition.
         with self._lock:
             if not self._catch_up_active or not self._transport_open or not self._pending_sync_ready:
                 return None
-            replayed = self._provider_inbox.drain()
+            replayed, quarantined = self._provider_inbox.drain()
             if self._provider_inbox.pending_count():
                 return None
             if replayed:
                 LOGGER.info("Persisted %s deferred WhatsApp catch-up event(s)", replayed)
+            if quarantined:
+                LOGGER.error("Quarantined %s corrupt WhatsApp ingress event(s) at catch-up barrier", quarantined)
             previous = self.state
             self._catch_up_active = False
+            self._catch_up_watchdog_token = None
             self.state = "CONNECTED"
             self.detail = None
             self._restart_attempt = 0
@@ -374,6 +407,12 @@ class WhatsAppGateway:
     def _arm_catch_up_watchdog(self, proc: subprocess.Popen[str] | None, token: int) -> None:
         if proc is None:
             return
+        with self._lock:
+            if not self._catch_up_active or token != self._catch_up_token:
+                return
+            if self._catch_up_watchdog_token == token:
+                return
+            self._catch_up_watchdog_token = token
         threading.Thread(
             target=self._watch_catch_up,
             args=(proc, token),
@@ -382,16 +421,32 @@ class WhatsAppGateway:
         ).start()
 
     def _watch_catch_up(self, proc: subprocess.Popen[str], token: int) -> None:
-        time.sleep(CATCH_UP_TIMEOUT_SECONDS)
-        with self._lock:
-            if (
-                not self._catch_up_active
-                or token != self._catch_up_token
-                or proc is not self.proc
-                or proc.poll() is not None
-                or self._stopping
-            ):
-                return
+        reason = "idle"
+        while True:
+            time.sleep(CATCH_UP_POLL_SECONDS)
+            with self._lock:
+                if (
+                    not self._catch_up_active
+                    or token != self._catch_up_token
+                    or proc is not self.proc
+                    or proc.poll() is not None
+                    or self._stopping
+                ):
+                    return
+                now = time.monotonic()
+                idle_limit = (
+                    CATCH_UP_HISTORY_IDLE_TIMEOUT_SECONDS
+                    if self._catch_up_history_waiting
+                    else CATCH_UP_IDLE_TIMEOUT_SECONDS
+                )
+                idle_expired = now - self._catch_up_last_activity >= idle_limit
+                hard_expired = now - self._catch_up_started_at >= CATCH_UP_HARD_TIMEOUT_SECONDS
+                if not idle_expired and not hard_expired:
+                    continue
+                reason = "hard_limit" if hard_expired else "idle"
+                self._catch_up_watchdog_token = None
+                break
+
         try:
             completed = self._finish_catch_up()
         except Exception:
@@ -424,14 +479,13 @@ class WhatsAppGateway:
                 restart = False
 
         if restart:
+            LOGGER.warning("WhatsApp catch-up stalled reason=%s; restarting worker", reason)
             try:
                 proc.terminate()
             except Exception:
-                LOGGER.warning("Could not restart WhatsApp worker after catch-up timeout", exc_info=True)
+                LOGGER.warning("Could not restart WhatsApp worker after catch-up stall", exc_info=True)
             return
 
-        # Never expose an unverified transport as CONNECTED. Stop automatic
-        # restarts after bounded recovery and require an explicit retry.
         self.stop()
         self._set_state(
             "ERROR",
@@ -447,12 +501,15 @@ class WhatsAppGateway:
         if event_type in DURABLE_EVENT_TYPES:
             with self._lock:
                 if self._catch_up_active:
+                    self._catch_up_last_activity = time.monotonic()
                     try:
                         self._provider_inbox.deliver(event)
                     except Exception:
                         self.state = "CONNECTING"
                         self.detail = "Ausstehende WhatsApp-Nachrichten werden erneut gespeichert."
                         LOGGER.exception("Deferred WhatsApp provider event persistence failed")
+                    else:
+                        self._catch_up_last_activity = time.monotonic()
                     return
 
         forwarded_event = event
@@ -463,9 +520,12 @@ class WhatsAppGateway:
         elif event_type == "connection":
             state = str(event.get("state") or "").upper()
             if state == "CONNECTED":
-                self._transport_open = True
-                self.qr = None
-                self.account = event.get("account")
+                with self._lock:
+                    self._transport_open = True
+                    self.qr = None
+                    self.account = event.get("account")
+                    if self._catch_up_active:
+                        self._catch_up_last_activity = time.monotonic()
                 try:
                     completed = self._finish_catch_up()
                 except Exception:
@@ -499,6 +559,15 @@ class WhatsAppGateway:
                     LOGGER.warning("WhatsApp state %s -> %s detail=%s", previous, state, self.detail or "-")
         elif event_type == "sync":
             sync_state = str(event.get("state") or "").upper()
+            with self._lock:
+                if self._catch_up_active:
+                    self._catch_up_last_activity = time.monotonic()
+                    if sync_state in {"HISTORY", "HISTORY_WAIT"}:
+                        self._catch_up_history_waiting = True
+                    elif sync_state == "PENDING":
+                        self._catch_up_history_waiting = bool(event.get("expected_history"))
+                    elif sync_state == "READY":
+                        self._catch_up_history_waiting = False
             if sync_state == "READY" and event.get("is_latest") is not False:
                 self._pending_sync_ready = True
                 try:
@@ -587,6 +656,8 @@ class WhatsAppGateway:
             self._catch_up_active = False
             self._transport_open = False
             self._pending_sync_ready = False
+            self._catch_up_history_waiting = False
+            self._catch_up_watchdog_token = None
             self._catch_up_token += 1
             proc = self.proc
             if not proc:
@@ -610,3 +681,8 @@ class WhatsAppGateway:
         with self._lock:
             if self.proc is proc:
                 self.proc = None
+
+    def discard_pending_ingress(self, reason: str = "reset") -> int:
+        with self._lock:
+            return self._provider_inbox.abandon(reason)
+

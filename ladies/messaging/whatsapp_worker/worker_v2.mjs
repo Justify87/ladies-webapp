@@ -40,6 +40,7 @@ const MAX_INCOMING_MEDIA = 96 * 1024 * 1024
 const MAX_FETCH_HISTORY_MESSAGES = 100
 const MAX_RAW_MESSAGE_CACHE = 4000
 const HISTORY_BATCH_SIZE = 100
+const INITIAL_SYNC_EMPTY_FALLBACK_MS = 22_000
 const SERIAL_COMMANDS = new Set([
   'connect', 'disconnect', 'logout', 'send_text', 'send_media',
   'send_reaction', 'edit_message', 'delete_message', 'shutdown',
@@ -632,6 +633,29 @@ function mediaContent(command) {
   throw new Error(`Nicht unterstützter Medientyp: ${mediaType}`)
 }
 
+function emitSyncReady(current) {
+  const context = socketContexts.get(current)
+  if (!context || current !== sock || !context.pendingReceived || context.readyEmitted || context.catchUpFailed) return
+  context.readyEmitted = true
+  if (context.noHistoryTimer) {
+    clearTimeout(context.noHistoryTimer)
+    context.noHistoryTimer = null
+  }
+  emit({ type: 'sync', state: 'READY', progress: 100, is_latest: true })
+}
+
+function scheduleReadyAfterBaileysFlush(current) {
+  const context = socketContexts.get(current)
+  if (!context || context.readyScheduled || context.readyEmitted || context.catchUpFailed) return
+  context.readyScheduled = true
+  setTimeout(() => {
+    context.readyScheduled = false
+    if (current !== sock || context.readyEmitted || context.catchUpFailed) return
+    const tail = context.eventTail
+    context.eventTail = tail.then(() => emitSyncReady(current))
+  }, 0)
+}
+
 async function handleConnectionUpdate(current, update) {
   if (current !== sock || !update) return
   const context = socketContexts.get(current) || { registeredAtStart: false, qrSeen: false }
@@ -645,6 +669,10 @@ async function handleConnectionUpdate(current, update) {
     emit({ type: 'connection', state: 'CONNECTED', account: current.user?.id || null })
   }
   if (update.connection !== 'close') return
+  if (context.noHistoryTimer) {
+    clearTimeout(context.noHistoryTimer)
+    context.noHistoryTimer = null
+  }
 
   const code = statusCode(update.lastDisconnect?.error)
   const reason = errorText(update.lastDisconnect?.error)
@@ -684,12 +712,46 @@ async function handleConnectionUpdate(current, update) {
 }
 
 async function processEvents(current, events, saveCreds) {
+  const context = socketContexts.get(current)
   if (events['creds.update']) await saveCreds()
   const connectionUpdate = events['connection.update']
   if (connectionUpdate) await handleConnectionUpdate(current, connectionUpdate)
 
-  if (events['messaging-history.set']) {
-    await emitHistory(current, events['messaging-history.set'])
+  const pendingReceivedNow = connectionUpdate?.receivedPendingNotifications === true && current === sock && context
+  if (pendingReceivedNow) {
+    context.pendingReceived = true
+    const expectedHistory = context.accountSyncCounterAtStart <= 0
+    emit({ type: 'sync', state: 'PENDING', progress: null, is_latest: false, expected_history: expectedHistory })
+  }
+
+  const historyStatus = events['messaging-history.status']
+  if (historyStatus && context) {
+    context.historyStarted = true
+    if (context.noHistoryTimer) {
+      clearTimeout(context.noHistoryTimer)
+      context.noHistoryTimer = null
+    }
+    emit({
+      type: 'sync',
+      state: 'HISTORY_WAIT',
+      progress: null,
+      is_latest: false,
+      history_status: historyStatus.status || null,
+      explicit: Boolean(historyStatus.explicit),
+      sync_type: historyStatus.syncType ?? null,
+    })
+  }
+
+  const historySet = events['messaging-history.set']
+  if (historySet) {
+    if (context) {
+      context.historyStarted = true
+      if (context.noHistoryTimer) {
+        clearTimeout(context.noHistoryTimer)
+        context.noHistoryTimer = null
+      }
+    }
+    await emitHistory(current, historySet)
   }
 
   const upsert = events['messages.upsert']
@@ -773,9 +835,21 @@ async function processEvents(current, events, saveCreds) {
     }
   }
 
-  if (connectionUpdate?.receivedPendingNotifications === true && current === sock) {
-    emit({ type: 'sync', state: 'READY', progress: 100, is_latest: true })
+  if (pendingReceivedNow) {
+    if (context.accountSyncCounterAtStart > 0) {
+      scheduleReadyAfterBaileysFlush(current)
+    } else if (!context.historyStarted && !context.noHistoryTimer) {
+      context.noHistoryTimer = setTimeout(() => {
+        context.noHistoryTimer = null
+        if (context.historyStarted || current !== sock || context.readyEmitted || context.catchUpFailed) return
+        scheduleReadyAfterBaileysFlush(current)
+      }, INITIAL_SYNC_EMPTY_FALLBACK_MS)
+      context.noHistoryTimer.unref?.()
+    }
   }
+
+  if (context?.pendingReceived && historySet?.isLatest) emitSyncReady(current)
+  if (context?.pendingReceived && historyStatus?.status === 'paused') emitSyncReady(current)
 }
 
 async function connect() {
@@ -803,14 +877,27 @@ async function connect() {
       generateHighQualityLinkPreview: false,
     })
     sock = current
-    socketContexts.set(current, { registeredAtStart: Boolean(state.creds?.registered), qrSeen: false })
-    current.ev.process(async events => {
-      try {
-        await processEvents(current, events, saveCreds)
-      } catch (error) {
+    const context = {
+      registeredAtStart: Boolean(state.creds?.registered),
+      qrSeen: false,
+      accountSyncCounterAtStart: Number(state.creds?.accountSyncCounter || 0),
+      pendingReceived: false,
+      historyStarted: false,
+      readyScheduled: false,
+      readyEmitted: false,
+      catchUpFailed: false,
+      noHistoryTimer: null,
+      eventTail: Promise.resolve(),
+    }
+    socketContexts.set(current, context)
+    current.ev.process(events => {
+      const task = context.eventTail.then(() => processEvents(current, events, saveCreds))
+      context.eventTail = task.catch(error => {
+        if (context.pendingReceived || context.historyStarted) context.catchUpFailed = true
         logger.error({ err: errorText(error) }, 'Baileys event batch failed')
         emit({ type: 'error', code: 'EVENT_BATCH_FAILED', message: errorText(error) })
-      }
+      })
+      return context.eventTail
     })
   })().catch(err => {
     logger.error({ err: errorText(err) }, 'WhatsApp connect failed')
