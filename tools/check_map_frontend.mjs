@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 
+import { api } from '../ladies/static/explorer/js/api/client.js';
 import { createMapEffects, invalidateMapProjection, mapRequestDescriptor } from '../ladies/static/explorer/js/effects/map.js';
 import { buildMapProjection, sanitizeMapPoints } from '../ladies/static/explorer/js/data/map_model.js';
 import { notifyMapProjectionChanged } from '../ladies/static/explorer/js/shared/domain_events.js';
@@ -160,6 +161,26 @@ assert.equal('mapped_profile_count' in sanitized.points.meta,false);
   effects.dispose();
 }
 
+// Leaving during an in-flight request clears loading so re-entering can fetch again.
+{
+  const state=mapState();
+  const store=createStore(state);
+  const requests=[];
+  const effects=createMapEffects({store,mapPoints:payload=>new Promise(resolve=>requests.push({payload,resolve}))});
+  const first=effects.loadMapPoints();
+  assert.equal(state.discover.map.loading,true);
+  effects.cancelMapRequest();
+  assert.equal(state.discover.map.loading,false);
+  const second=effects.ensureMapData();
+  assert.equal(requests.length,2);
+  requests[1].resolve({type:'FeatureCollection',features:[],meta:{pending_count:0,marker:'reentered'}});
+  await second;
+  requests[0].resolve({type:'FeatureCollection',features:[],meta:{pending_count:0,marker:'cancelled'}});
+  await first;
+  assert.equal(state.discover.map.points.meta.marker,'reentered');
+  effects.dispose();
+}
+
 // New result sets and projection revisions must reject older in-flight responses.
 {
   const state=mapState();
@@ -175,7 +196,6 @@ assert.equal('mapped_profile_count' in sanitized.points.meta,false);
   await oldLoad;
   assert.equal(state.discover.map.points.meta.marker,'new');
 
-  state.search.results=[{listing_id:2,city:'Grimma'}];
   const revisionLoad=effects.loadMapPoints({force:true});
   invalidateMapProjection(store);
   requests[2].resolve({type:'FeatureCollection',features:[],meta:{pending_count:0,marker:'stale-revision'}});
@@ -185,19 +205,45 @@ assert.equal('mapped_profile_count' in sanitized.points.meta,false);
   effects.dispose();
 }
 
-// Projection-affecting domain mutations invalidate through one shared boundary.
+// Projection-affecting domain mutations always advance the revision, even while stale.
 {
   const state=mapState();
   const store=createStore(state);
   const effects=createMapEffects({store,mapPoints:async()=>({type:'FeatureCollection',features:[],meta:{pending_count:0}})});
-  assert.equal(state.discover.map.revision,0);
-  notifyMapProjectionChanged('test-mutation');
-  assert.equal(state.discover.map.revision,1);
+  notifyMapProjectionChanged('first-mutation');
+  notifyMapProjectionChanged('second-mutation');
+  assert.equal(state.discover.map.revision,2);
   assert.equal(state.discover.map.stale,true);
   effects.dispose();
 }
 
-// Lifecycle ownership remains single-flight, cancellable and retryable.
+// API mutation boundaries emit projection changes for every mutation that can affect map data.
+{
+  const state=mapState();
+  const store=createStore(state);
+  const effects=createMapEffects({store,mapPoints:async()=>({type:'FeatureCollection',features:[],meta:{pending_count:0}})});
+  const originalFetch=globalThis.fetch;
+  globalThis.fetch=async()=>({
+    ok:true,
+    status:200,
+    headers:{get:()=> 'application/json'},
+    json:async()=>({}),
+  });
+  try{
+    await api.profile('123');
+    await api.addPriceList(1,{items:[]});
+    await api.profileStatus('123');
+    await api.merge(1,2);
+    await api.split(7);
+    await api.acceptPriceProposal(9,{});
+    assert.equal(state.discover.map.revision,6);
+  }finally{
+    globalThis.fetch=originalFetch;
+    effects.dispose();
+  }
+}
+
+// Lifecycle ownership remains single-flight and cancellable.
 {
   const target={isConnected:true};
   const lifecycle=createMapLifecycle();
