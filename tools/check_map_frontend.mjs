@@ -114,7 +114,7 @@ assert.equal(sanitized.points.meta.unresolved_listing_count,3);
 assert.equal(sanitized.points.meta.invalid_location_count,1);
 assert.equal('mapped_profile_count' in sanitized.points.meta,false);
 
-// Partial geocoding must keep polling beyond the former eight-attempt budget.
+// Partial geocoding keeps polling until all pending locations are resolved.
 {
   const state=mapState();
   const store=createStore(state);
