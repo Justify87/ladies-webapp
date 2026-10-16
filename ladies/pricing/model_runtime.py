@@ -89,7 +89,7 @@ class FunctionGemmaRuntime:
             if span is not None:
                 span.set_attribute("process.exit_code", int(proc.returncode))
             if proc.returncode != 0:
-                raise RuntimeError("FunctionGemma fehlgeschlagen")
+                raise RuntimeError((proc.stderr or "FunctionGemma fehlgeschlagen")[-1500:])
         raw = proc.stdout.strip()
         if not raw:
             raise RuntimeError("FunctionGemma lieferte keine strukturierte Ausgabe")
@@ -269,11 +269,14 @@ CHAT:
     def _evidence(value: Any) -> list[dict[str, Any]]:
         rows = value if isinstance(value, list) else []
         out = []
-        for raw in rows:
-            row = raw if isinstance(raw, dict) else {}
-            out.append({
-                "message_id": int(row.get("message_id") or 0),
-                "excerpt": str(row.get("excerpt") or "")[:500],
-                "source_type": "CHAT_TEXT",
-            })
+        for row in rows[:3]:
+            if not isinstance(row, dict):
+                continue
+            try:
+                message_id = int(row["message_id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            excerpt = str(row.get("excerpt") or "").strip()
+            if excerpt:
+                out.append({"message_id": message_id, "excerpt": excerpt[:500]})
         return out
