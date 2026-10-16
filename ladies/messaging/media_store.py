@@ -55,7 +55,7 @@ class MessagingMediaStore:
         if not isinstance(media, dict):
             return payload
 
-        # Compatibility with older workers that transported media as base64.
+        # Decode inline base64 media before archiving.
         if media.get("data_base64"):
             try:
                 raw = base64.b64decode(media["data_base64"], validate=True)
@@ -86,8 +86,7 @@ class MessagingMediaStore:
         try:
             target = self.resolve(name, private=bool(payload.get("view_once")))
         except (FileNotFoundError, ValueError):
-            # The worker may report metadata before a missing/corrupt file. Keep
-            # the message but never surface an unchecked path.
+            # Keep the message when its media file is missing, but never expose an unchecked path.
             clean = dict(media)
             clean.pop("archive_name", None)
             clean.pop("local_url", None)
@@ -145,9 +144,7 @@ class MessagingMediaStore:
             if completed.returncode != 0 or not output.exists() or output.stat().st_size == 0:
                 LOGGER.warning("Voice conversion rejected returncode=%s", completed.returncode)
                 raise ValueError(VOICE_CONVERSION_ERROR)
-            # Replace the uploaded blob atomically. Keeping the archive name means
-            # the request route can always clean up the same target on any later
-            # validation failure, while MIME/file-name metadata describe OGG.
+            # Keep the archive name stable so every failure path can clean up the same target.
             output.replace(source)
             return source.name, "audio/ogg; codecs=opus"
         except ValueError:

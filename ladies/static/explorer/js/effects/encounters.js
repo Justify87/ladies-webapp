@@ -36,9 +36,7 @@ export function createEncounterEffects({store,getEffects}) {
       negotiable:enumChoice('negotiable'),
       private_note:String(fd.get('private_note')||'').trim()||null
     };
-    // The consolidated "Daten erfassen" form intentionally does not expose
-    // base price, generic encounter note or service rows. Omit those keys when
-    // the controls are absent so editing ratings cannot erase existing data.
+    // Omit absent controls so partial edits cannot erase stored encounter data.
     if(form.querySelector('[name="base_price_eur"]'))payload.base_price_eur=fd.get('base_price_eur')||null;
     if(form.querySelector('[name="note"]'))payload.note=String(fd.get('note')||'').trim()||null;
     if(form.querySelector('[data-encounter-service-row]'))payload.services=servicesFrom(form);

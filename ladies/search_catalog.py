@@ -5,13 +5,13 @@ from .utils import clean_text
 CATEGORY_MAP = {
     "": "",
     "huren-hostessen": "huren-hostessen",
-    "locations": "bordelle-laufhaeuser",  # compatibility with V6
+    "locations": "bordelle-laufhaeuser",
     "bordelle-laufhaeuser": "bordelle-laufhaeuser",
     "escort": "escort",
     "transen-shemale": "transen-shemale",
     "erotische-massage": "erotische-massage",
     "domina-sm": "domina-sm",
-    "fkk-clubs": "fkk-saunaclubs",  # compatibility with V6
+    "fkk-clubs": "fkk-saunaclubs",
     "fkk-saunaclubs": "fkk-saunaclubs",
     "swinger": "swinger",
     "telefonsex": "telefonsex",

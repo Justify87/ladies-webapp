@@ -124,14 +124,10 @@ class MessagingService(_CanonicalMessagingService):
                 select(ChatThread).where(ChatThread.person_id == int(person_id)).limit(1)
             )
             if target is not None:
-                # Reconciliation may structurally detach an old NON_LADIES chat.
-                # That private history remains separate and must not block a new,
-                # explicitly assigned Ladies conversation for the same person.
+                # Detached NON_LADIES history remains private and does not block a new Ladies conversation.
                 reconcile_thread_in_session(db, target)
 
-            # The user is explicitly assigning the reviewed conversation, so this
-            # deliberate action may override a previous exclusion on that source
-            # conversation. Do it before the canonical thread merge.
+            # Manual assignment may override the source conversation's exclusion before the thread merge.
             if temporary is not None:
                 set_thread_classification_in_session(
                     db,

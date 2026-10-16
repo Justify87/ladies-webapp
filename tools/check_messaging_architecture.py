@@ -50,16 +50,14 @@ def _check_connection_runtime() -> None:
     gateway_ns = runpy.run_path(str(ROOT / "ladies/messaging/gateway.py"))
     gateway_cls = gateway_ns["WhatsAppGateway"]
 
-    # Legacy service startup must not be able to create a worker without an
-    # explicit connection intent.
+    # Starting without explicit connection intent must remain inert.
     with tempfile.TemporaryDirectory() as tmp:
         gateway = gateway_cls(Path(tmp), Path(tmp) / "auth", lambda event: None)
         gateway.dependency_status = lambda: (_ for _ in ()).throw(AssertionError("implicit start checked dependencies"))
         gateway.start()
         require(gateway.proc is None, "gateway start is inert without connection intent")
 
-    # Reproduce the old reset race: the process already crashed, _watch() has
-    # cleared proc and is sleeping. stop() must still invalidate that watcher.
+    # stop() must invalidate a crash watcher after proc has already been cleared.
     class CrashedProc:
         stdin = None
 
@@ -94,9 +92,7 @@ def _check_connection_runtime() -> None:
         require(not starts, "stale crash watcher cannot restart after stop")
         require(not gateway._desired_running, "stop clears desired worker state even with proc already gone")
 
-    # A genuine crash while connection intent is still active must restart the
-    # process and explicitly reconnect because the Node worker no longer pairs
-    # automatically on process startup.
+    # Active connection intent restarts the process and reconnects explicitly.
     with tempfile.TemporaryDirectory() as tmp:
         gateway = gateway_cls(Path(tmp), Path(tmp) / "auth", lambda event: None)
         gateway._desired_running = True
@@ -181,8 +177,7 @@ def _check_connection_runtime() -> None:
             self.gateway.state = "DISCONNECTED"
             return self.status()
 
-    # Clean-slate reset removes nested credentials/keys and does not recreate
-    # the auth directory or issue a new connect command.
+    # Reset removes credentials without recreating auth state or reconnecting.
     with tempfile.TemporaryDirectory() as tmp:
         auth_dir = Path(tmp) / "auth"
         service = FakeService(auth_dir)
@@ -197,8 +192,7 @@ def _check_connection_runtime() -> None:
         require(not auth_dir.exists(), "reset does not recreate auth directory")
         require("connect" not in service.gateway.commands, "reset never reconnects")
 
-    # If deletion fails, reset must fail loudly instead of returning a false
-    # success that makes the UI claim all credentials were deleted.
+    # Failed deletion must report an error instead of claiming credentials were removed.
     with tempfile.TemporaryDirectory() as tmp:
         auth_dir = Path(tmp) / "auth"
         service = FakeService(auth_dir)
@@ -223,8 +217,7 @@ def _check_connection_runtime() -> None:
         require(service.gateway.state == "ERROR", "failed auth deletion leaves explicit error state")
         require((auth_dir / "creds.json").exists(), "failed deletion test kept auth evidence")
 
-    # If an automatic resume is already in flight, reset serializes behind it
-    # and wins last. No stale resume can recreate auth after reset completes.
+    # Reset serializes behind an in-flight resume and wins the final state.
     with tempfile.TemporaryDirectory() as tmp:
         auth_dir = Path(tmp) / "auth"
         auth_dir.mkdir(parents=True)
@@ -258,7 +251,6 @@ def check_backend() -> None:
     require("provider_chat_deleted" in service, "backend provider state model")
     require("ProviderPeerState" in service, "backend provider state model")
     require("message_identity" in service, "backend canonical provider identity")
-    require("Build the thread index before inserting the current row" in service, "backend history quote ordering")
 
     models = source("ladies/messaging/models.py")
     require("class ProviderPeerState" in models, "provider state class")

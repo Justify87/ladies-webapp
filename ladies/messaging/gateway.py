@@ -116,9 +116,7 @@ class WhatsAppGateway:
 
     def start(self) -> None:
         with self._lock:
-            # Legacy callers may still ask the gateway to start during service
-            # construction. Without an explicit connection intent this is a
-            # deliberate no-op; the connection lifecycle is the sole owner.
+            # Only explicit connection intent may start the worker.
             if not self._desired_running:
                 return
             if self.proc and self.proc.poll() is None:
@@ -291,8 +289,7 @@ class WhatsAppGateway:
         try:
             self._set_state("RECONNECTING", f"Worker-Neustart nach {delay}s")
             self.start()
-            # The worker is intentionally idle on process startup. Reconnect
-            # explicitly so a crashed registered session really resumes.
+            # Worker startup is idle; crash recovery reconnects explicitly.
             self.command("connect", timeout=15)
         except Exception:
             with self._lock:

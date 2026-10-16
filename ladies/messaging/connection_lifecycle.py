@@ -29,10 +29,7 @@ class WhatsAppConnectionLifecycle:
         if self.service.gateway.state == "DEPENDENCY_MISSING":
             return
 
-        # The base MessagingService still contains a legacy gateway.start()
-        # call when creds.json exists. Gateway.start() is now intent-gated, and
-        # this hard stop additionally establishes the lifecycle as the only
-        # owner before any automatic resume is scheduled.
+        # Establish lifecycle ownership before scheduling any saved-session resume.
         self.service.gateway.stop()
         self.service.gateway.state = "NOT_CONFIGURED"
         self.service.gateway.detail = None
@@ -218,6 +215,7 @@ class WhatsAppConnectionLifecycle:
                 except (FileNotFoundError, OSError):
                     pass
                 return
+
             if attempt < 2:
                 time.sleep(0.1 * (attempt + 1))
 

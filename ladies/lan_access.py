@@ -16,13 +16,7 @@ SESSION_TOUCH_INTERVAL = timedelta(minutes=5)
 
 
 class LanAccessManager:
-    """Pair LAN devices without reusing the pairing secret as session cookie.
-
-    Existing V9.5 ``lan_access_token`` cookies remain valid as a migration-only
-    legacy session. The raw legacy token is replaced by its hash and the old file
-    is removed. New pairings receive independent random device sessions. The
-    pairing token rotates on every server start while device sessions survive.
-    """
+    """Pair LAN devices with process-scoped pairing tokens and persistent device sessions."""
 
     def __init__(self, data_dir: str | Path):
         self.root = Path(data_dir)
@@ -72,14 +66,12 @@ class LanAccessManager:
             else:
                 state.setdefault("legacy_session_hash", None)
 
-        # Pairing credentials are per application start and are not browser
-        # sessions. A new process always gets a fresh pairing token.
+        # Pairing tokens are process-scoped, not browser sessions.
         state["pairing_token"] = secrets.token_urlsafe(32)
         self._trim_sessions(state)
         self._write(state)
 
-        # Once the legacy value has been persisted as a one-way hash, keeping the
-        # original reusable token on disk only increases credential exposure.
+        # Remove reusable plaintext credentials after storing their one-way hash.
         if legacy:
             try:
                 self.legacy_path.unlink()

@@ -17,13 +17,10 @@ class ContactEndpoint(Base):
         Index("idx_contact_endpoint_person", "person_id"),
     )
     endpoint_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    # Deliberately not a DB FK: the existing V9 merge deletes source Person in its
-    # transaction. Keeping the source id until IdentityEvent reconciliation lets
-    # messaging move endpoints/threads losslessly to the canonical target person.
+    # Person identity is reconciled through IdentityEvent, so this is a logical reference rather than a DB FK.
     person_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     provider: Mapped[str] = mapped_column(String(24), default="WHATSAPP", nullable=False)
-    # Baileys 7 may deliver a LID without exposing a phone-number JID. A concrete
-    # WhatsApp endpoint can therefore exist before normalized_phone is known.
+    # A provider endpoint may exist before a phone-number JID is available.
     normalized_phone: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     display_phone: Mapped[Optional[str]] = mapped_column(String(128))
     provider_address: Mapped[Optional[str]] = mapped_column(String(256))
@@ -65,8 +62,7 @@ class ChatThread(Base):
         Index("idx_chat_thread_activity", "last_message_at"),
     )
     thread_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    # See ContactEndpoint.person_id: logical reference is required for safe replay
-    # of the repository-owned IdentityEvent merge path.
+    # Uses the same logical person reference contract as ContactEndpoint.
     person_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -106,7 +102,7 @@ class ChatMessage(Base):
 
 
 class ChatMessageMeta(Base):
-    """Provider details kept outside chat_messages so existing DBs need no ALTER TABLE."""
+    """Provider message metadata stored separately from canonical message content."""
 
     __tablename__ = "chat_message_meta"
     message_id: Mapped[int] = mapped_column(

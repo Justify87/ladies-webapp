@@ -41,12 +41,7 @@ def merge_pricing_person(db: Session, source_id: int, target_id: int) -> bool:
 
 
 def install_pricing_identity_merge_listener() -> None:
-    """Compatibility shim for the former global SQLAlchemy merge listener.
-
-    Identity-merge integrations are configured explicitly on PersonRepository by
-    app.py. Keeping this public symbol preserves the existing import contract
-    without reinstalling the hidden global listener.
-    """
+    """No-op public integration hook."""
     return None
 
 

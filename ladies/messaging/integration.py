@@ -173,9 +173,7 @@ def merge_messaging_person(db: Session, source_id: int, target_id: int) -> bool:
         changed = _merge_profile_request_refs(db, source_id, target_id) or changed
 
     if merge_target is not None:
-        # Newly moved endpoints inherit the surviving thread's sticky decision;
-        # if the target person now provides durable Ladies provenance, UNKNOWN is
-        # promoted exactly once here inside the same identity-merge transaction.
+        # Moved endpoints inherit the surviving thread decision; durable provenance promotes UNKNOWN once.
         reconcile_thread_in_session(db, merge_target)
 
     LOGGER.info(
@@ -189,15 +187,12 @@ def merge_messaging_person(db: Session, source_id: int, target_id: int) -> bool:
 
 
 def install_identity_merge_listener() -> None:
-    """Retained for the current MessagingService constructor; no global hook is installed.
-
-    Merge integrations are configured explicitly on PersonRepository by app.py.
-    """
+    """No-op public integration hook; merge handlers are configured on PersonRepository."""
     return None
 
 
 def reconcile_identity_events(database) -> int:
-    """Repair messaging refs for older/out-of-band merge events when possible."""
+    """Reconcile messaging references from persisted identity merge events."""
     merged = 0
     with database.session() as db:
         events = db.scalars(

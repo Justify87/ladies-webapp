@@ -94,10 +94,7 @@ def row(listing_id, person_id, advert_id, *, city=None, postal_code=None, hidden
     }
 
 
-# A not-yet-ingested listing must use its own active search-result city, while a
-# canonical snapshot city remains authoritative when it exists. The response contract
-# is listing-based: multiple listings of one person remain distinct map references.
-# A locally known hidden location is returned only as that listing's display label.
+# Map identity is listing-scoped; canonical snapshot city overrides search-result city.
 with tempfile.TemporaryDirectory() as tmp:
     background = Background()
     service = MapService(
@@ -134,8 +131,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert not background.submissions
 
 
-# A postcode is the first and only lookup initially. City geocoding must not run
-# eagerly in parallel with a more precise postal lookup.
+# Postal lookup has priority over less precise city geocoding.
 with tempfile.TemporaryDirectory() as tmp:
     background = Background()
     service = MapService(
@@ -152,8 +148,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert pending[0]["fallback_city"] == "Leipzig"
 
 
-# A definite postal miss falls through to the city inside the same background job,
-# so frontend polling is not required to schedule the fallback.
+# A definitive postal miss resolves its city fallback in the same background job.
 class Response:
     def __init__(self, status_code, payload):
         self.status_code = status_code
@@ -196,7 +191,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert len(service._http.calls) == 2
 
 
-# A postcode already known as unavailable schedules only its city fallback.
+# A known unavailable postcode schedules only its city fallback.
 with tempfile.TemporaryDirectory() as tmp:
     background = Background()
     service = MapService(
@@ -212,8 +207,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert pending[0]["value"] == "Leipzig"
 
 
-# Corrupt resolved coordinates must never reach GeoJSON/MapLibre. Old invalid cache
-# entries are discarded at startup and immediately scheduled for a fresh lookup.
+# Invalid coordinates are discarded before they can reach GeoJSON or MapLibre.
 with tempfile.TemporaryDirectory() as tmp:
     cache_path = Path(tmp) / "map-location-cache.json"
     cache_path.write_text(json.dumps({
@@ -245,8 +239,7 @@ with tempfile.TemporaryDirectory() as tmp:
         pass
 
 
-# Cache persistence must remain atomic under concurrent writers. The service uses a
-# shared temp path, so serialization and replace belong to the same critical section.
+# Cache persistence remains atomic under concurrent writers.
 with tempfile.TemporaryDirectory() as tmp:
     service = MapService(Repository([]), data_dir=tmp, background=Background())
 
@@ -269,9 +262,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert city_key("Grimma") in saved
 
 
-# Map price projection is independent from persistence details. A current listing scope
-# owns its listing even when it removes a formerly available 60-minute offer; only when
-# that scope does not exist may a person-wide scope be used as fallback.
+# Listing-scoped pricing takes precedence; person-wide pricing is a fallback only.
 projection = runpy.run_path("ladies/pricing/map_projection.py")
 resolve_map_price_60_cents = projection["resolve_map_price_60_cents"]
 resolved = resolve_map_price_60_cents(
@@ -286,7 +277,7 @@ resolved = resolve_map_price_60_cents(
     {
         101: [12000],
         200: [9000],
-        300: [15000],  # older listing revision: must never revive
+        300: [15000],
         401: [17000],
         501: [10000, 14000],
     },
@@ -298,8 +289,6 @@ assert 44 not in resolved
 assert resolved[55] == 12000
 
 
-# Keep the already-executed smoke-suite entry point stable while extending it with
-# browser-facing regression checks. CI configuration stays untouched.
 for check in (
     "tools/check_profile_request_ui.mjs",
     "tools/check_favorites_redesign.mjs",

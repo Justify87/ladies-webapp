@@ -134,9 +134,7 @@ class Database:
                 index.create(bind=connection, checkfirst=True)
 
     def _migrate_0_to_1(self, connection) -> None:
-        # Legacy releases had no explicit schema marker. Keep the migration
-        # intentionally additive: create newly introduced tables, then add only
-        # columns SQLite can append without rewriting or guessing existing data.
+        # Schema version 0 upgrades are additive and only append SQLite-safe columns.
         Base.metadata.create_all(connection)
         self._add_safe_missing_columns(connection)
         self._ensure_declared_indexes(connection)
@@ -176,11 +174,9 @@ class Database:
     def create_schema(self) -> None:
         """Create or upgrade the local SQLite schema before repositories use it.
 
-        SQLite's PRAGMA user_version is the lightweight schema marker. Existing
-        pre-versioned databases are treated as version 0. A consistent backup is
-        made only when an actual migration is necessary. Additive tables are
-        always reconciled so separately loaded feature modules can register new
-        tables without forcing a schema-version bump.
+        PRAGMA user_version marks the schema version. Migrations create a backup
+        before changing an existing schema. Additive tables are always reconciled
+        so feature modules can register tables without a version bump.
         """
         with self.engine.connect() as connection:
             current = int(connection.exec_driver_sql("PRAGMA user_version").scalar_one())
@@ -223,8 +219,7 @@ class Database:
             LOGGER.info("Database schema upgrade complete version=%s", current)
             return
 
-        # Even at the same schema version, feature modules may have registered
-        # purely additive tables after an earlier Database instance was created.
+        # Reconcile additive tables registered by feature modules.
         with self.engine.begin() as connection:
             Base.metadata.create_all(connection)
             self._ensure_declared_indexes(connection)
