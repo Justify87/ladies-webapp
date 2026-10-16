@@ -1,5 +1,6 @@
 import { api, logClient } from '../api/client.js';
 import { mapRequestDescriptor, sanitizeMapPoints } from '../data/map_model.js';
+import { subscribeMapProjectionChanges } from '../shared/domain_events.js';
 
 const PARTIAL_RETRY_MIN_MS=1200;
 const PARTIAL_RETRY_MAX_MS=5000;
@@ -11,6 +12,8 @@ export { mapRequestDescriptor } from '../data/map_model.js';
 export function invalidateMapProjection(store){
   store.dispatch({type:'DISCOVER_MAP_INVALIDATE'});
 }
+
+export const invalidateMapData=invalidateMapProjection;
 
 function linearBackoff(base,max,attempt){
   return Math.min(max,base*Math.max(1,attempt));
@@ -26,6 +29,7 @@ export function createMapEffects({store,mapPoints=api.mapPoints}) {
   let timerKey=null;
   let partialAttempts=0;
   let errorAttempts=0;
+  const unsubscribeProjection=subscribeMapProjectionChanges(()=>invalidateMapProjection(store));
 
   const clearTimer=()=>{
     clearTimeout(timer);
@@ -120,5 +124,10 @@ export function createMapEffects({store,mapPoints=api.mapPoints}) {
     return loadMapPoints({...options,force:false});
   }
 
-  return Object.freeze({ensureMapData,loadMapPoints,cancelMapRequest:cancel});
+  const dispose=()=>{
+    cancel();
+    unsubscribeProjection();
+  };
+
+  return Object.freeze({ensureMapData,loadMapPoints,cancelMapRequest:cancel,dispose});
 }
