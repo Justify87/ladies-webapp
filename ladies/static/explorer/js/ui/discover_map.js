@@ -162,6 +162,7 @@ function queueEnsureMapData(effects){
   ensureQueued=true;
   queueMicrotask(()=>{
     ensureQueued=false;
+    if(!wasActive)return;
     void effects.ensureMapData({quiet:true});
   });
 }
