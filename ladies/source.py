@@ -113,10 +113,7 @@ def build_search_url(
     return f"{BASE}{path}?{query}"
 
 def resolve_location(session: requests.Session, raw: str) -> tuple[str, str]:
-    """
-    Resolve a user-entered city/region/address through the site's own location API.
-    This runs only after the user presses the search button.
-    """
+    """Resolve user-entered locations through the site's location API on search."""
     raw = clean_text(raw)
     if not raw:
         return DEFAULT_CITY, "Leipzig"
@@ -298,9 +295,7 @@ def fetch_search_configured(
             "SearchConfig pagination metadata missing on page 1; using guarded API fallback url=%s",
             first_url,
         )
-        # Compatibility fallback for a future site markup change.  The response is
-        # inspected before any cards are accepted; a widened radius ends pagination
-        # rather than turning the whole search into an error.
+        # Probe page 2 before accepting more cards; any radius expansion stops pagination.
         time.sleep(max(0.0, page_delay))
         second_url = build_search_url(
             city_slug=city_slug, radius_km=radius_km, page=2,
@@ -337,8 +332,7 @@ def fetch_search_configured(
                     profiles.extend(parse_search_cards(payload.get("content") or ""))
         meta["total_pages"] = total_pages
 
-    # Page 1 is already in the HTML.  Only request pages that page 1 itself says
-    # belong to the exact-radius result set.  This is the key hard-radius guard.
+    # Request only pages that page 1 assigns to the exact-radius result set.
     first_api_page = 2 if metadata_available else 3
     for page in range(first_api_page, total_pages + 1):
         time.sleep(max(0.0, page_delay))
@@ -366,8 +360,7 @@ def fetch_search_configured(
                 meta[flag] = payload.get(flag)
         distance = str(payload.get("distanceSearched", ""))
         if distance and distance != str(radius_km):
-            # Never accept cards from an automatically enlarged radius.  Keep the
-            # exact-radius pages already collected instead of returning HTTP 502.
+            # Discard cards returned from an automatically enlarged radius.
             LOGGER.warning(
                 "Hard-radius boundary reached page=%s requested_radius=%s server_radius=%s; "
                 "discarding this page and stopping pagination",
