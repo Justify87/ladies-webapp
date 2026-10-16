@@ -127,6 +127,14 @@ def check_catch_up_timeout_restarts() -> None:
         globals_["CATCH_UP_MAX_RESTARTS"] = previous_restarts
 
 
+def check_catch_up_barrier_atomicity() -> None:
+    source = (ROOT / "ladies/messaging/gateway.py").read_text(encoding="utf-8")
+    finish = source.split("def _finish_catch_up", 1)[1].split("def _arm_catch_up_watchdog", 1)[0]
+    durable = source.split("if event_type in DURABLE_EVENT_TYPES:", 1)[1].split("forwarded_event = event", 1)[0]
+    require("with self._lock:" in finish, "catch-up completion is serialized with gateway state")
+    require("with self._lock:" in durable, "durable catch-up delivery shares the completion lock")
+
+
 def check_service_propagates_persistence_failures() -> None:
     service = (ROOT / "ladies/messaging/service_v2.py").read_text(encoding="utf-8")
     history = service.split('if event_type == "history_batch":', 1)[1].split('if event_type == "history_metadata":', 1)[0]
@@ -228,6 +236,7 @@ if __name__ == "__main__":
     check_worker_batch_contract()
     check_durable_catch_up()
     check_catch_up_timeout_restarts()
+    check_catch_up_barrier_atomicity()
     check_service_propagates_persistence_failures()
     check_saved_session_resume()
     print("WhatsApp reconnect/sync checks passed")

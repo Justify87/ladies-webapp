@@ -335,36 +335,41 @@ class WhatsAppGateway:
             LOGGER.warning("WhatsApp worker restart failed", exc_info=True)
 
     def _begin_catch_up(self) -> int:
-        self._catch_up_active = True
-        self._transport_open = False
-        self._pending_sync_ready = False
-        self._catch_up_token += 1
-        return self._catch_up_token
+        with self._lock:
+            self._catch_up_active = True
+            self._transport_open = False
+            self._pending_sync_ready = False
+            self._catch_up_token += 1
+            return self._catch_up_token
 
     def _finish_catch_up(self) -> dict[str, Any] | None:
-        if not self._catch_up_active or not self._transport_open or not self._pending_sync_ready:
-            return None
-        replayed = self._provider_inbox.drain()
-        if self._provider_inbox.pending_count():
-            return None
-        if replayed:
-            LOGGER.info("Persisted %s deferred WhatsApp catch-up event(s)", replayed)
-        previous = self.state
-        self._catch_up_active = False
-        self.state = "CONNECTED"
-        self.detail = None
-        self._restart_attempt = 0
-        self._catch_up_restarts = 0
-        self.qr = None
-        self.last_connected_at = time.time()
-        if previous != "CONNECTED":
-            LOGGER.info("WhatsApp offline catch-up complete; connection is ready")
-        return {
-            "type": "connection",
-            "state": "CONNECTED",
-            "detail": None,
-            "account": self.account,
-        }
+        # Use the gateway lock as the single catch-up barrier lock. Durable
+        # delivery and stop() use the same lock, so no provider event can slip
+        # between the final inbox-empty check and the CONNECTED transition.
+        with self._lock:
+            if not self._catch_up_active or not self._transport_open or not self._pending_sync_ready:
+                return None
+            replayed = self._provider_inbox.drain()
+            if self._provider_inbox.pending_count():
+                return None
+            if replayed:
+                LOGGER.info("Persisted %s deferred WhatsApp catch-up event(s)", replayed)
+            previous = self.state
+            self._catch_up_active = False
+            self.state = "CONNECTED"
+            self.detail = None
+            self._restart_attempt = 0
+            self._catch_up_restarts = 0
+            self.qr = None
+            self.last_connected_at = time.time()
+            if previous != "CONNECTED":
+                LOGGER.info("WhatsApp offline catch-up complete; connection is ready")
+            return {
+                "type": "connection",
+                "state": "CONNECTED",
+                "detail": None,
+                "account": self.account,
+            }
 
     def _arm_catch_up_watchdog(self, proc: subprocess.Popen[str] | None, token: int) -> None:
         if proc is None:
@@ -439,14 +444,16 @@ class WhatsAppGateway:
         # During reconnect, message/history delivery is at-least-once: write the
         # provider event to disk first and remove it only after canonical SQL
         # persistence succeeds. Service exceptions deliberately propagate here.
-        if self._catch_up_active and event_type in DURABLE_EVENT_TYPES:
-            try:
-                self._provider_inbox.deliver(event)
-            except Exception:
-                self.state = "CONNECTING"
-                self.detail = "Ausstehende WhatsApp-Nachrichten werden erneut gespeichert."
-                LOGGER.exception("Deferred WhatsApp provider event persistence failed")
-            return
+        if event_type in DURABLE_EVENT_TYPES:
+            with self._lock:
+                if self._catch_up_active:
+                    try:
+                        self._provider_inbox.deliver(event)
+                    except Exception:
+                        self.state = "CONNECTING"
+                        self.detail = "Ausstehende WhatsApp-Nachrichten werden erneut gespeichert."
+                        LOGGER.exception("Deferred WhatsApp provider event persistence failed")
+                    return
 
         forwarded_event = event
         synthetic_events: list[dict[str, Any]] = []
