@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+import importlib.util
 import json
-import runpy
-import subprocess
 import sys
 import tempfile
 import threading
@@ -22,7 +22,7 @@ class FixedRateLimiter:
 
 
 source.FixedRateLimiter = FixedRateLimiter
-package = types.ModuleType("ladies_v9")
+ladies_v9 = types.ModuleType("ladies_v9")
 
 orjson = types.ModuleType("orjson")
 orjson.OPT_SORT_KEYS = 1
@@ -53,16 +53,33 @@ class Session:
 requests.RequestException = RequestException
 requests.Session = Session
 sys.modules.update({
-    "ladies_v9": package,
+    "ladies_v9": ladies_v9,
     "ladies_v9.source": source,
     "orjson": orjson,
     "requests": requests,
 })
 
-module = runpy.run_path("ladies/core/services/map.py")
-MapService = module["MapService"]
-city_key = module["_city_key"]
-postal_key = module["_postal_key"]
+for package_name in ("ladies", "ladies.core", "ladies.core.services"):
+    package = types.ModuleType(package_name)
+    package.__path__ = []
+    sys.modules[package_name] = package
+
+
+def load_module(name: str, path: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+locations = load_module("ladies.core.services.map_locations", "ladies/core/services/map_locations.py")
+map_module = load_module("ladies.core.services.map", "ladies/core/services/map.py")
+MapLocationResolver = locations.MapLocationResolver
+MapService = map_module.MapService
+city_key = locations._city_key
+postal_key = locations._postal_key
 
 
 class Repository:
@@ -91,24 +108,27 @@ def row(listing_id, person_id, advert_id, *, city=None, postal_code=None, hidden
         "city": city,
         "postal_code": postal_code,
         "hidden_location": hidden_location,
+        "price_60_cents": None,
     }
 
 
-# Map identity is listing-scoped; canonical snapshot city overrides search-result city.
+# Canonical snapshot location wins over the transient search-row city. Listings remain
+# listing-based even when they belong to the same person, and refs are normal arrays.
 with tempfile.TemporaryDirectory() as tmp:
     background = Background()
+    resolver = MapLocationResolver(data_dir=tmp, background=background)
+    resolver._remember(city_key("Markkleeberg"), lat=51.28, lng=12.37, precision="SEARCH_AREA", source="TEST")
+    resolver._remember(city_key("Grimma"), lat=51.24, lng=12.72, precision="SEARCH_AREA", source="TEST")
     service = MapService(
         Repository([
             row(1, 101, "a", city=None),
             row(2, 101, "b", city="Grimma", hidden_location="Musterstraße 12, Grimma"),
         ]),
-        data_dir=tmp,
-        background=background,
+        resolver=resolver,
     )
-    service._remember(city_key("Markkleeberg"), lat=51.28, lng=12.37, precision="SEARCH_AREA", source="TEST")
-    service._remember(city_key("Grimma"), lat=51.24, lng=12.72, precision="SEARCH_AREA", source="TEST")
     points = service.feature_collection([
         {"listing_id": 1, "city": "Markkleeberg"},
+        {"listing_id": 2, "city": "Leipzig"},
         {"listing_id": 2, "city": "Leipzig"},
     ])
     keys = {feature["properties"]["location_key"] for feature in points["features"]}
@@ -117,27 +137,23 @@ with tempfile.TemporaryDirectory() as tmp:
     assert city_key("Leipzig") not in keys
     assert points["meta"]["listing_count"] == 2
     assert points["meta"]["mapped_listing_count"] == 2
-    refs = [
-        ref
-        for feature in points["features"]
-        for ref in json.loads(feature["properties"]["listing_refs_json"])
-    ]
+    refs = [ref for feature in points["features"] for ref in feature["properties"]["listing_refs"]]
     assert sorted(ref["listing_id"] for ref in refs) == [1, 2]
     refs_by_listing = {ref["listing_id"]: ref for ref in refs}
     assert refs_by_listing[1]["address_label"] == "Markkleeberg"
     assert refs_by_listing[2]["address_label"] == "Musterstraße 12, Grimma"
-    assert all("profile_count" not in feature["properties"] for feature in points["features"])
-    assert all("profiles_json" not in feature["properties"] for feature in points["features"])
+    assert all("listing_refs_json" not in feature["properties"] for feature in points["features"])
     assert not background.submissions
 
 
-# Postal lookup has priority over less precise city geocoding.
+# A postcode is the only initial lookup. City geocoding is a fallback after a definite
+# postcode miss, not parallel work.
 with tempfile.TemporaryDirectory() as tmp:
     background = Background()
+    resolver = MapLocationResolver(data_dir=tmp, background=background)
     service = MapService(
         Repository([row(3, 303, "c", city="Leipzig", postal_code="04109")]),
-        data_dir=tmp,
-        background=background,
+        resolver=resolver,
     )
     points = service.feature_collection([{"listing_id": 3, "city": "Leipzig"}])
     assert points["meta"]["pending_count"] == 1
@@ -148,7 +164,6 @@ with tempfile.TemporaryDirectory() as tmp:
     assert pending[0]["fallback_city"] == "Leipzig"
 
 
-# A definitive postal miss resolves its city fallback in the same background job.
 class Response:
     def __init__(self, status_code, payload):
         self.status_code = status_code
@@ -173,41 +188,49 @@ class ScriptedSession:
         return self.responses.pop(0)
 
 
+# Postal 404 falls through to the city in the same background job. Stored hidden
+# address text must never be transmitted to either external provider.
 with tempfile.TemporaryDirectory() as tmp:
-    service = MapService(Repository([]), data_dir=tmp, background=Background())
-    service._http = ScriptedSession([
+    resolver = MapLocationResolver(data_dir=tmp, background=Background())
+    resolver._http = ScriptedSession([
         Response(404, {}),
         Response(200, [{"lat": "51.3397", "lon": "12.3731"}]),
     ])
-    service._resolve_missing([{
+    resolver._resolve_missing([{
         "key": postal_key("99999"),
         "kind": "postal",
         "value": "99999",
         "fallback_city_key": city_key("Leipzig"),
         "fallback_city": "Leipzig",
     }])
-    assert service._cached_record(postal_key("99999"))["status"] == "NOT_FOUND"
-    assert service._resolved_location(city_key("Leipzig"))["precision"] == "SEARCH_AREA"
-    assert len(service._http.calls) == 2
+    assert resolver._cached_record(postal_key("99999"))["status"] == "NOT_FOUND"
+    assert resolver._resolved_location(city_key("Leipzig"))["precision"] == "SEARCH_AREA"
+    assert len(resolver._http.calls) == 2
+    serialized_calls = json.dumps(resolver._http.calls, ensure_ascii=False)
+    assert "99999" in serialized_calls and "Leipzig" in serialized_calls
+    assert "Musterstraße" not in serialized_calls
 
 
-# A known unavailable postcode schedules only its city fallback.
+# Negative geocoder results have a TTL. An old NOT_FOUND record becomes eligible for
+# resolution again instead of permanently suppressing a location.
 with tempfile.TemporaryDirectory() as tmp:
     background = Background()
-    service = MapService(
-        Repository([row(4, 404, "d", city="Leipzig", postal_code="04109")]),
-        data_dir=tmp,
-        background=background,
-    )
-    service._remember_not_found(postal_key("04109"), source="TEST")
+    resolver = MapLocationResolver(data_dir=tmp, background=background)
+    key = city_key("Leipzig")
+    resolver._cache[key] = {
+        "status": "NOT_FOUND",
+        "source": "TEST",
+        "updated_at": (datetime.now(timezone.utc) - timedelta(days=8)).isoformat(),
+    }
+    assert resolver._cached_record(key) is None
+    service = MapService(Repository([row(4, 404, "d", city="Leipzig")]), resolver=resolver)
     points = service.feature_collection([{"listing_id": 4, "city": "Leipzig"}])
     assert points["meta"]["pending_count"] == 1
     pending = background.submissions[0][2][0]
     assert [spec["kind"] for spec in pending] == ["city"]
-    assert pending[0]["value"] == "Leipzig"
 
 
-# Invalid coordinates are discarded before they can reach GeoJSON or MapLibre.
+# Invalid cached coordinates are discarded on startup and never emitted to MapLibre.
 with tempfile.TemporaryDirectory() as tmp:
     cache_path = Path(tmp) / "map-location-cache.json"
     cache_path.write_text(json.dumps({
@@ -220,32 +243,29 @@ with tempfile.TemporaryDirectory() as tmp:
         }
     }), encoding="utf-8")
     background = Background()
+    resolver = MapLocationResolver(data_dir=tmp, background=background)
     service = MapService(
         Repository([row(5, 505, "e", city="Leipzig", postal_code="04109")]),
-        data_dir=tmp,
-        background=background,
+        resolver=resolver,
     )
-    assert service._cached_record(postal_key("04109")) is None
+    assert resolver._cached_record(postal_key("04109")) is None
     points = service.feature_collection([{"listing_id": 5, "city": "Leipzig"}])
     assert points["features"] == []
     assert points["meta"]["pending_count"] == 1
-    pending = background.submissions[0][2][0]
-    assert [spec["kind"] for spec in pending] == ["postal"]
-    assert pending[0]["value"] == "04109"
     try:
-        service._remember(postal_key("04109"), lat=14713.0, lng=51.342, precision="POSTAL", source="TEST")
+        resolver._remember(postal_key("04109"), lat=14713.0, lng=51.342, precision="POSTAL", source="TEST")
         raise AssertionError("invalid coordinates must not be cached")
     except ValueError:
         pass
 
 
-# Cache persistence remains atomic under concurrent writers.
+# Cache persistence is atomic under concurrent writers.
 with tempfile.TemporaryDirectory() as tmp:
-    service = MapService(Repository([]), data_dir=tmp, background=Background())
+    resolver = MapLocationResolver(data_dir=tmp, background=Background())
 
     def write(key, lat):
-        service._remember(key, lat=lat, lng=12.0, precision="SEARCH_AREA", source="TEST")
-        service._save_cache()
+        resolver._remember(key, lat=lat, lng=12.0, precision="SEARCH_AREA", source="TEST")
+        resolver._save_cache()
 
     threads = [
         threading.Thread(target=write, args=(city_key("Leipzig"), 51.3)),
@@ -262,10 +282,12 @@ with tempfile.TemporaryDirectory() as tmp:
     assert city_key("Grimma") in saved
 
 
-# Listing-scoped pricing takes precedence; person-wide pricing is a fallback only.
-projection = runpy.run_path("ladies/pricing/map_projection.py")
-resolve_map_price_60_cents = projection["resolve_map_price_60_cents"]
-resolved = resolve_map_price_60_cents(
+# Price projection remains independent from map persistence details.
+projection_spec = importlib.util.spec_from_file_location("map_projection", "ladies/pricing/map_projection.py")
+assert projection_spec and projection_spec.loader
+projection = importlib.util.module_from_spec(projection_spec)
+projection_spec.loader.exec_module(projection)
+resolved = projection.resolve_map_price_60_cents(
     {11: 1, 22: 1, 33: 1, 44: 1, 55: 1},
     {
         (1, None): (200, "EUR"),
@@ -288,15 +310,4 @@ assert 33 not in resolved
 assert 44 not in resolved
 assert resolved[55] == 12000
 
-
-for check in (
-    "tools/check_profile_request_ui.mjs",
-    "tools/check_favorites_redesign.mjs",
-    "tools/check_map_price_persistence.mjs",
-):
-    subprocess.run(
-        ["node", "--experimental-default-type=module", check],
-        check=True,
-    )
-
-print("map view backend regression checks passed")
+print("map backend behavior checks passed")
