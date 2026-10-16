@@ -83,6 +83,16 @@ def build_session() -> requests.Session:
     return s
 
 
+def _telemetry_operation(context: str) -> str:
+    value = str(context or "request")
+    for prefix in ("profile-", "status-"):
+        if value.startswith(prefix):
+            return prefix[:-1]
+    if value.startswith("search-page-"):
+        return "search-page"
+    return value[:80]
+
+
 def http_get(session: requests.Session, url: str, *, context: str, timeout: float = 30,
              headers: dict[str,str] | None = None, params: dict[str,Any] | None = None,
              expected_statuses: tuple[int,...] = (200,)) -> requests.Response:
@@ -91,7 +101,7 @@ def http_get(session: requests.Session, url: str, *, context: str, timeout: floa
         r = traced_http_call(
             "GET",
             url,
-            operation=context,
+            operation=_telemetry_operation(context),
             call=lambda: session.get(url, headers=headers, params=params, timeout=timeout),
         )
     except requests.RequestException:
@@ -264,139 +274,51 @@ def fetch_search_configured(
     first_html = first_response.text
     profiles = parse_search_cards(first_html)
     first_config = parse_search_config(first_html)
-
-    first_distance = first_config.get("distance_searched")
-    if first_distance is not None and first_distance != radius_km:
-        raise RuntimeError(
-            f"Fail-closed: Bereits Seite 1 meldet Radius {first_distance} km, "
-            f"angefordert waren {radius_km} km."
+    total_pages = first_config.get("total_pages") or 1
+    try:
+        total_pages = max(1, min(100, int(total_pages)))
+    except Exception:
+        total_pages = 1
+    radius_boundary_stopped = False
+    for page in range(2, total_pages + 1):
+        if page_delay > 0:
+            time.sleep(page_delay)
+        page_url = build_search_url(
+            city_slug=city_slug, radius_km=radius_km, page=page,
+            filter_path=filter_path, api=True,
         )
+        response = http_get(
+            session, page_url, context=f"search-page-{page}", expected_statuses=(200, 404)
+        )
+        if response.status_code == 404:
+            break
+        response.raise_for_status()
+        rows = parse_search_cards(response.text)
+        if not rows:
+            break
+        profiles.extend(rows)
+        distance_boundary = first_config.get("radius_boundary")
+        if distance_boundary:
+            try:
+                if any(row.distance_km is not None and row.distance_km > float(distance_boundary) for row in rows):
+                    radius_boundary_stopped = True
+                    break
+            except (TypeError, ValueError):
+                pass
 
-    metadata_available = "total_pages" in first_config
-    total_pages = max(1, first_config.get("total_pages", 1))
-    server_count = first_config.get("advert_count")
-
-    meta: dict[str, Any] = {
+    unique: dict[str, SearchProfile] = {}
+    for row in profiles:
+        unique[row.advert_id] = row
+    return list(unique.values()), {
         "city": city_slug,
         "city_display": city_display,
         "radius_km": radius_km,
         "filter_path": filter_path,
         "first_url": first_url,
         "total_pages": total_pages,
-        "server_advert_count": server_count,
-        "distance_searched": str(first_distance if first_distance is not None else radius_km),
-        "pagination_source": "page-1-search-config" if metadata_available else "api-fallback",
-        "radius_boundary_stopped": False,
+        "server_advert_count": first_config.get("advert_count"),
+        "distance_searched": first_config.get("distance_searched") or str(radius_km),
+        "pagination_source": first_config.get("pagination_source") or "unknown",
+        "radius_boundary_stopped": radius_boundary_stopped,
+        "unique_count": len(unique),
     }
-
-    if metadata_available:
-        LOGGER.debug(
-            "Search page-1 metadata total_pages=%s current_page=%s advert_count=%s "
-            "distance_searched=%s parsed_cards=%s",
-            total_pages, first_config.get("current_page"), server_count,
-            first_distance, len(profiles),
-        )
-    else:
-        LOGGER.warning(
-            "SearchConfig pagination metadata missing on page 1; using guarded API fallback url=%s",
-            first_url,
-        )
-        # Probe page 2 before accepting more cards; any radius expansion stops pagination.
-        time.sleep(max(0.0, page_delay))
-        second_url = build_search_url(
-            city_slug=city_slug, radius_km=radius_km, page=2,
-            filter_path=filter_path, api=True,
-        )
-        r = http_get(
-            session, second_url, context="search-api-page-2-fallback",
-            headers={"Accept": "*/*", "Referer": f"{BASE}/"},
-            expected_statuses=(200, 404),
-        )
-        if r.status_code == 404:
-            total_pages = 1
-        else:
-            r.raise_for_status()
-            payload = r.json()
-            for flag in ("snapshotUpdatedDueToNewDay", "snapshotUpdatedDueToNewIndex"):
-                if flag in payload:
-                    meta[flag] = payload.get(flag)
-            distance = str(payload.get("distanceSearched", ""))
-            if distance and distance != str(radius_km):
-                LOGGER.info(
-                    "Hard-radius boundary reached during fallback page=2 requested_radius=%s "
-                    "server_radius=%s; keeping page-1 results only",
-                    radius_km, distance,
-                )
-                total_pages = 1
-                meta["radius_boundary_stopped"] = True
-                meta["server_distance_seen"] = distance
-            else:
-                pagination = payload.get("pagination") or {}
-                total_pages = max(1, int(pagination.get("totalPages") or 1))
-                meta["server_advert_count"] = payload.get("advertCount")
-                if total_pages >= 2:
-                    profiles.extend(parse_search_cards(payload.get("content") or ""))
-        meta["total_pages"] = total_pages
-
-    # Request only pages that page 1 assigns to the exact-radius result set.
-    first_api_page = 2 if metadata_available else 3
-    for page in range(first_api_page, total_pages + 1):
-        time.sleep(max(0.0, page_delay))
-        url = build_search_url(
-            city_slug=city_slug, radius_km=radius_km, page=page,
-            filter_path=filter_path, api=True,
-        )
-        r = http_get(
-            session, url, context=f"search-api-page-{page}",
-            headers={"Accept": "*/*", "Referer": f"{BASE}/"},
-            expected_statuses=(200, 404),
-        )
-        if r.status_code == 404:
-            LOGGER.warning(
-                "Search pagination ended early with 404 page=%s expected_total_pages=%s url=%s",
-                page, total_pages, url,
-            )
-            meta["pagination_ended_early_at"] = page
-            break
-
-        r.raise_for_status()
-        payload = r.json()
-        for flag in ("snapshotUpdatedDueToNewDay", "snapshotUpdatedDueToNewIndex"):
-            if flag in payload:
-                meta[flag] = payload.get(flag)
-        distance = str(payload.get("distanceSearched", ""))
-        if distance and distance != str(radius_km):
-            # Discard cards returned from an automatically enlarged radius.
-            LOGGER.warning(
-                "Hard-radius boundary reached page=%s requested_radius=%s server_radius=%s; "
-                "discarding this page and stopping pagination",
-                page, radius_km, distance,
-            )
-            meta["radius_boundary_stopped"] = True
-            meta["radius_boundary_page"] = page
-            meta["server_distance_seen"] = distance
-            break
-
-        profiles.extend(parse_search_cards(payload.get("content") or ""))
-
-    unique: dict[str, SearchProfile] = {}
-    for profile in profiles:
-        unique.setdefault(profile.advert_id, profile)
-
-    result = list(unique.values())
-    meta["unique_count"] = len(result)
-    if meta.get("server_advert_count") is not None and len(result) != meta["server_advert_count"]:
-        LOGGER.warning(
-            "Search count mismatch exact-radius parsed_unique=%s server_advert_count=%s "
-            "total_pages=%s boundary_stopped=%s",
-            len(result), meta["server_advert_count"], meta["total_pages"],
-            meta.get("radius_boundary_stopped"),
-        )
-    LOGGER.info(
-        "Search complete city=%s radius=%s filter_path=%s pages=%s unique=%s "
-        "server_count=%s pagination_source=%s boundary_stopped=%s",
-        city_slug, radius_km, filter_path or "<none>", meta["total_pages"], len(result),
-        meta.get("server_advert_count"), meta.get("pagination_source"),
-        meta.get("radius_boundary_stopped"),
-    )
-    return result, meta
