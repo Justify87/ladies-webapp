@@ -13,8 +13,11 @@ CODE_SUFFIXES = {
     ".py",
     ".js",
     ".mjs",
+    ".cjs",
     ".jsx",
     ".ts",
+    ".mts",
+    ".cts",
     ".tsx",
     ".css",
     ".scss",
@@ -23,8 +26,12 @@ CODE_SUFFIXES = {
     ".svg",
     ".xml",
     ".sh",
+    ".bash",
+    ".zsh",
     ".command",
     ".ps1",
+    ".bat",
+    ".cmd",
     ".yml",
     ".yaml",
     ".toml",
@@ -40,9 +47,21 @@ EXCLUDED_PARTS = {
     ".pytest_cache",
 }
 REQUIRED_AREAS = ("ladies", "tools", "packaging", ".github/workflows")
-SLASH_SUFFIXES = {".js", ".mjs", ".jsx", ".ts", ".tsx", ".css", ".scss"}
+SLASH_SUFFIXES = {
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".jsx",
+    ".ts",
+    ".mts",
+    ".cts",
+    ".tsx",
+    ".css",
+    ".scss",
+}
 MARKUP_SUFFIXES = {".html", ".htm", ".svg", ".xml"}
-JAVASCRIPT_SUFFIXES = {".js", ".mjs", ".jsx", ".ts", ".tsx"}
+JAVASCRIPT_SUFFIXES = {".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx"}
+BATCH_SUFFIXES = {".bat", ".cmd"}
 
 HISTORY_PATTERNS = (
     re.compile(r"\blegacy\b", re.IGNORECASE),
@@ -76,6 +95,16 @@ JS_CODE_COMMENT = re.compile(
     r"import\s+.+\s+from\s+|export\s+(?:default\s+)?(?:function|class|const|let|var)\b"
     r")"
 )
+BATCH_CODE_COMMENT = re.compile(
+    r"^(?:"
+    r"set\s+(?:\"?[A-Za-z_][A-Za-z0-9_]*=)|"
+    r"if\s+(?:exist|not\s+exist|errorlevel)\b|"
+    r"for\s+%%?[A-Za-z]\s+in\b|"
+    r"goto\s+[:A-Za-z0-9_]|call\s+[:A-Za-z0-9_]|"
+    r"exit\s+/b\b|mkdir\s+|copy\s+|del\s+"
+    r")",
+    re.IGNORECASE,
+)
 MACHINE_PREFIXES = (
     "noqa",
     "type: ignore",
@@ -91,14 +120,25 @@ MACHINE_PREFIXES = (
 )
 
 
+def _is_shebang_script(path: Path) -> bool:
+    if path.suffix:
+        return False
+    try:
+        with path.open("rb") as handle:
+            return handle.read(2) == b"#!"
+    except OSError:
+        return False
+
+
 def code_files() -> list[Path]:
     files = []
     for path in ROOT.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in CODE_SUFFIXES:
+        if not path.is_file():
             continue
         if any(part in EXCLUDED_PARTS for part in path.parts):
             continue
-        files.append(path)
+        if path.suffix.lower() in CODE_SUFFIXES or _is_shebang_script(path):
+            files.append(path)
     return sorted(files)
 
 
@@ -137,48 +177,75 @@ def slash_fragments(source: str) -> list[tuple[int, str, str]]:
     line = 1
     length = len(source)
     state = "code"
+    return_state = "code"
     quote = ""
     start_line = 1
     buffer: list[str] = []
+    template_return_states: list[str] = []
+    template_expression_depths: list[int] = []
 
     while i < length:
         ch = source[i]
         nxt = source[i + 1] if i + 1 < length else ""
-        if ch == "\n":
-            line += 1
 
-        if state == "code":
-            if ch in {"'", '"', "`"}:
+        if state in {"code", "template_expression"}:
+            if ch in {"'", '"'}:
+                return_state = state
                 state = "string"
                 quote = ch
+            elif ch == "`":
+                template_return_states.append(state)
+                state = "template"
             elif ch == "/" and nxt == "/":
+                return_state = state
                 state = "line_comment"
                 start_line = line
                 buffer = []
                 i += 1
             elif ch == "/" and nxt == "*":
+                return_state = state
                 state = "block_comment"
                 start_line = line
                 buffer = []
+                i += 1
+            elif state == "template_expression":
+                if ch == "{":
+                    template_expression_depths[-1] += 1
+                elif ch == "}":
+                    template_expression_depths[-1] -= 1
+                    if template_expression_depths[-1] == 0:
+                        template_expression_depths.pop()
+                        state = "template"
+        elif state == "template":
+            if ch == "\\":
+                i += 1
+            elif ch == "`":
+                state = template_return_states.pop()
+            elif ch == "$" and nxt == "{":
+                template_expression_depths.append(1)
+                state = "template_expression"
                 i += 1
         elif state == "string":
             if ch == "\\":
                 i += 1
             elif ch == quote:
-                state = "code"
+                state = return_state
         elif state == "line_comment":
             if ch == "\n":
                 fragments.append((start_line, "".join(buffer).strip(), "comment"))
-                state = "code"
+                state = return_state
             else:
                 buffer.append(ch)
         elif state == "block_comment":
             if ch == "*" and nxt == "/":
                 fragments.append((start_line, "".join(buffer).strip(), "comment"))
-                state = "code"
+                state = return_state
                 i += 1
             else:
                 buffer.append(ch)
+
+        if ch == "\n":
+            line += 1
         i += 1
 
     if state == "line_comment":
@@ -212,6 +279,20 @@ def hash_fragments(source: str) -> list[tuple[int, str, str]]:
     return fragments
 
 
+def batch_fragments(source: str) -> list[tuple[int, str, str]]:
+    fragments: list[tuple[int, str, str]] = []
+    for line_no, raw in enumerate(source.splitlines(), 1):
+        stripped = raw.lstrip()
+        if stripped.startswith("@"):
+            stripped = stripped[1:].lstrip()
+        upper = stripped.upper()
+        if upper == "REM" or upper.startswith("REM "):
+            fragments.append((line_no, stripped[3:].strip(), "comment"))
+        elif stripped.startswith("::"):
+            fragments.append((line_no, stripped[2:].strip(), "comment"))
+    return fragments
+
+
 def html_fragments(source: str) -> list[tuple[int, str, str]]:
     fragments = slash_fragments(source)
     for match in re.finditer(r"<!--(.*?)-->", source, flags=re.DOTALL):
@@ -229,6 +310,8 @@ def fragments(path: Path) -> list[tuple[int, str, str]]:
         return slash_fragments(source)
     if suffix in MARKUP_SUFFIXES:
         return html_fragments(source)
+    if suffix in BATCH_SUFFIXES:
+        return batch_fragments(source)
     return hash_fragments(source)
 
 
@@ -249,10 +332,44 @@ def violation_reason(text: str, kind: str, suffix: str) -> str | None:
             return "commented-out Python code"
         if suffix in JAVASCRIPT_SUFFIXES and JS_CODE_COMMENT.match(normalized):
             return "commented-out JavaScript/TypeScript code"
+        if suffix in BATCH_SUFFIXES and BATCH_CODE_COMMENT.match(normalized):
+            return "commented-out batch code"
     return None
 
 
+def _parser_self_check() -> list[str]:
+    failures: list[str] = []
+
+    js = """const raw = `// legacy workaround`;
+const rendered = `${(() => {
+  // legacy workaround
+  return "ok";
+})()}`;
+"""
+    js_comments = [text for _, text, _ in slash_fragments(js)]
+    if js_comments != ["legacy workaround"]:
+        failures.append("JavaScript template-expression comment parsing")
+
+    batch = """@echo off
+REM legacy workaround
+:: set "OLD=1"
+"""
+    batch_comments = [text for _, text, _ in batch_fragments(batch)]
+    if batch_comments != ["legacy workaround", 'set "OLD=1"']:
+        failures.append("batch comment parsing")
+
+    return failures
+
+
 def main() -> int:
+    parser_failures = _parser_self_check()
+    if parser_failures:
+        print(
+            "comment hygiene: parser self-check failed: " + ", ".join(parser_failures),
+            file=sys.stderr,
+        )
+        return 1
+
     files = code_files()
     if not files:
         print("comment hygiene: no code files found", file=sys.stderr)
