@@ -241,6 +241,18 @@ function priceLabelExpression(){
   return ['concat','Ø ',['to-string',['round',['/',['/',['get','price_60_sum_cents'],['max',1,['get','price_60_count']]],100]]],' €'];
 }
 
+function priceLabelLayout(textFont,offset){
+  return {
+    'text-field':priceLabelExpression(),
+    'text-size':11,
+    'text-font':textFont,
+    'text-offset':offset,
+    'text-anchor':'top',
+    'text-allow-overlap':true,
+    'text-ignore-placement':true
+  };
+}
+
 function reportMapError(event){
   const error=event?.error;
   const message=String(error?.message||event?.message||'MapLibre-Laufzeitfehler');
@@ -279,9 +291,9 @@ function installLayers(instance,target,getState){
   const textFont=styleTextFont(instance);
   if(textFont){
     instance.addLayer({id:CLUSTER_COUNT_LAYER,type:'symbol',source:SOURCE_ID,filter:['has','point_count'],layout:{'text-field':['to-string',['get','listing_total']],'text-size':12,'text-font':textFont},paint:{'text-color':'#ffffff'}});
-    instance.addLayer({id:CLUSTER_PRICE_LAYER,type:'symbol',source:SOURCE_ID,filter:['all',['has','point_count'],['>', ['get','price_60_count'],0]],layout:{'text-field':priceLabelExpression(),'text-size':11,'text-font':textFont,'text-offset':[0,3],'text-anchor':'top'},paint:{'text-color':'#8f1f5a','text-halo-color':'#ffffff','text-halo-width':2}});
+    instance.addLayer({id:CLUSTER_PRICE_LAYER,type:'symbol',source:SOURCE_ID,filter:['all',['has','point_count'],['>', ['get','price_60_count'],0]],layout:priceLabelLayout(textFont,[0,3]),paint:{'text-color':'#8f1f5a','text-halo-color':'#ffffff','text-halo-width':2}});
     instance.addLayer({id:LOCATION_COUNT_LAYER,type:'symbol',source:SOURCE_ID,filter:['all',['!', ['has','point_count']],['>', ['get','listing_count'],1]],layout:{'text-field':['to-string',['get','listing_count']],'text-size':10,'text-font':textFont},paint:{'text-color':'#ffffff'}});
-    instance.addLayer({id:LOCATION_PRICE_LAYER,type:'symbol',source:SOURCE_ID,minzoom:10,filter:['all',['!', ['has','point_count']],['>', ['get','price_60_count'],0]],layout:{'text-field':priceLabelExpression(),'text-size':11,'text-font':textFont,'text-offset':[0,1.7],'text-anchor':'top'},paint:{'text-color':'#8f1f5a','text-halo-color':'#ffffff','text-halo-width':2}});
+    instance.addLayer({id:LOCATION_PRICE_LAYER,type:'symbol',source:SOURCE_ID,minzoom:10,filter:['all',['!', ['has','point_count']],['>', ['get','price_60_count'],0]],layout:priceLabelLayout(textFont,[0,1.7]),paint:{'text-color':'#8f1f5a','text-halo-color':'#ffffff','text-halo-width':2}});
   }
 
   const expandCluster=async event=>{
@@ -427,7 +439,8 @@ export function syncDiscoverMap({host,state,store,effects}){
   renderStatus(shell?.querySelector('.discover-map-state-host'),state,latestData);
   renderPreview(shell?.querySelector('.discover-map-preview-host'),state);
 
-  if(!state.discover.map?.points&&!state.discover.map?.loading)queueMicrotask(()=>effects.loadMapPoints({quiet:true}));
+  const mapState=state.discover.map||{};
+  if((!mapState.points||mapState.stale)&&!mapState.loading&&!mapState.error)queueMicrotask(()=>effects.loadMapPoints({quiet:true}));
 
   void ensureMap(target,()=>store.getState()).then(instance=>{
     if(!instance||runtime?.map!==instance||runtime.container!==target)return;
