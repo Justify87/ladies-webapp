@@ -848,8 +848,7 @@ async function processEvents(current, events, saveCreds) {
     }
   }
 
-  if (context?.pendingReceived && historySet?.isLatest) emitSyncReady(current)
-  if (context?.pendingReceived && historyStatus?.status === 'paused') emitSyncReady(current)
+  if (context?.pendingReceived && historySet) emitSyncReady(current)
 }
 
 async function connect() {
