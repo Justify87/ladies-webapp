@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from collections.abc import Callable
 from typing import Any
+
+from .observability import background_task_span, capture_context
 
 LOGGER = logging.getLogger("ladies_explorer.background")
 
@@ -39,8 +42,21 @@ class BackgroundTasks:
             if not self._capacity.acquire(blocking=False):
                 LOGGER.warning("Background task rejected because backlog is full key=%s", key)
                 return None
+            submitted_at = time.monotonic()
+            parent_context = capture_context()
+            task_type = str(key or "background").split(":", 1)[0][:64] or "background"
+
+            def execute() -> Any:
+                queue_wait_ms = (time.monotonic() - submitted_at) * 1000.0
+                with background_task_span(
+                    task_type,
+                    queue_wait_ms=queue_wait_ms,
+                    parent_context=parent_context,
+                ):
+                    return function(*args, **kwargs)
+
             try:
-                future = self._executor.submit(function, *args, **kwargs)
+                future = self._executor.submit(execute)
             except Exception:
                 self._capacity.release()
                 raise

@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ..observability import operation_span
 from .schema import PRICE_DURATION_OPTIONS, validate_proposal
 
 
@@ -60,26 +61,35 @@ class FunctionGemmaRuntime:
             catalog=catalog,
             has_existing_price_list=has_existing_price_list,
         )
-        try:
-            proc = subprocess.run(
-                [
-                    str(self.binary),
-                    "-m", str(self.model_path),
-                    "-p", prompt,
-                    "-n", "1024",
-                    "--temp", "0",
-                    "--no-display-prompt",
-                    "-j", json.dumps(schema, ensure_ascii=False, separators=(",", ":")),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=45,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError("FunctionGemma hat das Zeitlimit von 45 Sekunden überschritten") from exc
-        if proc.returncode != 0:
-            raise RuntimeError((proc.stderr or "FunctionGemma fehlgeschlagen")[-1500:])
+        with operation_span(
+            "pricing.model",
+            attributes={
+                "pricing.model.name": self.name,
+                "process.timeout_seconds": 45,
+            },
+        ) as span:
+            try:
+                proc = subprocess.run(
+                    [
+                        str(self.binary),
+                        "-m", str(self.model_path),
+                        "-p", prompt,
+                        "-n", "1024",
+                        "--temp", "0",
+                        "--no-display-prompt",
+                        "-j", json.dumps(schema, ensure_ascii=False, separators=(",", ":")),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=45,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError("FunctionGemma hat das Zeitlimit von 45 Sekunden überschritten") from exc
+            if span is not None:
+                span.set_attribute("process.exit_code", int(proc.returncode))
+            if proc.returncode != 0:
+                raise RuntimeError("FunctionGemma fehlgeschlagen")
         raw = proc.stdout.strip()
         if not raw:
             raise RuntimeError("FunctionGemma lieferte keine strukturierte Ausgabe")

@@ -11,6 +11,7 @@ from typing import Any
 import orjson
 import requests
 
+from ladies_v9.observability import traced_http_call
 from ladies_v9.source import FixedRateLimiter
 
 
@@ -201,7 +202,13 @@ class MapLocationResolver:
 
     def _resolve_postal(self, spec: dict[str, str]) -> bool:
         postal_code = spec["value"]
-        response = self._http.get(ZIPPOPOTAM_URL.format(postal_code=postal_code), timeout=6)
+        url = ZIPPOPOTAM_URL.format(postal_code=postal_code)
+        response = traced_http_call(
+            "GET",
+            url,
+            operation="map.postal",
+            call=lambda: self._http.get(url, timeout=6),
+        )
         if response.status_code == 404:
             self._remember_not_found(spec["key"], source="ZIPPOPOTAM")
             return False
@@ -237,15 +244,20 @@ class MapLocationResolver:
 
     def _resolve_city(self, spec: dict[str, str]) -> None:
         self._city_limiter.wait()
-        response = self._http.get(
+        response = traced_http_call(
+            "GET",
             NOMINATIM_URL,
-            params={
-                "q": f"{spec['value']}, Germany",
-                "format": "jsonv2",
-                "limit": 1,
-                "countrycodes": "de",
-            },
-            timeout=8,
+            operation="map.city",
+            call=lambda: self._http.get(
+                NOMINATIM_URL,
+                params={
+                    "q": f"{spec['value']}, Germany",
+                    "format": "jsonv2",
+                    "limit": 1,
+                    "countrycodes": "de",
+                },
+                timeout=8,
+            ),
         )
         response.raise_for_status()
         items = response.json()

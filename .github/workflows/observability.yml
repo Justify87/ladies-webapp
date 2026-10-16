@@ -1,0 +1,43 @@
+name: Observability checks
+
+on:
+  pull_request:
+    paths:
+      - 'ladies/app.py'
+      - 'ladies/background.py'
+      - 'ladies/observability.py'
+      - 'ladies/profiling.py'
+      - 'ladies_explorer.py'
+      - 'tools/check_observability.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/observability.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'ladies/app.py'
+      - 'ladies/background.py'
+      - 'ladies/observability.py'
+      - 'ladies/profiling.py'
+      - 'ladies_explorer.py'
+      - 'tools/check_observability.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/observability.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v10.3.0
+      - name: Run focused observability checks
+        run: uv run --locked python tools/check_observability.py

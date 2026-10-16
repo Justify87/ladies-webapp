@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 import requests
 
 from .domain import SearchProfile
+from .observability import traced_http_call
 from .parser import parse_search_cards, parse_search_config
 from .search_catalog import (
     CATEGORY_MAP,
@@ -87,7 +88,12 @@ def http_get(session: requests.Session, url: str, *, context: str, timeout: floa
              expected_statuses: tuple[int,...] = (200,)) -> requests.Response:
     started=time.monotonic()
     try:
-        r=session.get(url, headers=headers, params=params, timeout=timeout)
+        r = traced_http_call(
+            "GET",
+            url,
+            operation=context,
+            call=lambda: session.get(url, headers=headers, params=params, timeout=timeout),
+        )
     except requests.RequestException:
         LOGGER.exception("HTTP failed context=%s url=%s", context, url); raise
     elapsed=(time.monotonic()-started)*1000

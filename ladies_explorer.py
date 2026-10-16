@@ -36,6 +36,12 @@ IMPORT_MODULES = {
     "qrcode": "qrcode",
     "nodeenv": "nodeenv",
     "imageio-ffmpeg": "imageio_ffmpeg",
+    "opentelemetry-sdk": "opentelemetry.sdk",
+    "opentelemetry-exporter-otlp-proto-http": "opentelemetry.exporter.otlp.proto.http",
+    "opentelemetry-instrumentation-flask": "opentelemetry.instrumentation.flask",
+    "opentelemetry-instrumentation-sqlalchemy": "opentelemetry.instrumentation.sqlalchemy",
+    "opentelemetry-instrumentation-logging": "opentelemetry.instrumentation.logging",
+    "pyinstrument": "pyinstrument",
 }
 
 
