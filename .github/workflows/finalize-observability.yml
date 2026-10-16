@@ -1,0 +1,110 @@
+name: Finalize observability integration
+
+on:
+  push:
+    branches: [feat/minimal-observability-final]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/minimal-observability-final
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v10.3.0
+      - name: Apply reviewed implementation
+        shell: bash
+        run: |
+          git fetch origin feat/minimal-observability-rebase
+          for file in \
+            .github/workflows/observability.yml \
+            docs/observability.md \
+            ladies/app.py \
+            ladies/background.py \
+            ladies/core/services/map_locations.py \
+            ladies/media.py \
+            ladies/observability.py \
+            ladies/pricing/model_runtime.py \
+            ladies/profiling.py \
+            ladies/source.py \
+            tools/check_map_view.py \
+            tools/check_observability.py
+          do
+            git show "origin/feat/minimal-observability-rebase:${file}" > "${file}"
+          done
+
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"Expected snippet missing in {path}: {old[:140]!r}")
+              file.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          gateway = Path("ladies/messaging/gateway.py")
+          text = gateway.read_text(encoding="utf-8")
+          import_anchor = 'from typing import Any, Callable\n\ntry:\n'
+          import_block = '''from typing import Any, Callable\n\ntry:\n    from ..observability import operation_span\nexcept ImportError:  # architecture checks execute this file directly via runpy\n    from contextlib import contextmanager\n\n    @contextmanager\n    def operation_span(*_args, **_kwargs):\n        yield None\n\ntry:\n'''
+          if import_anchor not in text:
+              raise SystemExit("Gateway import anchor missing")
+          text = text.replace(import_anchor, import_block, 1)
+          command_anchor = '    def command(self, command_type: str, timeout: int = 15, **payload):\n        guard = self._serial_lock if command_type in SERIAL_COMMANDS else nullcontext()\n'
+          command_block = '''    def command(self, command_type: str, timeout: int = 15, **payload):\n        with operation_span(\n            "messaging.command",\n            attributes={\n                "messaging.command.type": str(command_type or "unknown")[:64],\n                "messaging.command.timeout_seconds": int(timeout),\n            },\n        ):\n            return self._command(command_type, timeout=timeout, **payload)\n\n    def _command(self, command_type: str, timeout: int = 15, **payload):\n        guard = self._serial_lock if command_type in SERIAL_COMMANDS else nullcontext()\n'''
+          if command_anchor not in text:
+              raise SystemExit("Gateway command anchor missing")
+          gateway.write_text(text.replace(command_anchor, command_block, 1), encoding="utf-8")
+
+          replace("pyproject.toml", '  "SQLAlchemy>=2,<3",\n', '  "SQLAlchemy>=2,<2.1",\n')
+          dependency_anchor = '  "imageio-ffmpeg>=0.6,<1",\n'
+          dependencies = '''  "imageio-ffmpeg>=0.6,<1",\n  "opentelemetry-sdk>=1.45.1,<2",\n  "opentelemetry-exporter-otlp-proto-http>=1.45.1,<2",\n  "opentelemetry-instrumentation-flask>=0.66b1,<0.67",\n  "opentelemetry-instrumentation-sqlalchemy>=0.66b1,<0.67",\n  "opentelemetry-instrumentation-logging>=0.66b1,<0.67",\n  "pyinstrument>=5.1.3,<6",\n'''
+          replace("pyproject.toml", dependency_anchor, dependencies)
+
+          import_anchor = '    "imageio-ffmpeg": "imageio_ffmpeg",\n'
+          import_map = '''    "imageio-ffmpeg": "imageio_ffmpeg",\n    "opentelemetry-sdk": "opentelemetry.sdk",\n    "opentelemetry-exporter-otlp-proto-http": "opentelemetry.exporter.otlp.proto.http",\n    "opentelemetry-instrumentation-flask": "opentelemetry.instrumentation.flask",\n    "opentelemetry-instrumentation-sqlalchemy": "opentelemetry.instrumentation.sqlalchemy",\n    "opentelemetry-instrumentation-logging": "opentelemetry.instrumentation.logging",\n    "pyinstrument": "pyinstrument",\n'''
+          replace("ladies_explorer.py", import_anchor, import_map)
+
+          test = Path("tools/check_observability.py")
+          text = test.read_text(encoding="utf-8")
+          text = text.replace('context="observability-failure"', 'context="profile-123456"', 1)
+          text = text.replace('"observability-failure",\n        }', '"profile",\n        }', 1)
+          text = text.replace(
+              'span.attributes.get("http.operation") == "observability-failure"',
+              'span.attributes.get("http.operation") == "profile"',
+              1,
+          )
+          marker = '        failed_span = next(\n'
+          insert = '        assert all(str(span.kind.name) == "CLIENT" for span in http_spans)\n'
+          if marker not in text:
+              raise SystemExit("HTTP span test marker missing")
+          text = text.replace(marker, insert + marker, 1)
+          test.write_text(text, encoding="utf-8")
+          PY
+
+          uv lock
+          uv run --locked python -m compileall -q ladies tools/check_observability.py
+          uv run --locked python tools/check_observability.py
+          uv run --locked python tools/check_map_view.py
+          uv run --locked python tools/check_messaging_architecture.py
+          uv run --locked python tools/check_whatsapp_reconnect_sync.py
+
+      - name: Commit final integration
+        shell: bash
+        run: |
+          git add .github/workflows/observability.yml docs/observability.md ladies ladies_explorer.py pyproject.toml tools/check_map_view.py tools/check_observability.py uv.lock
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Integrate reviewed observability on current main"
+          git push
