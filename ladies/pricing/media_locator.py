@@ -33,8 +33,7 @@ class PricingMediaLocator:
             if candidate.is_file():
                 return candidate
 
-        # Compatibility with pre-V9.6 rows. The URL is treated only as a
-        # relative legacy storage hint and is never fetched over HTTP.
+        # local_url is resolved locally and is never fetched over HTTP.
         local_url = str(media.get("local_url") or "")
         if local_url.startswith("/archive/"):
             candidate = (self.data_dir / local_url[len("/archive/"):]).resolve()
