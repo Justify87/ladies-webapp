@@ -172,8 +172,9 @@ export function syncDiscoverMap({host,state,effects}){
   const route=S.currentRoute(state);
   const active=route.name==='discover'&&state.discover.mode==='map';
   if(!active){
-    if(wasActive)effects.cancelMapRequest();
+    const shouldCancel=wasActive;
     wasActive=false;
+    if(shouldCancel)effects.cancelMapRequest();
     if(runtime)destroyMap();
     return;
   }
