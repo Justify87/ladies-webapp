@@ -90,7 +90,7 @@ class WhatsAppConnectionLifecycle:
                     if generation != self._intent_generation or not self.has_saved_session():
                         return
                     gateway.stop()
-                    gateway.state = "DEPENDENDENCY_MISSING"
+                    gateway.state = "DEPENDENCY_MISSING"
                     gateway.detail = detail
                 return
 
