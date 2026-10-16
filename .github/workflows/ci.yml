@@ -254,6 +254,15 @@ jobs:
       - name: Search intelligence regressions
         run: node --experimental-default-type=module tools/check_search_intelligence.mjs
 
+      - name: Map frontend behavior
+        run: node --experimental-default-type=module tools/check_map_frontend.mjs
+
+      - name: Map backend behavior
+        run: python tools/check_map_view.py
+
+      - name: Profile request regressions
+        run: node --experimental-default-type=module tools/check_profile_request_ui.mjs
+
       - name: HAR runtime regressions
         run: node --experimental-default-type=module tools/check_har_runtime_fixes.mjs
 
