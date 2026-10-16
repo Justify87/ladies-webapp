@@ -61,6 +61,17 @@ jobs:
           path.write_text(text, encoding="utf-8")
 
           replace(
+              "tools/check_map_view.py",
+              'source.FixedRateLimiter = FixedRateLimiter\nladies_v9 = types.ModuleType("ladies_v9")\n',
+              'source.FixedRateLimiter = FixedRateLimiter\nobservability = types.ModuleType("ladies_v9.observability")\nobservability.traced_http_call = lambda _method, _url, *, operation, call: call()\nladies_v9 = types.ModuleType("ladies_v9")\n',
+          )
+          replace(
+              "tools/check_map_view.py",
+              '    "ladies_v9": ladies_v9,\n    "ladies_v9.source": source,\n',
+              '    "ladies_v9": ladies_v9,\n    "ladies_v9.observability": observability,\n    "ladies_v9.source": source,\n',
+          )
+
+          replace(
               "ladies/core/services/map_locations.py",
               "from ladies_v9.source import FixedRateLimiter\n",
               "from ladies_v9.observability import traced_http_call\nfrom ladies_v9.source import FixedRateLimiter\n",
@@ -85,7 +96,7 @@ jobs:
       - name: Commit rebased implementation
         shell: bash
         run: |
-          git add .github/workflows/observability.yml docs/observability.md ladies ladies_explorer.py pyproject.toml tools/check_observability.py uv.lock
+          git add .github/workflows/observability.yml docs/observability.md ladies ladies_explorer.py pyproject.toml tools/check_observability.py tools/check_map_view.py uv.lock
           if git diff --cached --quiet; then
             exit 0
           fi
