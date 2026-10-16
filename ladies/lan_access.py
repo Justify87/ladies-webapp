@@ -121,7 +121,7 @@ class LanAccessManager:
 
     def pair(self, token: str) -> str | None:
         with self._lock:
-            if not token or not hmac.compare_digest(token, str(self._state.get("pairing_token") or "")):
+            if not hmac.compare_digest(str(token), str(self._state["pairing_token"])):
                 return None
             session = secrets.token_urlsafe(48)
             digest = self._hash(session)
@@ -134,31 +134,34 @@ class LanAccessManager:
             self._write(self._state)
             return session
 
-    def valid_session(self, token: str | None) -> bool:
-        if not token:
+    def validate_session(self, session: str | None) -> bool:
+        if not session:
             return False
-        digest = self._hash(token)
+        digest = self._hash(str(session))
         with self._lock:
-            sessions = self._state.get("sessions")
-            if isinstance(sessions, dict) and digest in sessions:
-                row = sessions[digest]
-                now = datetime.now(timezone.utc)
-                previous = None
-                try:
-                    previous_raw = str(row.get("last_seen_at") or "")
-                    if previous_raw:
-                        previous = datetime.fromisoformat(previous_raw)
-                except (TypeError, ValueError):
-                    previous = None
-                if previous is None or now - previous >= SESSION_TOUCH_INTERVAL:
-                    row["last_seen_at"] = now.isoformat()
-                    self._write(self._state)
+            legacy = self._state.get("legacy_session_hash")
+            if legacy and hmac.compare_digest(digest, str(legacy)):
                 return True
-            legacy_hash = self._state.get("legacy_session_hash")
-            return bool(legacy_hash and hmac.compare_digest(digest, str(legacy_hash)))
+            sessions = self._state.get("sessions") or {}
+            row = sessions.get(digest)
+            if not isinstance(row, dict):
+                return False
 
-    def revoke_all(self) -> None:
-        with self._lock:
-            self._state["sessions"] = {}
-            self._state["legacy_session_hash"] = None
-            self._write(self._state)
+            now = datetime.now(timezone.utc)
+            previous = None
+            try:
+                previous_raw = str(row.get("last_seen_at") or "")
+                if previous_raw:
+                    previous = datetime.fromisoformat(previous_raw.replace("Z", "+00:00"))
+                    if previous.tzinfo is None:
+                        previous = previous.replace(tzinfo=timezone.utc)
+            except ValueError:
+                previous = None
+
+            # Keep the in-memory timestamp equal to the last persisted touch.
+            # Otherwise frequent requests would continuously move the comparison
+            # point and a busy session might never be written again.
+            if previous is None or now - previous.astimezone(timezone.utc) >= SESSION_TOUCH_INTERVAL:
+                row["last_seen_at"] = now.isoformat()
+                self._write(self._state)
+            return True
