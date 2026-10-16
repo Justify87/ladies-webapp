@@ -90,7 +90,7 @@ class WhatsAppConnectionLifecycle:
                     if generation != self._intent_generation or not self.has_saved_session():
                         return
                     gateway.stop()
-                    gateway.state = "DEPENDENCY_MISSING"
+                    gateway.state = "DEPENDENDENCY_MISSING"
                     gateway.detail = detail
                 return
 
@@ -244,7 +244,12 @@ class WhatsAppConnectionLifecycle:
             raise RuntimeError("WhatsApp-Verbindungsdaten konnten nicht vollständig gelöscht werden") from last_error
 
     def reset(self) -> dict[str, Any]:
-        """Stop connection intent and delete the complete local Baileys auth state."""
+        """Stop connection intent and delete the complete local Baileys auth state.
+
+        Messages, media and chat history live outside the Baileys auth state and
+        are preserved. Session-bound pending ingress is quarantined before auth
+        deletion so it can never be replayed into a newly paired account.
+        """
         with self._lock:
             self._intent_generation += 1
             self._pairing_requested = False
