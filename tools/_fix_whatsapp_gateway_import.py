@@ -15,6 +15,12 @@ replace_once(
     '''try:\n    from .provider_inbox import DURABLE_EVENT_TYPES, DurableProviderInbox\nexcept ImportError:  # architecture checks execute this file directly via runpy\n    import importlib.util\n\n    _inbox_spec = importlib.util.spec_from_file_location(\n        "ladies_messaging_provider_inbox",\n        Path(__file__).with_name("provider_inbox.py"),\n    )\n    if _inbox_spec is None or _inbox_spec.loader is None:\n        raise\n    _inbox_module = importlib.util.module_from_spec(_inbox_spec)\n    _inbox_spec.loader.exec_module(_inbox_module)\n    DURABLE_EVENT_TYPES = _inbox_module.DURABLE_EVENT_TYPES\n    DurableProviderInbox = _inbox_module.DurableProviderInbox\n''',
 )
 
+replace_once(
+    'ladies/messaging/connection_lifecycle.py',
+    '''            try:\n                gateway.activate()\n            except Exception:\n''',
+    '''            try:\n                activate = getattr(gateway, "activate", None)\n                if callable(activate):\n                    activate()\n            except Exception:\n''',
+)
+
 # Add an explicit bounded-timeout regression using a fake worker process.
 path = Path('tools/check_whatsapp_reconnect_sync.py')
 text = path.read_text(encoding='utf-8')
