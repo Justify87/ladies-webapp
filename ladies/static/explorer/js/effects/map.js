@@ -62,6 +62,10 @@ export function mapRequestDescriptor(state){
   return {items,key:JSON.stringify(identity)};
 }
 
+export function invalidateMapData(store){
+  store.dispatch({type:'DISCOVER_MAP_INVALIDATE'});
+}
+
 export function createMapEffects({store,mapPoints=api.mapPoints}) {
   let generation=0;
   let timer=null;
@@ -85,12 +89,12 @@ export function createMapEffects({store,mapPoints=api.mapPoints}) {
     const current=store.getState().discover.map||{};
     if(!requested.items.length){
       cancel();
-      if(current.key||current.points||current.loading||current.error)store.dispatch({type:'DISCOVER_MAP_CLEAR'});
+      if(current.key||current.points||current.loading||current.error||current.stale)store.dispatch({type:'DISCOVER_MAP_CLEAR'});
       return null;
     }
 
     if(retryKey!==requested.key)resetRetryBudget(requested.key);
-    if(!force&&current.key===requested.key&&current.points&&!current.points?.meta?.pending_count)return current.points;
+    if(!force&&!current.stale&&current.key===requested.key&&current.points&&!current.points?.meta?.pending_count)return current.points;
     if(!force&&current.key===requested.key&&current.loading)return current.points||null;
 
     const sequence=++generation;
