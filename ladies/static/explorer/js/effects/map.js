@@ -45,6 +45,10 @@ export function createMapEffects({
     clearScheduledRetry();
     partialAttempts=0;
     errorAttempts=0;
+    const current=store.getState().discover.map||{};
+    if(current.loading){
+      store.dispatch({type:'DISCOVER_MAP_LOADING',key:current.key,value:false});
+    }
   };
 
   const scheduleRetry=(requested,revision,delay)=>{
@@ -69,7 +73,8 @@ export function createMapEffects({
     const pending=Number(current.points?.meta?.pending_count||0);
     if(!requested.items.length){
       cancel();
-      if(current.key||current.points||current.loading||current.error||current.stale){
+      const afterCancel=store.getState().discover.map||{};
+      if(afterCancel.key||afterCancel.points||afterCancel.loading||afterCancel.error||afterCancel.stale){
         store.dispatch({type:'DISCOVER_MAP_CLEAR'});
       }
       return null;
